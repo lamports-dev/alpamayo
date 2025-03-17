@@ -35,7 +35,6 @@ TODO
 - [ ] `getSignatureStatuses`
 - [x] `getSlot`
 - [ ] `getTransaction`
-- [ ] `getTransaction`
 - [ ] `getVersion`
 - [ ] `isBlockhashValid`
 

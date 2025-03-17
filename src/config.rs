@@ -235,6 +235,7 @@ impl ConfigRpc {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub enum ConfigRpcCall {
     GetBlock,
+    GetSlot,
 }
 
 #[derive(Debug, Clone, Deserialize)]

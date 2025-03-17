@@ -53,6 +53,7 @@ rpc:
   request_timeout: 60s
   calls:
     - getBlock
+    - getSlot
   request_channel_capacity: 4096
   upstream:
     endpoint: http://127.0.0.1:8899

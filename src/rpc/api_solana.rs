@@ -85,12 +85,14 @@ fn jsonrpc_response_error(
 #[derive(Debug, Clone, Copy)]
 struct SupportedCalls {
     get_block: bool,
+    get_slot: bool,
 }
 
 impl SupportedCalls {
     fn new(calls: &[ConfigRpcCall]) -> anyhow::Result<Self> {
         Ok(Self {
             get_block: Self::check_call_support(calls, ConfigRpcCall::GetBlock)?,
+            get_slot: Self::check_call_support(calls, ConfigRpcCall::GetSlot)?,
         })
     }
 
@@ -264,7 +266,7 @@ impl RpcRequest {
                     encoding_options,
                 }))
             }
-            "getSlot" => {
+            "getSlot" if state.supported_calls.get_slot => {
                 #[derive(Debug, Deserialize)]
                 struct ReqParams {
                     #[serde(default)]

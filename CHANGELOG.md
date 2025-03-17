@@ -12,6 +12,8 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Fixes
 
+- rpc: add `getSlot` to config ([#1](https://github.com/lamports-dev/alpamayo/pull/1))
+
 ### Features
 
 ### Breaking
