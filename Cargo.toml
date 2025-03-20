@@ -6,7 +6,7 @@ edition = "2024"
 description = "Part of Solana RPC stack for sealed data"
 homepage = "https://lamports.dev"
 repository = "https://github.com/lamports-dev/alpamayo"
-license = "AGPL-3.0-only"
+license = "Apache-2.0"
 keywords = ["solana", "rpc"]
 publish = false
 
