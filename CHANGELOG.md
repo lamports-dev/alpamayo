@@ -16,4 +16,6 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Features
 
+- source: add fast ConfirmedBlock serialization ([#3](https://github.com/lamports-dev/alpamayo/pull/3))
+
 ### Breaking

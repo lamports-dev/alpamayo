@@ -1,8 +1,5 @@
 use {
-    crate::{
-        config::ConfigSourceRpc,
-        source::block::{ConfirmedBlockWithBinary, SerializeBlockError},
-    },
+    crate::{config::ConfigSourceRpc, source::block::ConfirmedBlockWithBinary},
     base64::{Engine, prelude::BASE64_STANDARD},
     solana_client::{
         client_error::{ClientError, ClientErrorKind},
@@ -34,7 +31,7 @@ use {
     std::fmt,
     thiserror::Error,
     tokio::sync::Semaphore,
-    tracing::info,
+    tracing::{info, warn},
 };
 
 #[derive(Debug, Error)]
@@ -53,8 +50,6 @@ pub enum GetBlockError {
     BlockNotAvailable(Slot),
     #[error(transparent)]
     Decode(#[from] BlockDecodeError),
-    #[error(transparent)]
-    Serialize(#[from] SerializeBlockError),
 }
 
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
@@ -154,7 +149,12 @@ impl RpcSource {
         };
 
         let block = Self::block_decode(block)?;
-        ConfirmedBlockWithBinary::new(block).map_err(Into::into)
+        for tx in &block.transactions {
+            if let TransactionWithStatusMeta::MissingMetadata(tx) = &tx {
+                warn!(slot, signature = ?tx.signatures[0], "missing metadata");
+            }
+        }
+        Ok(ConfirmedBlockWithBinary::new(block, None))
     }
 
     fn block_decode(block: UiConfirmedBlock) -> Result<ConfirmedBlock, BlockDecodeError> {

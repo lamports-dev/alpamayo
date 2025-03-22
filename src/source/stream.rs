@@ -1,10 +1,11 @@
 use {
     crate::{
         config::{ConfigSourceStream, ConfigSourceStreamKind},
-        source::block::{ConfirmedBlockWithBinary, SerializeBlockError},
+        source::block::ConfirmedBlockWithBinary,
     },
     futures::{StreamExt, ready, stream::Stream},
     maplit::hashmap,
+    prost::Message as _,
     richat_client::{grpc::GrpcClientBuilderError, stream::SubscribeStream},
     richat_proto::{
         convert_from::{create_reward, create_tx_with_meta},
@@ -17,6 +18,7 @@ use {
         richat::{GrpcSubscribeRequest, RichatFilter},
     },
     solana_sdk::clock::Slot,
+    solana_storage_proto::convert::generated,
     solana_transaction_status::{ConfirmedBlock, TransactionWithStatusMeta},
     std::{
         collections::{BTreeMap, HashMap},
@@ -53,8 +55,6 @@ pub enum RecvError {
     TransactionWithMetaFailed(&'static str),
     #[error("failed to build reward: {0}")]
     RewardsFailed(&'static str),
-    #[error(transparent)]
-    SerializeBlockError(#[from] SerializeBlockError),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -82,7 +82,7 @@ struct SlotInfo {
     slot: Slot,
     status: SlotStatusProto,
     parent: Option<Slot>,
-    transactions: Vec<(u64, TransactionWithStatusMeta)>,
+    transactions: Vec<(u64, TransactionWithStatusMeta, Vec<u8>)>,
     block_meta: Option<SubscribeUpdateBlockMeta>,
     sealed: bool,
     ignore_block_build_fail: bool,
@@ -131,9 +131,6 @@ impl SlotInfo {
         }
         self.sealed = true;
 
-        let mut transactions = std::mem::take(&mut self.transactions);
-        transactions.sort_unstable_by_key(|(index, _tx)| *index);
-
         let block_meta = self.block_meta.take()?;
         let (rewards, num_partitions) = match block_meta.rewards {
             Some(obj) => {
@@ -150,18 +147,35 @@ impl SlotInfo {
             None => (vec![], None),
         };
 
+        let mut transactions = std::mem::take(&mut self.transactions);
+        transactions.sort_unstable_by_key(|(index, _tx, _buffer)| *index);
+
+        let mut transactions_meta = Vec::with_capacity(transactions.len());
+        let mut transactions_proto = Vec::with_capacity(transactions.len());
+        for (_index, meta, proto) in transactions {
+            if let TransactionWithStatusMeta::MissingMetadata(tx) = &meta {
+                warn!(slot = block_meta.slot, signature = ?tx.signatures[0], "missing metadata");
+            }
+
+            transactions_meta.push(meta);
+            transactions_proto.push(proto);
+        }
+
         let block = ConfirmedBlock {
             previous_blockhash: block_meta.parent_blockhash,
             blockhash: block_meta.blockhash,
             parent_slot: block_meta.parent_slot,
-            transactions: transactions.into_iter().map(|(_index, tx)| tx).collect(),
+            transactions: transactions_meta,
             rewards,
             num_partitions,
             block_time: block_meta.block_time.map(|obj| obj.timestamp),
             block_height: block_meta.block_height.map(|obj| obj.block_height),
         };
 
-        Some(ConfirmedBlockWithBinary::new(block).map_err(Into::into))
+        Some(Ok(ConfirmedBlockWithBinary::new(
+            block,
+            Some(transactions_proto),
+        )))
     }
 }
 
@@ -374,7 +388,9 @@ impl Stream for StreamSource {
                             let index = tx.index;
                             match create_tx_with_meta(tx) {
                                 Ok(tx) => {
-                                    slot_info.transactions.push((index, tx));
+                                    let buffer = generated::ConfirmedTransaction::from(tx.clone())
+                                        .encode_to_vec();
+                                    slot_info.transactions.push((index, tx, buffer));
                                     if let Some(first_processed) = first_processed {
                                         if slot <= first_processed {
                                             continue;
