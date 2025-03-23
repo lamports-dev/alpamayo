@@ -394,7 +394,7 @@ impl RpcRequestGetBlock {
         if self.slot > slot_tip {
             return Self::error_not_available(self.id, self.slot);
         }
-        if self.slot <= state.stored_slots.stored_load() {
+        if self.slot <= state.stored_slots.first_available_load() {
             return self.fetch_upstream(state, upstream_enabled, deadline).await;
         }
 
@@ -431,7 +431,7 @@ impl RpcRequestGetBlock {
         };
 
         // verify that we still have data for that block (i.e. we read correct data)
-        if self.slot <= state.stored_slots.stored_load() {
+        if self.slot <= state.stored_slots.first_available_load() {
             return self.fetch_upstream(state, upstream_enabled, deadline).await;
         }
 

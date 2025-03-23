@@ -63,7 +63,7 @@ pub fn start(
                 let mut blocks_files = StorageFiles::open(blocks_files, &blocks_headers).await?;
                 let memory_storage = MemoryStorage::default();
 
-                stored_slots.stored_store(blocks_headers.front_slot());
+                stored_slots.first_available_store(blocks_headers.front_slot());
 
                 let (mut read_requests, result) = start2(
                     stored_slots,

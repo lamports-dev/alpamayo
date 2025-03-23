@@ -153,7 +153,7 @@ impl StoredBlockHeaders {
 
         // update stored if db was initialized
         if self.tail == 0 && self.head == 0 {
-            stored_slots.stored_store(self.front_slot());
+            stored_slots.first_available_store(self.front_slot());
         }
 
         Ok(())
@@ -197,7 +197,7 @@ impl StoredBlockHeaders {
             StoredBlockHeader::new_noexists(),
         );
 
-        stored_slots.stored_store(self.front_slot());
+        stored_slots.first_available_store(self.front_slot());
 
         self.sync(self.tail).await?;
 
