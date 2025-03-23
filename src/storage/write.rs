@@ -21,6 +21,10 @@ use {
         stream::{FuturesUnordered, StreamExt},
     },
     richat_shared::shutdown::Shutdown,
+    rocksdb::{
+        ColumnFamily, ColumnFamilyDescriptor, DB, DBCompressionType, ErrorKind as RocksErrorKind,
+        FifoCompactOptions, Options, WriteBatchWithTransaction, WriteOptions,
+    },
     solana_sdk::clock::Slot,
     std::{
         collections::HashMap,
@@ -109,6 +113,26 @@ async fn start2<'a>(
     mut memory_storage: MemoryStorage,
     shutdown: Shutdown,
 ) -> (FuturesUnordered<LocalBoxFuture<'a, ()>>, anyhow::Result<()>) {
+    let mut db_options = Options::default();
+    db_options.create_if_missing(true);
+    db_options.create_missing_column_families(true);
+    db_options.increase_parallelism(num_cpus::get() as i32);
+    db_options.set_use_direct_io_for_flush_and_compaction(true);
+    db_options.set_use_direct_reads(true);
+    db_options.set_write_buffer_size(128 * 1024 * 1024);
+    db_options.set_enable_blob_files(true);
+    db_options.set_min_blob_size(128 * 1024);
+    db_options.set_blob_file_size(4 * 1024 * 1024 * 1024);
+    db_options.set_blob_compression_type(DBCompressionType::None);
+
+    // let mut cf_options = Options::default();
+    // cf_options.set_compression_type(DBCompressionType::None);
+    let cf_options = db_options.clone();
+
+    let cf_descriptors = vec![ColumnFamilyDescriptor::new("blocks", cf_options.clone())];
+
+    let db = DB::open_cf_descriptors(&db_options, "./db/alpamayo/rocksdb", cf_descriptors).unwrap();
+
     let mut read_requests = FuturesUnordered::new();
 
     // get block requests
@@ -206,7 +230,12 @@ async fn start2<'a>(
 
             while let Some(block) = queued_slots.remove(&next_database_slot) {
                 if let Err(error) = blocks_files
-                    .push_block(next_database_slot, block, blocks_headers, &stored_slots)
+                    .push_block(
+                        next_database_slot,
+                        block.as_ref(),
+                        blocks_headers,
+                        &stored_slots,
+                    )
                     .await
                 {
                     return (read_requests, Err(error));
@@ -316,6 +345,18 @@ async fn start2<'a>(
             // process NEW read request
             message = read_requests_next => match message {
                 Some(request) => {
+                    match &request {
+                        ReadRequest::GetBlock { slot, .. } => {
+                            let ts = Instant::now();
+                            let len = db.get_pinned_cf(
+                                db.cf_handle("blocks").expect("should never get an unknown column"),
+                                &slot.to_be_bytes()
+                            )
+                            .unwrap()
+                            .map(|slice| slice.len());
+                            tracing::error!(slot, elapsed = ?ts.elapsed(), len, "read rocksdb");
+                        }
+                    }
                     if let Some(future) = request.process(blocks_files, blocks_headers) {
                         read_requests.push(future);
                     }
@@ -328,11 +369,34 @@ async fn start2<'a>(
 
         // save blocks
         while let Some(block) = queued_slots.remove(&next_confirmed_slot) {
+            let ts = Instant::now();
             if let Err(error) = blocks_files
-                .push_block(next_confirmed_slot, block, blocks_headers, &stored_slots)
+                .push_block(
+                    next_confirmed_slot,
+                    block.as_ref(),
+                    blocks_headers,
+                    &stored_slots,
+                )
                 .await
             {
                 return (read_requests, Err(error));
+            }
+            let slot = next_confirmed_slot;
+            tracing::info!(slot, elapsed = ?ts.elapsed(), "push slot, tokio");
+            // rocksdb_tx.send((next_confirmed_slot, block)).unwrap();
+            let ts = Instant::now();
+            if let Some(block) = block {
+                let buffer = block.take_buffer();
+                let opts = WriteOptions::new();
+                db.put_cf_opt(
+                    db.cf_handle("blocks")
+                        .expect("should never get an unknown column"),
+                    &slot.to_be_bytes(),
+                    buffer,
+                    &opts,
+                )
+                .unwrap();
+                tracing::info!(slot, elapsed = ?ts.elapsed(), "push block, rocksdb");
             }
             next_confirmed_slot += 1;
         }

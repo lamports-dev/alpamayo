@@ -69,11 +69,13 @@ impl ReadRequest {
                 let read_fut =
                     blocks_files.read(location.storage_id, location.offset, location.size);
                 let fut = async move {
+                    let ts = Instant::now();
                     let result = match timeout_at(deadline.into(), read_fut).await {
                         Ok(Ok(block)) => ReadResultGetBlock::Block(block),
                         Ok(Err(error)) => ReadResultGetBlock::ReadError(error),
                         Err(_error) => ReadResultGetBlock::Timeout,
                     };
+                    tracing::error!(slot, elapsed = ?ts.elapsed(), "read tokio");
                     let _ = tx.send(result);
                 }
                 .boxed_local();

@@ -103,7 +103,7 @@ impl StorageFiles {
     pub async fn push_block(
         &mut self,
         slot: Slot,
-        block: Option<ConfirmedBlockWithBinary>,
+        block: Option<&ConfirmedBlockWithBinary>,
         blocks_headers: &mut StoredBlockHeaders,
         stored_slots: &StoredSlots,
     ) -> anyhow::Result<()> {
@@ -111,7 +111,7 @@ impl StorageFiles {
             self.pop_block(blocks_headers, stored_slots).await?;
         }
 
-        let Some(mut block) = block else {
+        let Some(block) = block else {
             blocks_headers.push_block_dead(slot, stored_slots).await?;
             stored_slots.confirmed_store(slot);
             return Ok(());
@@ -261,6 +261,8 @@ impl StorageFile {
             self.head,
             self.size
         );
+
+        self.file.sync_data().await.unwrap();
 
         Ok((offset, buffer))
     }

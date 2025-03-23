@@ -58,8 +58,9 @@ impl ConfirmedBlockWithBinary {
         }
     }
 
-    pub fn take_buffer(&mut self) -> Vec<u8> {
-        std::mem::take(&mut self.buffer)
+    pub fn take_buffer(&self) -> Vec<u8> {
+        // std::mem::take(&mut self.buffer)
+        self.buffer.clone()
     }
 }
 

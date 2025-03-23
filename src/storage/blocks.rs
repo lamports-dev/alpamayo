@@ -135,6 +135,7 @@ impl StoredBlockHeaders {
             .write_all_at(buffer, (index * StoredBlockHeader::BYTES_SIZE) as u64)
             .await;
         let () = result?;
+        self.file.sync_data().await.unwrap();
 
         Ok(())
     }
