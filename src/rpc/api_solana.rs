@@ -143,11 +143,11 @@ pub async fn on_request(
 ) -> HttpResult<RpcResponse> {
     let (parts, body) = req.into_parts();
 
-    let upstream_enabled = parts
+    // Same name as in Agave Rpc
+    let upstream_disabled = parts
         .headers
-        .get("x-upstream-disabled")
-        .map(|value| value != "true")
-        .unwrap_or(true);
+        .get("x-bigtable")
+        .is_some_and(|v| v == "disabled");
 
     let bytes = match Limited::new(body, state.body_limit).collect().await {
         Ok(body) => body.to_bytes(),
@@ -160,7 +160,7 @@ pub async fn on_request(
     };
     let mut buffer = match requests {
         RpcRequests::Single(request) => match RpcRequest::parse(request, &state) {
-            Ok(request) => match request.process(Arc::clone(&state), upstream_enabled).await {
+            Ok(request) => match request.process(Arc::clone(&state), upstream_disabled).await {
                 Ok(response) => {
                     serde_json::to_vec(&response).expect("json serialization never fail")
                 }
@@ -174,7 +174,7 @@ pub async fn on_request(
                 let state = state.clone();
                 futures.push_back(async move {
                     match RpcRequest::parse(request, &state) {
-                        Ok(request) => request.process(state, upstream_enabled).await,
+                        Ok(request) => request.process(state, upstream_disabled).await,
                         Err(error) => Ok(error),
                     }
                 });
@@ -344,9 +344,9 @@ impl RpcRequest {
         })
     }
 
-    async fn process(self, state: Arc<State>, upstream_enabled: bool) -> RpcRequestResult {
+    async fn process(self, state: Arc<State>, upstream_disabled: bool) -> RpcRequestResult {
         match self {
-            Self::GetBlock(request) => request.process(state, upstream_enabled).await,
+            Self::GetBlock(request) => request.process(state, upstream_disabled).await,
             Self::GetSlot { response } => response,
         }
     }
@@ -382,7 +382,7 @@ struct RpcRequestGetBlock {
 }
 
 impl RpcRequestGetBlock {
-    async fn process(self, state: Arc<State>, upstream_enabled: bool) -> RpcRequestResult {
+    async fn process(self, state: Arc<State>, upstream_disabled: bool) -> RpcRequestResult {
         let deadline = Instant::now() + state.request_timeout;
 
         // check slot before sending request
@@ -395,7 +395,9 @@ impl RpcRequestGetBlock {
             return Self::error_not_available(self.id, self.slot);
         }
         if self.slot <= state.stored_slots.first_available_load() {
-            return self.fetch_upstream(state, upstream_enabled, deadline).await;
+            return self
+                .fetch_upstream(state, upstream_disabled, deadline)
+                .await;
         }
 
         // request
@@ -418,7 +420,9 @@ impl RpcRequestGetBlock {
         let bytes = match result {
             ReadResultGetBlock::Timeout => anyhow::bail!("timeout"),
             ReadResultGetBlock::Removed => {
-                return self.fetch_upstream(state, upstream_enabled, deadline).await;
+                return self
+                    .fetch_upstream(state, upstream_disabled, deadline)
+                    .await;
             }
             ReadResultGetBlock::Dead => {
                 return Self::error_skipped(self.id, self.slot);
@@ -432,7 +436,9 @@ impl RpcRequestGetBlock {
 
         // verify that we still have data for that block (i.e. we read correct data)
         if self.slot <= state.stored_slots.first_available_load() {
-            return self.fetch_upstream(state, upstream_enabled, deadline).await;
+            return self
+                .fetch_upstream(state, upstream_disabled, deadline)
+                .await;
         }
 
         // parse, encode and serialize
@@ -443,10 +449,10 @@ impl RpcRequestGetBlock {
     async fn fetch_upstream(
         self,
         state: Arc<State>,
-        upstream_enabled: bool,
+        upstream_disabled: bool,
         deadline: Instant,
     ) -> RpcRequestResult {
-        if let Some(upstream) = upstream_enabled
+        if let Some(upstream) = (!upstream_disabled)
             .then_some(state.upstream.as_ref())
             .flatten()
         {
