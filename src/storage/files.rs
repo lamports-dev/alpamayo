@@ -2,31 +2,84 @@ use {
     crate::{
         config::ConfigStorageFile,
         source::block::ConfirmedBlockWithBinary,
-        storage::{blocks::StoredBlockHeaders, slots::StoredSlots, util},
+        storage::{blocks::StoredBlocksWrite, slots::StoredSlots, util},
     },
     anyhow::Context,
-    futures::future::{FutureExt, LocalBoxFuture, join_all, try_join_all},
+    futures::future::{FutureExt, LocalBoxFuture, TryFutureExt, join_all, try_join_all},
     solana_sdk::clock::Slot,
-    std::{collections::HashMap, io, rc::Rc},
-    tokio::task::yield_now,
+    std::{collections::HashMap, io, path::PathBuf, rc::Rc},
     tokio_uring::fs::File,
-    tracing::error,
 };
 
 pub type StorageId = u32;
 
 #[derive(Debug)]
-pub struct StorageFiles {
+pub struct StorageFilesRead {
+    files: Vec<Rc<File>>,
+    id2file: HashMap<StorageId, usize>,
+}
+
+impl StorageFilesRead {
+    pub async fn open(config: StorageFilesSyncInit) -> anyhow::Result<Self> {
+        let files = try_join_all(
+            config
+                .files_paths
+                .iter()
+                .map(|path| util::open(path).map_ok(|(file, _file_size)| Rc::new(file))),
+        )
+        .await?;
+
+        Ok(Self {
+            files,
+            id2file: config.id2file,
+        })
+    }
+
+    pub fn read<'a>(
+        &self,
+        storage_id: StorageId,
+        offset: u64,
+        size: u64,
+    ) -> LocalBoxFuture<'a, io::Result<Vec<u8>>> {
+        let file = self
+            .id2file
+            .get(&storage_id)
+            .and_then(|index| self.files.get(*index))
+            .map(Rc::clone);
+
+        async move {
+            let Some(file) = file else {
+                return Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    format!("failed to get file for id#{storage_id}"),
+                ));
+            };
+
+            let buffer = Vec::with_capacity(size as usize);
+            let (res, buffer) = file.read_exact_at(buffer, offset).await;
+            res?;
+
+            Ok(buffer)
+        }
+        .boxed_local()
+    }
+}
+
+#[derive(Debug)]
+pub struct StorageFilesWrite {
     files: Vec<StorageFile>,
     id2file: HashMap<StorageId, usize>,
     next_file: usize,
+    stored_slots: StoredSlots,
 }
 
-impl StorageFiles {
+impl StorageFilesWrite {
     pub async fn open(
         configs: Vec<ConfigStorageFile>,
-        blocks_headers: &StoredBlockHeaders,
-    ) -> anyhow::Result<Self> {
+        blocks: &StoredBlocksWrite,
+        stored_slots: StoredSlots,
+    ) -> anyhow::Result<(Self, StorageFilesSyncInit)> {
+        let files_paths = configs.iter().map(|config| config.path.clone()).collect();
         let mut files = try_join_all(configs.into_iter().map(Self::open_file)).await?;
         files.sort_unstable_by_key(|file| file.id);
 
@@ -37,7 +90,7 @@ impl StorageFiles {
         }
 
         // set tail and head
-        let mut boundaries = blocks_headers.get_stored_boundaries();
+        let mut boundaries = blocks.get_stored_boundaries();
         for (storage_id, index) in id2file.iter() {
             if let Some(boundaries) = boundaries.remove(storage_id) {
                 let file = &mut files[*index];
@@ -53,11 +106,19 @@ impl StorageFiles {
         }
         anyhow::ensure!(boundaries.is_empty(), "file storage is missed");
 
-        Ok(Self {
+        let write = Self {
             files,
             id2file,
             next_file: 0,
-        })
+            stored_slots,
+        };
+
+        let read_sync_init = StorageFilesSyncInit {
+            files_paths,
+            id2file: write.id2file.clone(),
+        };
+
+        Ok((write, read_sync_init))
     }
 
     async fn open_file(config: ConfigStorageFile) -> anyhow::Result<StorageFile> {
@@ -78,7 +139,7 @@ impl StorageFiles {
 
         Ok(StorageFile {
             id: config.id,
-            file: Rc::new(file),
+            file,
             tail: 0,
             head: 0,
             size: config.size,
@@ -87,15 +148,7 @@ impl StorageFiles {
 
     pub async fn close(self) {
         join_all(self.files.into_iter().map(|file| async move {
-            while Rc::strong_count(&file.file) > 1 {
-                yield_now().await;
-            }
-
-            if let Some(file) = Rc::into_inner(file.file) {
-                let _: io::Result<()> = file.close().await;
-            } else {
-                error!("Rc::into_inner fail for id#{}", file.id);
-            }
+            let _: io::Result<()> = file.file.close().await;
         }))
         .await;
     }
@@ -104,16 +157,15 @@ impl StorageFiles {
         &mut self,
         slot: Slot,
         block: Option<ConfirmedBlockWithBinary>,
-        blocks_headers: &mut StoredBlockHeaders,
-        stored_slots: &StoredSlots,
+        blocks: &mut StoredBlocksWrite,
     ) -> anyhow::Result<()> {
-        if blocks_headers.is_full() {
-            self.pop_block(blocks_headers, stored_slots).await?;
+        if blocks.is_full() {
+            self.pop_block(blocks).await?;
         }
 
         let Some(mut block) = block else {
-            blocks_headers.push_block_dead(slot, stored_slots).await?;
-            stored_slots.confirmed_store(slot);
+            blocks.push_block_dead(slot).await?;
+            self.stored_slots.confirmed_store(slot);
             return Ok(());
         };
         let buffer = block.take_buffer();
@@ -122,7 +174,7 @@ impl StorageFiles {
         let file_index = loop {
             match self.get_file_index_for_new_block(buffer_size) {
                 Some(index) => break index,
-                None => self.pop_block(blocks_headers, stored_slots).await?,
+                None => self.pop_block(blocks).await?,
             }
         };
 
@@ -132,28 +184,16 @@ impl StorageFiles {
             .await
             .with_context(|| format!("failed to write block to file id#{}", file.id))?;
 
-        blocks_headers
-            .push_block_confirmed(
-                slot,
-                block.block_time,
-                file.id,
-                offset,
-                buffer_size,
-                stored_slots,
-            )
+        blocks
+            .push_block_confirmed(slot, block.block_time, file.id, offset, buffer_size)
             .await?;
-
-        stored_slots.confirmed_store(slot);
+        self.stored_slots.confirmed_store(slot);
 
         Ok(())
     }
 
-    async fn pop_block(
-        &mut self,
-        blocks_headers: &mut StoredBlockHeaders,
-        stored_slots: &StoredSlots,
-    ) -> anyhow::Result<()> {
-        let Some(block) = blocks_headers.pop_block(stored_slots).await? else {
+    async fn pop_block(&mut self, blocks: &mut StoredBlocksWrite) -> anyhow::Result<()> {
+        let Some(block) = blocks.pop_block().await? else {
             anyhow::bail!("no blocks to remove");
         };
 
@@ -192,41 +232,12 @@ impl StorageFiles {
             }
         }
     }
-
-    pub fn read<'a>(
-        &self,
-        storage_id: StorageId,
-        offset: u64,
-        size: u64,
-    ) -> LocalBoxFuture<'a, io::Result<Vec<u8>>> {
-        let file = self
-            .id2file
-            .get(&storage_id)
-            .and_then(|index| self.files.get(*index))
-            .map(|file| Rc::clone(&file.file));
-
-        async move {
-            let Some(file) = file else {
-                return Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    format!("failed to get file for id#{storage_id}"),
-                ));
-            };
-
-            let buffer = Vec::with_capacity(size as usize);
-            let (res, buffer) = file.read_exact_at(buffer, offset).await;
-            res?;
-
-            Ok(buffer)
-        }
-        .boxed_local()
-    }
 }
 
 #[derive(Debug)]
 struct StorageFile {
     id: StorageId,
-    file: Rc<File>,
+    file: File,
     tail: u64,
     head: u64,
     size: u64,
@@ -264,4 +275,10 @@ impl StorageFile {
 
         Ok((offset, buffer))
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct StorageFilesSyncInit {
+    files_paths: Vec<PathBuf>,
+    id2file: HashMap<StorageId, usize>,
 }

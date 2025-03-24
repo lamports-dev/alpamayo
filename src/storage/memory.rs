@@ -66,13 +66,13 @@ impl BlockInfo {
 }
 
 #[derive(Debug, Default)]
-pub struct MemoryStorage {
+pub struct StorageMemory {
     blocks: VecDeque<BlockInfo>,
     confirmed: Slot,
     gen_next_slot: Slot,
 }
 
-impl MemoryStorage {
+impl StorageMemory {
     pub fn add_processed(&mut self, slot: Slot, block: ConfirmedBlockWithBinary) {
         // drop if we already reported about that slot
         if slot < self.gen_next_slot {

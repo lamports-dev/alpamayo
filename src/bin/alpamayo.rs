@@ -10,7 +10,7 @@ use {
         thread::{self, sleep},
         time::Duration,
     },
-    tokio::sync::{Notify, mpsc},
+    tokio::sync::{Mutex, Notify, Semaphore, broadcast, mpsc},
     tracing::{info, warn},
 };
 
@@ -45,19 +45,23 @@ fn main() -> anyhow::Result<()> {
     }
 
     // Shutdown channel/flag
+    let mut threads = Vec::<(String, _)>::with_capacity(8);
     let shutdown = Shutdown::new();
 
-    // Source / storage channels
+    // Source / storage write channels
     let stream_start = Arc::new(Notify::new());
-    let (stream_tx, stream_rx) = mpsc::channel(2_048);
-    let (rpc_tx, rpc_rx) = mpsc::channel(2_048);
+    let (stream_tx, stream_rx) = mpsc::channel(2048);
+    let (rpc_tx, rpc_rx) = mpsc::channel(2048);
 
-    // Storage / rpc channels
+    // Storage write / storage read channels
+    let (sync_tx, _sync_rx) = broadcast::channel(1024);
+
+    // Storage read / rpc channels
     let stored_slots = storage::slots::StoredSlots::default();
     let (read_requests_tx, read_requests_rx) = mpsc::channel(config.rpc.request_channel_capacity);
 
     // Create source runtime
-    let source_jh = thread::Builder::new().name("alpSource".to_owned()).spawn({
+    let jh = thread::Builder::new().name("alpSource".to_owned()).spawn({
         let stream_start = Arc::clone(&stream_start);
         let shutdown = shutdown.clone();
         move || {
@@ -89,20 +93,49 @@ fn main() -> anyhow::Result<()> {
             })
         }
     })?;
+    threads.push(("alpSource".to_owned(), Some(jh)));
 
-    // Storage runtime
-    let storage_write_jh = storage::write::start(
-        config.storage,
+    // Storage read runtimes
+    let read_requests_rx = Arc::new(Mutex::new(read_requests_rx));
+    let read_requests_concurrency = Arc::new(Semaphore::const_new(
+        config.storage.read.requests_concurrency,
+    ));
+    for index in 0..config.storage.read.threads {
+        let affinity = config.storage.read.affinity.as_ref().map(|affinity| {
+            if affinity.len() == config.storage.read.threads {
+                vec![affinity[index]]
+            } else {
+                affinity.clone()
+            }
+        });
+
+        let jh = storage::read::start(
+            index,
+            affinity,
+            sync_tx.subscribe(),
+            Arc::clone(&read_requests_concurrency),
+            Arc::clone(&read_requests_rx),
+            shutdown.clone(),
+        )?;
+        threads.push((format!("alpStorageRd{index:02}"), Some(jh)));
+    }
+    drop(read_requests_rx);
+    drop(read_requests_concurrency);
+
+    // Storage write runtime
+    let jh = storage::write::start(
+        config.storage.clone(),
         stored_slots.clone(),
         rpc_tx,
         stream_start,
         stream_rx,
-        read_requests_rx,
+        sync_tx,
         shutdown.clone(),
     )?;
+    threads.push(("alpStorageWrt".to_owned(), Some(jh)));
 
     // Rpc runtime
-    let rpc_jh = thread::Builder::new().name("alpRpc".to_owned()).spawn({
+    let jh = thread::Builder::new().name("alpRpc".to_owned()).spawn({
         let shutdown = shutdown.clone();
         move || {
             let runtime = std::mem::take(&mut config.rpc.tokio).build_runtime("alpRpcRt")?;
@@ -114,14 +147,10 @@ fn main() -> anyhow::Result<()> {
             })
         }
     })?;
+    threads.push(("alpRpc".to_owned(), Some(jh)));
 
     // Shutdown loop
     let mut signals = Signals::new([SIGINT])?;
-    let mut threads = [
-        ("source", Some(source_jh)),
-        ("storageWrite", Some(storage_write_jh)),
-        ("rpc", Some(rpc_jh)),
-    ];
     'outer: while threads.iter().any(|th| th.1.is_some()) {
         for signal in signals.pending() {
             match signal {

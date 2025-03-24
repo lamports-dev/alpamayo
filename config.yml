@@ -32,8 +32,6 @@ source:
       send: ["gzip", "zstd"]
     x_token: null
 storage:
-  affinity: 2
-  read_requests_concurrency: 128
   blocks:
     max: 1_000
     path: ./db/blocks
@@ -44,11 +42,17 @@ storage:
       - id: 0
         path: ./db/storage0
         size: 8gb
+  write:
+    affinity: 2
+  read:
+    threads: 2
+    affinity: 3-4
+    requests_concurrency: 256
 rpc:
   endpoint: 127.0.0.1:9000
   tokio:
     worker_threads: 2
-    affinity: 3-4
+    affinity: 5-6
   body_limit: 50KiB
   request_timeout: 60s
   calls:
@@ -63,5 +67,5 @@ rpc:
     retries_backoff_init: 100ms
   workers:
     threads: 8 # default is number of CPUs
-    affinity: 5-12 # no affinity by default
+    affinity: 7-14 # no affinity by default
     channel_size: 4096

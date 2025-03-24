@@ -117,21 +117,14 @@ pub enum ConfigSourceStreamKind {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConfigStorage {
-    /// Thread affinity
-    #[serde(default, deserialize_with = "deserialize_affinity")]
-    pub affinity: Option<Vec<usize>>,
-    #[serde(
-        default = "ConfigStorage::default_read_requests_concurrency",
-        deserialize_with = "deserialize_num_str"
-    )]
-    pub read_requests_concurrency: usize,
+    /// Storage files for blocks
     pub blocks: ConfigStorageBlocks,
-}
-
-impl ConfigStorage {
-    const fn default_read_requests_concurrency() -> usize {
-        128
-    }
+    /// Write thread config
+    #[serde(default)]
+    pub write: ConfigStorageWrite,
+    /// Read threads options
+    #[serde(default)]
+    pub read: ConfigStorageRead,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -179,6 +172,36 @@ pub struct ConfigStorageFile {
     pub path: PathBuf,
     #[serde(deserialize_with = "deserialize_humansize")]
     pub size: u64,
+}
+
+#[derive(Debug, Default, Clone, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct ConfigStorageWrite {
+    // Thread affinity
+    #[serde(deserialize_with = "deserialize_affinity")]
+    pub affinity: Option<Vec<usize>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct ConfigStorageRead {
+    /// Number of threads
+    pub threads: usize,
+    /// Thread affinity
+    #[serde(deserialize_with = "deserialize_affinity")]
+    pub affinity: Option<Vec<usize>>,
+    #[serde(deserialize_with = "deserialize_num_str")]
+    pub requests_concurrency: usize,
+}
+
+impl Default for ConfigStorageRead {
+    fn default() -> Self {
+        Self {
+            threads: 2,
+            affinity: None,
+            requests_concurrency: 256,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]

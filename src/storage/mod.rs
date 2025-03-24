@@ -4,5 +4,6 @@ pub mod memory;
 pub mod read;
 pub mod slots;
 pub mod source;
+pub mod sync;
 pub mod util;
 pub mod write;
