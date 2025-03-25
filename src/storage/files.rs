@@ -163,12 +163,12 @@ impl StorageFilesWrite {
             self.pop_block(blocks).await?;
         }
 
-        let Some(mut block) = block else {
+        let Some(block) = block else {
             blocks.push_block_dead(slot).await?;
             self.stored_slots.confirmed_store(slot);
             return Ok(());
         };
-        let buffer = std::mem::take(&mut block.buffer);
+        let buffer = block.get_protobuf();
         let buffer_size = buffer.len() as u64;
 
         let file_index = loop {

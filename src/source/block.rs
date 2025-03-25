@@ -9,14 +9,14 @@ use {
     solana_sdk::clock::{Slot, UnixTimestamp},
     solana_storage_proto::convert::generated,
     solana_transaction_status::{ConfirmedBlock, Reward, RewardType},
-    std::ops::Deref,
+    std::{ops::Deref, sync::Arc},
 };
 
 #[derive(Debug, Clone)]
 pub struct ConfirmedBlockWithBinary {
     pub parent_slot: Slot,
     pub block_time: Option<UnixTimestamp>,
-    pub buffer: Vec<u8>,
+    protobuf: Arc<Vec<u8>>,
 }
 
 impl ConfirmedBlockWithBinary {
@@ -54,8 +54,12 @@ impl ConfirmedBlockWithBinary {
         Self {
             parent_slot,
             block_time,
-            buffer,
+            protobuf: Arc::new(buffer),
         }
+    }
+
+    pub fn get_protobuf(&self) -> Vec<u8> {
+        self.protobuf.as_ref().clone()
     }
 }
 

@@ -190,7 +190,7 @@ impl ReadRequest {
                 {
                     if *confirmed_in_process_slot == slot {
                         let _ = tx.send(if let Some(block) = confirmed_in_process_block {
-                            ReadResultGetBlock::Block(block.buffer.clone())
+                            ReadResultGetBlock::Block(block.get_protobuf())
                         } else {
                             ReadResultGetBlock::Dead
                         });
