@@ -107,11 +107,11 @@ async fn start2(
                 },
                 ReadWriteSyncMessage::ConfirmedBlockPop => blocks.pop_block(),
                 ReadWriteSyncMessage::ConfirmedBlockPush { block } => {
-                    blocks.push_block(block);
                     let Some((slot, _block)) = confirmed_in_process.take() else {
                         anyhow::bail!("expected confirmed before push");
                     };
                     anyhow::ensure!(slot == block.slot(), "unexpect confirmed block: {slot} vs {}", block.slot());
+                    blocks.push_block(block);
                 },
             },
             // existed request
