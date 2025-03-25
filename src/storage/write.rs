@@ -213,8 +213,8 @@ async fn start2(
                 });
 
                 let timer = metrics::storage_block_sync_start_timer();
-                storage_files
-                    .push_block(next_database_slot, block, blocks)
+                blocks
+                    .push_block(next_database_slot, block, storage_files)
                     .await?;
                 timer.observe_duration();
 
@@ -318,8 +318,8 @@ async fn start2(
             });
 
             let timer = metrics::storage_block_sync_start_timer();
-            storage_files
-                .push_block(next_confirmed_slot, block, blocks)
+            blocks
+                .push_block(next_confirmed_slot, block, storage_files)
                 .await?;
             timer.observe_duration();
 

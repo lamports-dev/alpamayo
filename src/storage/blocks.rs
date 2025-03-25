@@ -1,7 +1,13 @@
 use {
     crate::{
         config::ConfigStorageBlocks,
-        storage::{files::StorageId, slots::StoredSlots, sync::ReadWriteSyncMessage, util},
+        source::block::ConfirmedBlockWithBinary,
+        storage::{
+            files::{StorageFilesWrite, StorageId},
+            slots::StoredSlots,
+            sync::ReadWriteSyncMessage,
+            util,
+        },
     },
     anyhow::Context,
     bitflags::bitflags,
@@ -185,23 +191,59 @@ impl StoredBlocksWrite {
         block.exists.then_some(block.slot)
     }
 
-    async fn sync(&self, index: usize) -> io::Result<()> {
-        let mut buffer = vec![0; StoredBlock::BYTES_SIZE];
-        self.blocks[index]
-            .copy_to_slice(&mut buffer)
-            .expect("valid slice len");
+    pub async fn push_block(
+        &mut self,
+        slot: Slot,
+        block: Option<ConfirmedBlockWithBinary>,
+        files: &mut StorageFilesWrite,
+    ) -> anyhow::Result<()> {
+        if self.is_full() {
+            self.pop_block(files).await?;
+        }
 
-        let (result, _buffer) = self
-            .file
-            .write_all_at(buffer, (index * StoredBlock::BYTES_SIZE) as u64)
-            .await;
-        let () = result?;
-        self.file.sync_data().await?;
+        let Some(block) = block else {
+            self.push_block_dead(slot).await?;
+            return Ok(());
+        };
 
-        Ok(())
+        let mut buffer = block.get_protobuf();
+        loop {
+            let (buffer2, result) = files.push_block(buffer).await?;
+            buffer = buffer2;
+
+            if let Some((storage_id, offset)) = result {
+                return self
+                    .push_block_confirmed(
+                        slot,
+                        block.block_time,
+                        storage_id,
+                        offset,
+                        buffer.len() as u64,
+                    )
+                    .await;
+            }
+        }
     }
 
-    async fn push_block(&mut self, block: StoredBlock) -> anyhow::Result<()> {
+    async fn push_block_dead(&mut self, slot: Slot) -> anyhow::Result<()> {
+        self.push_block2(StoredBlock::new_dead(slot)).await
+    }
+
+    async fn push_block_confirmed(
+        &mut self,
+        slot: Slot,
+        block_time: Option<UnixTimestamp>,
+        storage_id: StorageId,
+        offset: u64,
+        block_size: u64,
+    ) -> anyhow::Result<()> {
+        self.push_block2(StoredBlock::new_confirmed(
+            slot, block_time, storage_id, offset, block_size,
+        ))
+        .await
+    }
+
+    async fn push_block2(&mut self, block: StoredBlock) -> anyhow::Result<()> {
         self.head = (self.head + 1) % self.blocks.len();
         anyhow::ensure!(!self.blocks[self.head].exists, "no free slot");
 
@@ -222,25 +264,19 @@ impl StoredBlocksWrite {
         Ok(())
     }
 
-    pub async fn push_block_dead(&mut self, slot: Slot) -> anyhow::Result<()> {
-        self.push_block(StoredBlock::new_dead(slot)).await
+    async fn pop_block(&mut self, files: &mut StorageFilesWrite) -> anyhow::Result<()> {
+        let Some(block) = self.pop_block2().await? else {
+            anyhow::bail!("no blocks to remove");
+        };
+
+        if block.size == 0 {
+            Ok(())
+        } else {
+            files.pop_block(block)
+        }
     }
 
-    pub async fn push_block_confirmed(
-        &mut self,
-        slot: Slot,
-        block_time: Option<UnixTimestamp>,
-        storage_id: StorageId,
-        offset: u64,
-        block_size: u64,
-    ) -> anyhow::Result<()> {
-        self.push_block(StoredBlock::new_confirmed(
-            slot, block_time, storage_id, offset, block_size,
-        ))
-        .await
-    }
-
-    pub async fn pop_block(&mut self) -> io::Result<Option<StorageBlockLocation>> {
+    async fn pop_block2(&mut self) -> io::Result<Option<StorageBlockLocation>> {
         if !self.blocks[self.tail].exists {
             return Ok(None);
         }
@@ -256,6 +292,22 @@ impl StoredBlocksWrite {
         self.tail = (self.tail + 1) % self.blocks.len();
 
         Ok(Some(block.into()))
+    }
+
+    async fn sync(&self, index: usize) -> io::Result<()> {
+        let mut buffer = vec![0; StoredBlock::BYTES_SIZE];
+        self.blocks[index]
+            .copy_to_slice(&mut buffer)
+            .expect("valid slice len");
+
+        let (result, _buffer) = self
+            .file
+            .write_all_at(buffer, (index * StoredBlock::BYTES_SIZE) as u64)
+            .await;
+        let () = result?;
+        self.file.sync_data().await?;
+
+        Ok(())
     }
 
     fn front_slot(&self) -> Option<Slot> {

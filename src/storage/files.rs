@@ -1,12 +1,13 @@
 use {
     crate::{
         config::ConfigStorageFile,
-        source::block::ConfirmedBlockWithBinary,
-        storage::{blocks::StoredBlocksWrite, util},
+        storage::{
+            blocks::{StorageBlockLocation, StoredBlocksWrite},
+            util,
+        },
     },
     anyhow::Context,
     futures::future::{FutureExt, LocalBoxFuture, TryFutureExt, join_all, try_join_all},
-    solana_sdk::clock::Slot,
     std::{collections::HashMap, io, path::PathBuf, rc::Rc},
     tokio_uring::fs::File,
 };
@@ -152,50 +153,22 @@ impl StorageFilesWrite {
 
     pub async fn push_block(
         &mut self,
-        slot: Slot,
-        block: Option<ConfirmedBlockWithBinary>,
-        blocks: &mut StoredBlocksWrite,
-    ) -> anyhow::Result<()> {
-        if blocks.is_full() {
-            self.pop_block(blocks).await?;
-        }
-
-        let Some(block) = block else {
-            blocks.push_block_dead(slot).await?;
-            return Ok(());
-        };
-        let buffer = block.get_protobuf();
-        let buffer_size = buffer.len() as u64;
-
-        let file_index = loop {
-            match self.get_file_index_for_new_block(buffer_size) {
-                Some(index) => break index,
-                None => self.pop_block(blocks).await?,
-            }
+        buffer: Vec<u8>,
+    ) -> anyhow::Result<(Vec<u8>, Option<(StorageId, u64)>)> {
+        let Some(index) = self.get_file_index_for_new_block(buffer.len() as u64) else {
+            return Ok((buffer, None));
         };
 
-        let file = &mut self.files[file_index];
-        let (offset, _buffer) = file
+        let file = &mut self.files[index];
+        let (offset, buffer) = file
             .write(buffer)
             .await
             .with_context(|| format!("failed to write block to file id#{}", file.id))?;
 
-        blocks
-            .push_block_confirmed(slot, block.block_time, file.id, offset, buffer_size)
-            .await?;
-
-        Ok(())
+        Ok((buffer, Some((file.id, offset))))
     }
 
-    async fn pop_block(&mut self, blocks: &mut StoredBlocksWrite) -> anyhow::Result<()> {
-        let Some(block) = blocks.pop_block().await? else {
-            anyhow::bail!("no blocks to remove");
-        };
-
-        if block.size == 0 {
-            return Ok(());
-        }
-
+    pub fn pop_block(&mut self, block: StorageBlockLocation) -> anyhow::Result<()> {
         let Some(file_index) = self.id2file.get(&block.storage_id).copied() else {
             anyhow::bail!("unknown storage id: {}", block.storage_id);
         };
