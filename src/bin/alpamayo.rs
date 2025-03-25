@@ -32,7 +32,7 @@ struct Args {
 
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
-    let mut config = Config::load_from_file(&args.config)
+    let config = Config::load_from_file(&args.config)
         .with_context(|| format!("failed to load config from {}", args.config))?;
 
     // Setup logs
@@ -60,12 +60,15 @@ fn main() -> anyhow::Result<()> {
     let stored_slots = storage::slots::StoredSlots::default();
     let (read_requests_tx, read_requests_rx) = mpsc::channel(config.rpc.request_channel_capacity);
 
+    // Open Rocksdb for indices
+    let db = storage::rocksdb::Rocksdb::open(config.storage.rocksdb.clone())?;
+
     // Create source runtime
     let jh = thread::Builder::new().name("alpSource".to_owned()).spawn({
         let stream_start = Arc::clone(&stream_start);
         let shutdown = shutdown.clone();
         move || {
-            let runtime = std::mem::take(&mut config.source.tokio).build_runtime("alpSourceRt")?;
+            let runtime = config.source.tokio.clone().build_runtime("alpSourceRt")?;
             runtime.block_on(async move {
                 let source_fut = tokio::spawn(storage::source::start(
                     config.source,
@@ -129,6 +132,7 @@ fn main() -> anyhow::Result<()> {
     let jh = storage::write::start(
         config.storage.clone(),
         stored_slots.clone(),
+        db,
         rpc_tx,
         stream_start,
         stream_rx,
@@ -141,7 +145,7 @@ fn main() -> anyhow::Result<()> {
     let jh = thread::Builder::new().name("alpRpc".to_owned()).spawn({
         let shutdown = shutdown.clone();
         move || {
-            let runtime = std::mem::take(&mut config.rpc.tokio).build_runtime("alpRpcRt")?;
+            let runtime = config.rpc.tokio.clone().build_runtime("alpRpcRt")?;
             runtime.block_on(async move {
                 rpc::server::spawn(config.rpc, stored_slots, read_requests_tx, shutdown.clone())
                     .await?

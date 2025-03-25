@@ -11,6 +11,7 @@ use {
             blocks::StoredBlocksWrite,
             files::StorageFilesWrite,
             memory::{MemoryConfirmedBlock, StorageMemory},
+            rocksdb::Rocksdb,
             slots::StoredSlots,
             source::{RpcRequest, RpcSourceConnected, RpcSourceConnectedError},
             sync::ReadWriteSyncMessage,
@@ -37,9 +38,11 @@ use {
     tracing::warn,
 };
 
+#[allow(clippy::too_many_arguments)]
 pub fn start(
-    mut config: ConfigStorage,
+    config: ConfigStorage,
     stored_slots: StoredSlots,
+    rocksdb: Rocksdb,
     rpc_tx: mpsc::Sender<RpcRequest>,
     stream_start: Arc<Notify>,
     stream_rx: mpsc::Receiver<StreamSourceMessage>,
@@ -59,7 +62,7 @@ pub fn start(
                 let rpc_getblock_max_concurrency = config.blocks.rpc_getblock_max_concurrency;
                 let rpc = RpcSourceConnected::new(rpc_tx);
 
-                let files = std::mem::take(&mut config.blocks.files);
+                let files = config.blocks.files.clone();
                 let (mut blocks, blocks_read_sync_init) =
                     StoredBlocksWrite::open(config.blocks, stored_slots.clone(), sync_tx.clone())
                         .await?;
@@ -85,6 +88,7 @@ pub fn start(
                     &mut blocks,
                     &mut storage_files,
                     storage_memory,
+                    rocksdb,
                     sync_tx,
                     shutdown,
                 )
@@ -111,6 +115,7 @@ async fn start2(
     blocks: &mut StoredBlocksWrite,
     storage_files: &mut StorageFilesWrite,
     mut storage_memory: StorageMemory,
+    rocksdb: Rocksdb,
     sync_tx: broadcast::Sender<ReadWriteSyncMessage>,
     shutdown: Shutdown,
 ) -> anyhow::Result<()> {

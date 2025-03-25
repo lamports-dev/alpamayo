@@ -18,13 +18,12 @@ use {
 };
 
 pub async fn spawn(
-    mut config: ConfigRpc,
+    config: ConfigRpc,
     stored_slots: StoredSlots,
     requests_tx: mpsc::Sender<ReadRequest>,
     shutdown: Shutdown,
 ) -> anyhow::Result<impl Future<Output = Result<(), JoinError>>> {
-    let (workers_tx, workers_jhs) =
-        workers::start(std::mem::take(&mut config.workers), shutdown.clone())?;
+    let (workers_tx, workers_jhs) = workers::start(config.workers.clone(), shutdown.clone())?;
 
     let listener = TcpListener::bind(config.endpoint).await?;
     info!("start server at: {}", config.endpoint);

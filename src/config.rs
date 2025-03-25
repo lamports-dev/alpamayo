@@ -119,6 +119,8 @@ pub enum ConfigSourceStreamKind {
 pub struct ConfigStorage {
     /// Storage files for blocks
     pub blocks: ConfigStorageBlocks,
+    /// Indices storage (RocksDB)
+    pub rocksdb: ConfigStorageRocksdb,
     /// Write thread config
     #[serde(default)]
     pub write: ConfigStorageWrite,
@@ -172,6 +174,12 @@ pub struct ConfigStorageFile {
     pub path: PathBuf,
     #[serde(deserialize_with = "deserialize_humansize")]
     pub size: u64,
+}
+
+#[derive(Debug, Default, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConfigStorageRocksdb {
+    pub path: PathBuf,
 }
 
 #[derive(Debug, Default, Clone, Deserialize)]
