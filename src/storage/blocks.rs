@@ -196,6 +196,7 @@ impl StoredBlocksWrite {
             .write_all_at(buffer, (index * StoredBlock::BYTES_SIZE) as u64)
             .await;
         let () = result?;
+        self.file.sync_data().await?;
 
         Ok(())
     }

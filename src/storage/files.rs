@@ -263,6 +263,7 @@ impl StorageFile {
 
         let (result, buffer) = self.file.write_all_at(buffer, self.head).await;
         let () = result?;
+        self.file.sync_data().await?;
 
         let offset = self.head;
         self.head += len;
