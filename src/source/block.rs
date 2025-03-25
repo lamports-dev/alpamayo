@@ -12,11 +12,11 @@ use {
     std::ops::Deref,
 };
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ConfirmedBlockWithBinary {
     pub parent_slot: Slot,
     pub block_time: Option<UnixTimestamp>,
-    buffer: Vec<u8>,
+    pub buffer: Vec<u8>,
 }
 
 impl ConfirmedBlockWithBinary {
@@ -56,10 +56,6 @@ impl ConfirmedBlockWithBinary {
             block_time,
             buffer,
         }
-    }
-
-    pub fn take_buffer(&mut self) -> Vec<u8> {
-        std::mem::take(&mut self.buffer)
     }
 }
 

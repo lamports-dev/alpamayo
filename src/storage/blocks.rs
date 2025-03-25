@@ -203,7 +203,7 @@ impl StoredBlocksWrite {
     async fn push_block(&mut self, block: StoredBlock) -> anyhow::Result<()> {
         self.head = (self.head + 1) % self.blocks.len();
         anyhow::ensure!(!self.blocks[self.head].exists, "no free slot");
-        let _ = self.sync_tx.send(ReadWriteSyncMessage::BlockPush {
+        let _ = self.sync_tx.send(ReadWriteSyncMessage::ConfirmedBlockPush {
             block: block.into(),
         });
 
@@ -243,7 +243,7 @@ impl StoredBlocksWrite {
             return Ok(None);
         }
 
-        let _ = self.sync_tx.send(ReadWriteSyncMessage::BlockPop);
+        let _ = self.sync_tx.send(ReadWriteSyncMessage::ConfirmedBlockPop);
 
         let block = std::mem::replace(&mut self.blocks[self.tail], StoredBlock::new_noexists());
 
@@ -484,5 +484,11 @@ pub struct StoredBlockPushSync {
 impl From<StoredBlock> for StoredBlockPushSync {
     fn from(block: StoredBlock) -> Self {
         Self { block }
+    }
+}
+
+impl StoredBlockPushSync {
+    pub fn slot(&self) -> Slot {
+        self.block.slot
     }
 }

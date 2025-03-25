@@ -168,7 +168,7 @@ impl StorageFilesWrite {
             self.stored_slots.confirmed_store(slot);
             return Ok(());
         };
-        let buffer = block.take_buffer();
+        let buffer = std::mem::take(&mut block.buffer);
         let buffer_size = buffer.len() as u64;
 
         let file_index = loop {

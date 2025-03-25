@@ -84,6 +84,7 @@ pub fn start(
                     &mut blocks,
                     &mut storage_files,
                     storage_memory,
+                    sync_tx,
                     shutdown,
                 )
                 .await;
@@ -109,6 +110,7 @@ async fn start2(
     blocks: &mut StoredBlocksWrite,
     storage_files: &mut StorageFilesWrite,
     mut storage_memory: StorageMemory,
+    sync_tx: broadcast::Sender<ReadWriteSyncMessage>,
     shutdown: Shutdown,
 ) -> anyhow::Result<()> {
     // get block requests
@@ -238,12 +240,16 @@ async fn start2(
                     // add message
                     match message {
                         StreamSourceMessage::Block { slot, block } => {
-                            storage_memory.add_processed(slot, block);
+                            storage_memory.add_processed(slot, block.clone());
+                            let _ = sync_tx.send(ReadWriteSyncMessage::BlockNew { slot, block });
                             stored_slots.processed_store(slot);
                         }
                         StreamSourceMessage::SlotStatus { slot, status, .. } => {
                             match status {
-                                StreamSourceSlotStatus::Dead => storage_memory.set_dead(slot),
+                                StreamSourceSlotStatus::Dead => {
+                                    storage_memory.set_dead(slot);
+                                    let _ = sync_tx.send(ReadWriteSyncMessage::BlockDead { slot });
+                                },
                                 StreamSourceSlotStatus::Confirmed => storage_memory.set_confirmed(slot),
                                 StreamSourceSlotStatus::Finalized =>  stored_slots.finalized_store(slot),
                             }
@@ -293,6 +299,11 @@ async fn start2(
 
         // save blocks
         while let Some(block) = queued_slots.remove(&next_confirmed_slot) {
+            let _ = sync_tx.send(ReadWriteSyncMessage::BlockConfirmed {
+                slot: next_confirmed_slot,
+                block: block.clone(),
+            });
+
             storage_files
                 .push_block(next_confirmed_slot, block, blocks)
                 .await?;
