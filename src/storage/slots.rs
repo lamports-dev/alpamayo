@@ -1,9 +1,12 @@
 use {
     crate::metrics,
     solana_sdk::{clock::Slot, commitment_config::CommitmentLevel},
-    std::sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
+    std::{
+        collections::{HashMap, HashSet},
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicU64, Ordering},
+        },
     },
 };
 
@@ -69,5 +72,34 @@ impl StoredSlots {
         let slot = slot.unwrap_or(u64::MAX);
         self.first_available.store(slot, Ordering::SeqCst);
         metrics::storage_stored_slots_set_first_available(slot);
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct StoredConfirmedSlot {
+    stored_slots: StoredSlots,
+    slots: Arc<Mutex<HashMap<Slot, HashSet<usize>>>>,
+    total_readers: usize,
+}
+
+impl StoredConfirmedSlot {
+    pub fn new(stored_slots: StoredSlots, total_readers: usize) -> Self {
+        Self {
+            stored_slots,
+            slots: Arc::default(),
+            total_readers,
+        }
+    }
+
+    pub fn set_confirmed(&self, index: usize, slot: Slot) {
+        let mut lock = self.slots.lock().expect("unpanicked mutex");
+
+        let entry = lock.entry(slot).or_default();
+        entry.insert(index);
+
+        if entry.len() == self.total_readers {
+            self.stored_slots.confirmed_store(slot);
+            lock.remove(&slot);
+        }
     }
 }

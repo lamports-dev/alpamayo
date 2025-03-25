@@ -2,7 +2,7 @@ use {
     crate::{
         config::ConfigStorageFile,
         source::block::ConfirmedBlockWithBinary,
-        storage::{blocks::StoredBlocksWrite, slots::StoredSlots, util},
+        storage::{blocks::StoredBlocksWrite, util},
     },
     anyhow::Context,
     futures::future::{FutureExt, LocalBoxFuture, TryFutureExt, join_all, try_join_all},
@@ -70,14 +70,12 @@ pub struct StorageFilesWrite {
     files: Vec<StorageFile>,
     id2file: HashMap<StorageId, usize>,
     next_file: usize,
-    stored_slots: StoredSlots,
 }
 
 impl StorageFilesWrite {
     pub async fn open(
         configs: Vec<ConfigStorageFile>,
         blocks: &StoredBlocksWrite,
-        stored_slots: StoredSlots,
     ) -> anyhow::Result<(Self, StorageFilesSyncInit)> {
         let files_paths = configs.iter().map(|config| config.path.clone()).collect();
         let mut files = try_join_all(configs.into_iter().map(Self::open_file)).await?;
@@ -110,7 +108,6 @@ impl StorageFilesWrite {
             files,
             id2file,
             next_file: 0,
-            stored_slots,
         };
 
         let read_sync_init = StorageFilesSyncInit {
@@ -165,7 +162,6 @@ impl StorageFilesWrite {
 
         let Some(block) = block else {
             blocks.push_block_dead(slot).await?;
-            self.stored_slots.confirmed_store(slot);
             return Ok(());
         };
         let buffer = block.get_protobuf();
@@ -187,7 +183,6 @@ impl StorageFilesWrite {
         blocks
             .push_block_confirmed(slot, block.block_time, file.id, offset, buffer_size)
             .await?;
-        self.stored_slots.confirmed_store(slot);
 
         Ok(())
     }

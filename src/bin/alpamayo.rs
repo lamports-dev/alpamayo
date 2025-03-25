@@ -100,6 +100,8 @@ fn main() -> anyhow::Result<()> {
     let read_requests_concurrency = Arc::new(Semaphore::const_new(
         config.storage.read.requests_concurrency,
     ));
+    let stored_confirmed_slot =
+        storage::slots::StoredConfirmedSlot::new(stored_slots.clone(), config.storage.read.threads);
     for index in 0..config.storage.read.threads {
         let affinity = config.storage.read.affinity.as_ref().map(|affinity| {
             if affinity.len() == config.storage.read.threads {
@@ -115,6 +117,7 @@ fn main() -> anyhow::Result<()> {
             sync_tx.subscribe(),
             Arc::clone(&read_requests_concurrency),
             Arc::clone(&read_requests_rx),
+            stored_confirmed_slot.clone(),
             shutdown.clone(),
         )?;
         threads.push((format!("alpStorageRd{index:02}"), Some(jh)));

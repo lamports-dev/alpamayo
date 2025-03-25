@@ -204,6 +204,7 @@ impl StoredBlocksWrite {
     async fn push_block(&mut self, block: StoredBlock) -> anyhow::Result<()> {
         self.head = (self.head + 1) % self.blocks.len();
         anyhow::ensure!(!self.blocks[self.head].exists, "no free slot");
+
         let _ = self.sync_tx.send(ReadWriteSyncMessage::ConfirmedBlockPush {
             block: block.into(),
         });

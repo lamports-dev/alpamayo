@@ -64,7 +64,7 @@ pub fn start(
                     StoredBlocksWrite::open(config.blocks, stored_slots.clone(), sync_tx.clone())
                         .await?;
                 let (mut storage_files, storage_files_read_sync_init) =
-                    StorageFilesWrite::open(files, &blocks, stored_slots.clone()).await?;
+                    StorageFilesWrite::open(files, &blocks).await?;
                 let storage_memory = StorageMemory::default();
 
                 sync_tx
@@ -202,9 +202,16 @@ async fn start2(
             }
 
             while let Some(block) = queued_slots.remove(&next_database_slot) {
+                let _ = sync_tx.send(ReadWriteSyncMessage::BlockConfirmed {
+                    slot: next_database_slot,
+                    block: block.clone(),
+                });
+
+                let timer = metrics::storage_block_sync_start_timer();
                 storage_files
                     .push_block(next_database_slot, block, blocks)
                     .await?;
+                timer.observe_duration();
 
                 next_database_slot += 1;
             }
@@ -252,7 +259,7 @@ async fn start2(
                                     let _ = sync_tx.send(ReadWriteSyncMessage::BlockDead { slot });
                                 },
                                 StreamSourceSlotStatus::Confirmed => storage_memory.set_confirmed(slot),
-                                StreamSourceSlotStatus::Finalized =>  stored_slots.finalized_store(slot),
+                                StreamSourceSlotStatus::Finalized => stored_slots.finalized_store(slot),
                             }
                         }
                     }

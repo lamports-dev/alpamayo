@@ -4,6 +4,7 @@ use {
         storage::{
             blocks::{StorageBlockLocationResult, StoredBlocksRead},
             files::StorageFilesRead,
+            slots::StoredConfirmedSlot,
             sync::ReadWriteSyncMessage,
         },
     },
@@ -28,6 +29,7 @@ pub fn start(
     sync_rx: broadcast::Receiver<ReadWriteSyncMessage>,
     read_requests_concurrency: Arc<Semaphore>,
     requests_rx: Arc<Mutex<mpsc::Receiver<ReadRequest>>>,
+    stored_confirmed_slot: StoredConfirmedSlot,
     shutdown: Shutdown,
 ) -> anyhow::Result<thread::JoinHandle<anyhow::Result<()>>> {
     thread::Builder::new()
@@ -40,10 +42,12 @@ pub fn start(
 
                 let mut read_requests = FuturesUnordered::new();
                 let result = start2(
+                    index,
                     sync_rx,
                     read_requests_concurrency,
                     requests_rx,
                     &mut read_requests,
+                    stored_confirmed_slot,
                     shutdown,
                 )
                 .await;
@@ -56,10 +60,12 @@ pub fn start(
 }
 
 async fn start2(
+    index: usize,
     mut sync_rx: broadcast::Receiver<ReadWriteSyncMessage>,
     read_requests_concurrency: Arc<Semaphore>,
     read_requests_rx: Arc<Mutex<mpsc::Receiver<ReadRequest>>>,
     read_requests: &mut FuturesUnordered<LocalBoxFuture<'_, ()>>,
+    stored_confirmed_slot: StoredConfirmedSlot,
     shutdown: Shutdown,
 ) -> anyhow::Result<()> {
     tokio::pin!(shutdown);
@@ -97,13 +103,15 @@ async fn start2(
                 ReadWriteSyncMessage::BlockDead { slot: _slot } => continue,
                 ReadWriteSyncMessage::BlockConfirmed { slot, block } => {
                     confirmed_in_process = Some((slot, block));
+                    stored_confirmed_slot.set_confirmed(index, slot);
                 },
                 ReadWriteSyncMessage::ConfirmedBlockPop => blocks.pop_block(),
                 ReadWriteSyncMessage::ConfirmedBlockPush { block } => {
                     blocks.push_block(block);
-                    if let Some((slot, _block)) = confirmed_in_process.take() {
-                        anyhow::ensure!(slot == block.slot(), "unexpect confirmed block: {slot} vs {}", block.slot());
-                    }
+                    let Some((slot, _block)) = confirmed_in_process.take() else {
+                        anyhow::bail!("expected confirmed before push");
+                    };
+                    anyhow::ensure!(slot == block.slot(), "unexpect confirmed block: {slot} vs {}", block.slot());
                 },
             },
             // existed request
