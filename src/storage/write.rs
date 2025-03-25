@@ -1,6 +1,7 @@
 use {
     crate::{
         config::ConfigStorage,
+        metrics,
         source::{
             block::ConfirmedBlockWithBinary,
             rpc::GetBlockError,
@@ -304,9 +305,11 @@ async fn start2(
                 block: block.clone(),
             });
 
+            let timer = metrics::storage_block_sync_start_timer();
             storage_files
                 .push_block(next_confirmed_slot, block, blocks)
                 .await?;
+            timer.observe_duration();
 
             next_confirmed_slot += 1;
         }

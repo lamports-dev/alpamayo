@@ -1,6 +1,8 @@
 use {
     crate::{config::ConfigMetrics, version::VERSION as VERSION_INFO},
-    prometheus::{IntCounterVec, IntGaugeVec, Opts, Registry},
+    prometheus::{
+        Histogram, HistogramOpts, HistogramTimer, IntCounterVec, IntGaugeVec, Opts, Registry,
+    },
     solana_sdk::{clock::Slot, commitment_config::CommitmentLevel},
     std::{future::Future, sync::Once},
     tokio::task::JoinError,
@@ -17,6 +19,13 @@ lazy_static::lazy_static! {
     static ref STORAGE_STORED_SLOTS: IntGaugeVec = IntGaugeVec::new(
         Opts::new("storage_stored_slots", "Stored slots in db"),
         &["commitment"]
+    ).unwrap();
+
+    static ref STORAGE_BLOCK_SYNC_SECONDS: Histogram = Histogram::with_opts(
+        HistogramOpts {
+            common_opts: Opts::new("storage_block_sync_seconds", "Storage block sync time"),
+            buckets: vec![0.005, 0.01, 0.02, 0.03, 0.04, 0.05, 0.075, 0.1, 0.2, 0.4]
+        }
     ).unwrap();
 }
 
@@ -35,6 +44,7 @@ pub async fn spawn_server(
         }
         register!(VERSION);
         register!(STORAGE_STORED_SLOTS);
+        register!(STORAGE_BLOCK_SYNC_SECONDS);
 
         VERSION
             .with_label_values(&[
@@ -89,4 +99,8 @@ pub fn storage_stored_slots_set_first_available(slot: Slot) {
             .with_label_values(labels)
             .set(slot as i64);
     }
+}
+
+pub fn storage_block_sync_start_timer() -> HistogramTimer {
+    STORAGE_BLOCK_SYNC_SECONDS.start_timer()
 }
