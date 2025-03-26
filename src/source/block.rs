@@ -10,7 +10,7 @@ use {
     solana_sdk::clock::{Slot, UnixTimestamp},
     solana_storage_proto::convert::generated,
     solana_transaction_status::{Reward, RewardType, Rewards},
-    std::{ops::Deref, sync::Arc},
+    std::ops::Deref,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -21,16 +21,11 @@ pub struct BlockTransactionOffset {
 }
 
 #[derive(Debug)]
-struct BlockWithBinaryInner {
-    protobuf: Vec<u8>,
-    txs_offset: Vec<BlockTransactionOffset>,
-}
-
-#[derive(Debug, Clone)]
 pub struct BlockWithBinary {
     pub parent_slot: Slot,
     pub block_time: Option<UnixTimestamp>,
-    inner: Arc<BlockWithBinaryInner>,
+    pub protobuf: Vec<u8>,
+    pub txs_offset: Vec<BlockTransactionOffset>,
 }
 
 impl BlockWithBinary {
@@ -61,19 +56,9 @@ impl BlockWithBinary {
         Self {
             parent_slot,
             block_time,
-            inner: Arc::new(BlockWithBinaryInner {
-                protobuf,
-                txs_offset,
-            }),
+            protobuf,
+            txs_offset,
         }
-    }
-
-    pub fn get_protobuf(&self) -> Vec<u8> {
-        self.inner.protobuf.clone()
-    }
-
-    pub fn get_txs_offset(&self) -> Vec<BlockTransactionOffset> {
-        self.inner.txs_offset.clone()
     }
 }
 
@@ -106,9 +91,8 @@ impl ConfirmedBlockProtoRef<'_> {
         for tx in self.transactions.iter() {
             encode_key(4, WireType::LengthDelimited, &mut buf);
             let offset = buf.len() as u64;
-            let slice = tx.get_protobuf_ref();
-            encode_varint(slice.len() as u64, &mut buf);
-            buf.put_slice(slice);
+            encode_varint(tx.protobuf.len() as u64, &mut buf);
+            buf.put_slice(&tx.protobuf);
             offsets.push(BlockTransactionOffset {
                 hash: tx.hash,
                 offset,
@@ -148,7 +132,7 @@ impl ConfirmedBlockProtoRef<'_> {
             + self
                 .transactions
                 .iter()
-                .map(|tx| tx.get_protobuf_ref().len())
+                .map(|tx| tx.protobuf.len())
                 .map(|len| len + encoded_len_varint(len as u64))
                 .sum::<usize>())
             + (key_len(5u32) * self.rewards.len()

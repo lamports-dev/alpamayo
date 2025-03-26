@@ -182,7 +182,7 @@ impl ReadRequest {
         lock: OwnedSemaphorePermit,
         files: &StorageFilesRead,
         blocks: &StoredBlocksRead,
-        confirmed_in_process: &Option<(Slot, Option<BlockWithBinary>)>,
+        confirmed_in_process: &Option<(Slot, Option<Arc<BlockWithBinary>>)>,
     ) -> Option<LocalBoxFuture<'a, ()>> {
         match self {
             Self::GetBlock { deadline, slot, tx } => {
@@ -196,7 +196,7 @@ impl ReadRequest {
                 {
                     if *confirmed_in_process_slot == slot {
                         let _ = tx.send(if let Some(block) = confirmed_in_process_block {
-                            ReadResultGetBlock::Block(block.get_protobuf())
+                            ReadResultGetBlock::Block(block.protobuf.clone())
                         } else {
                             ReadResultGetBlock::Dead
                         });

@@ -13,7 +13,7 @@ use {
     anyhow::Context,
     bitflags::bitflags,
     solana_sdk::clock::{Slot, UnixTimestamp},
-    std::{collections::HashMap, io},
+    std::{collections::HashMap, io, sync::Arc},
     thiserror::Error,
     tokio::sync::broadcast,
     tokio_uring::fs::File,
@@ -195,7 +195,7 @@ impl StoredBlocksWrite {
     pub async fn push_block(
         &mut self,
         slot: Slot,
-        block: Option<BlockWithBinary>,
+        block: Option<Arc<BlockWithBinary>>,
         files: &mut StorageFilesWrite,
         indices: &Rocksdb,
     ) -> anyhow::Result<()> {
@@ -208,7 +208,7 @@ impl StoredBlocksWrite {
             return Ok(());
         };
 
-        let mut buffer = block.get_protobuf();
+        let mut buffer = block.protobuf.clone();
         let (storage_id, offset) = loop {
             let (buffer2, result) = files.push_block(buffer).await?;
             buffer = buffer2;
@@ -219,7 +219,7 @@ impl StoredBlocksWrite {
         };
 
         // TODO: parallel
-        let request = WriteRequest::new(storage_id, slot, block.get_txs_offset());
+        let request = WriteRequest::new(storage_id, slot, block.txs_offset.clone());
         indices.send_write(request).await?;
 
         return self

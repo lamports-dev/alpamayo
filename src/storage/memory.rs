@@ -1,15 +1,25 @@
 use {
-    crate::source::block::BlockWithBinary, solana_sdk::clock::Slot, std::collections::VecDeque,
+    crate::source::block::BlockWithBinary,
+    solana_sdk::clock::Slot,
+    std::{collections::VecDeque, sync::Arc},
     tracing::error,
 };
 
 #[derive(Debug)]
 pub enum MemoryConfirmedBlock {
     // we don't received info about that block
-    Missed { slot: Slot },
+    Missed {
+        slot: Slot,
+    },
     // block is dead
-    Dead { slot: Slot },
-    Block { slot: Slot, block: BlockWithBinary },
+    Dead {
+        slot: Slot,
+    },
+    // constructed block
+    Block {
+        slot: Slot,
+        block: Arc<BlockWithBinary>,
+    },
 }
 
 impl MemoryConfirmedBlock {
@@ -33,13 +43,13 @@ impl MemoryConfirmedBlock {
 #[derive(Debug)]
 struct BlockInfo {
     slot: Slot,
-    block: Option<BlockWithBinary>,
+    block: Option<Arc<BlockWithBinary>>,
     dead: bool,
     confirmed: bool,
 }
 
 impl BlockInfo {
-    fn new(slot: Slot, block: BlockWithBinary) -> Self {
+    fn new(slot: Slot, block: Arc<BlockWithBinary>) -> Self {
         Self {
             slot,
             block: Some(block),
@@ -66,7 +76,7 @@ pub struct StorageMemory {
 }
 
 impl StorageMemory {
-    pub fn add_processed(&mut self, slot: Slot, block: BlockWithBinary) {
+    pub fn add_processed(&mut self, slot: Slot, block: Arc<BlockWithBinary>) {
         // drop if we already reported about that slot
         if slot < self.gen_next_slot {
             return;

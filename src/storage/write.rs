@@ -154,7 +154,7 @@ async fn start2(
     };
 
     // queue of confirmed blocks
-    let mut queued_slots = HashMap::<Slot, Option<BlockWithBinary>>::new();
+    let mut queued_slots = HashMap::<Slot, Option<Arc<BlockWithBinary>>>::new();
     let mut queued_slots_backfilled = false;
 
     // fill the gap between stored and new
@@ -193,7 +193,7 @@ async fn start2(
             // push block into the queue
             match rpc_requests.next().await {
                 Some(Ok(Ok((slot, block)))) => {
-                    queued_slots.insert(slot, block);
+                    queued_slots.insert(slot, block.map(Arc::new));
                 }
                 Some(Ok(Err(error))) => {
                     return Err(error).context("failed to get confirmed block");
@@ -235,7 +235,7 @@ async fn start2(
             // insert block requested from rpc
             message = rpc_requests_next => match message {
                 Some(Ok(Ok((slot, block)))) => {
-                    queued_slots.insert(slot, block);
+                    queued_slots.insert(slot, block.map(Arc::new));
                 },
                 Some(Ok(Err(error))) => {
                     return Err(error).context("failed to get confirmed block");
@@ -251,7 +251,8 @@ async fn start2(
                     // add message
                     match message {
                         StreamSourceMessage::Block { slot, block } => {
-                            storage_memory.add_processed(slot, block.clone());
+                            let block = Arc::new(block);
+                            storage_memory.add_processed(slot, Arc::clone(&block));
                             let _ = sync_tx.send(ReadWriteSyncMessage::BlockNew { slot, block });
                             stored_slots.processed_store(slot);
                         }

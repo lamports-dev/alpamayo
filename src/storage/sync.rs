@@ -7,6 +7,7 @@ use {
         },
     },
     solana_sdk::clock::Slot,
+    std::sync::Arc,
 };
 
 #[derive(Debug, Clone)]
@@ -19,7 +20,7 @@ pub enum ReadWriteSyncMessage {
     // when we build the block
     BlockNew {
         slot: Slot,
-        block: BlockWithBinary,
+        block: Arc<BlockWithBinary>,
     },
     // block marked as dead
     BlockDead {
@@ -28,7 +29,7 @@ pub enum ReadWriteSyncMessage {
     // block confirmed
     BlockConfirmed {
         slot: Slot,
-        block: Option<BlockWithBinary>,
+        block: Option<Arc<BlockWithBinary>>,
     },
     // confirmed/finalized block removed from the storage
     ConfirmedBlockPop,

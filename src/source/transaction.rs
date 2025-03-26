@@ -8,7 +8,7 @@ use {
 pub struct TransactionWithBinary {
     pub hash: u64,
     pub signature: Signature,
-    protobuf: Vec<u8>,
+    pub protobuf: Vec<u8>,
 }
 
 impl TransactionWithBinary {
@@ -26,9 +26,5 @@ impl TransactionWithBinary {
             signature,
             protobuf,
         }
-    }
-
-    pub fn get_protobuf_ref(&self) -> &[u8] {
-        self.protobuf.as_ref()
     }
 }
