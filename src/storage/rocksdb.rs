@@ -23,14 +23,27 @@ trait ColumnName {
 }
 
 #[derive(Debug)]
-pub struct TransactionIndex;
+struct TransactionIndex;
 
 impl ColumnName for TransactionIndex {
     const NAME: &'static str = "tx_index";
 }
 
-impl TransactionIndex {
-    //
+#[derive(Debug, Clone, Copy)]
+pub struct TransactionIndexValue {
+    storage_id: StorageId,
+    slot: Slot,
+    offset: u64,
+    size: u64,
+}
+
+impl TransactionIndexValue {
+    fn encode(&self, buf: &mut Vec<u8>) {
+        encode_varint(self.storage_id as u64, buf);
+        encode_varint(self.slot, buf);
+        encode_varint(self.offset, buf);
+        encode_varint(self.size, buf);
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -129,7 +142,6 @@ impl Rocksdb {
                     WriteRequest {
                         storage_id,
                         slot,
-                        block_offset,
                         txs_offset,
                     },
                     tx,
@@ -138,10 +150,13 @@ impl Rocksdb {
                     let mut buf = Vec::with_capacity(4 * 9);
                     for tx_offset in txs_offset {
                         buf.clear();
-                        encode_varint(storage_id as u64, &mut buf);
-                        encode_varint(slot, &mut buf);
-                        encode_varint(block_offset + tx_offset.offset, &mut buf);
-                        encode_varint(tx_offset.size, &mut buf);
+                        TransactionIndexValue {
+                            storage_id,
+                            slot,
+                            offset: tx_offset.offset,
+                            size: tx_offset.size,
+                        }
+                        .encode(&mut buf);
 
                         batch.put_cf(
                             Self::cf_handle::<TransactionIndex>(&db),
@@ -177,21 +192,14 @@ type WriteRequestWithCallback = (WriteRequest, oneshot::Sender<anyhow::Result<()
 pub struct WriteRequest {
     storage_id: StorageId,
     slot: Slot,
-    block_offset: u64,
     txs_offset: Vec<BlockTransactionOffset>,
 }
 
 impl WriteRequest {
-    pub fn new(
-        storage_id: StorageId,
-        slot: Slot,
-        block_offset: u64,
-        txs_offset: Vec<BlockTransactionOffset>,
-    ) -> Self {
+    pub fn new(storage_id: StorageId, slot: Slot, txs_offset: Vec<BlockTransactionOffset>) -> Self {
         Self {
             storage_id,
             slot,
-            block_offset,
             txs_offset,
         }
     }

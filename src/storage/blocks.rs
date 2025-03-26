@@ -218,7 +218,8 @@ impl StoredBlocksWrite {
             }
         };
 
-        let request = WriteRequest::new(storage_id, slot, offset, block.get_txs_offset());
+        // TODO: parallel
+        let request = WriteRequest::new(storage_id, slot, block.get_txs_offset());
         indices.send_write(request).await?;
 
         return self
