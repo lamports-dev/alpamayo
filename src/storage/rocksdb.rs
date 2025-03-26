@@ -1,5 +1,8 @@
 use {
-    crate::{config::ConfigStorageRocksdb, storage::files::StorageId},
+    crate::{
+        config::ConfigStorageRocksdb, source::block::BlockTransactionOffset,
+        storage::files::StorageId,
+    },
     anyhow::Context,
     prost::encoding::encode_varint,
     rocksdb::{
@@ -15,17 +18,19 @@ use {
     tokio::sync::oneshot,
 };
 
-mod columns {
-    #[derive(Debug)]
-    pub struct TransactionIndex;
-}
-
 trait ColumnName {
     const NAME: &'static str;
 }
 
-impl ColumnName for columns::TransactionIndex {
+#[derive(Debug)]
+pub struct TransactionIndex;
+
+impl ColumnName for TransactionIndex {
     const NAME: &'static str = "tx_index";
+}
+
+impl TransactionIndex {
+    //
 }
 
 #[derive(Debug, Clone)]
@@ -51,7 +56,10 @@ impl Rocksdb {
         let mut threads = vec![];
         let jh = Builder::new().name("rocksdbWrt".to_owned()).spawn({
             let db = Arc::clone(&db);
-            move || Self::spawn_write(db, write_rx)
+            move || {
+                Self::spawn_write(db, write_rx);
+                Ok(())
+            }
         })?;
         threads.push(("rocksdbWrt".to_owned(), Some(jh)));
 
@@ -102,8 +110,6 @@ impl Rocksdb {
     }
 
     fn cf_descriptors() -> Vec<ColumnFamilyDescriptor> {
-        use columns::*;
-
         vec![Self::cf_descriptor::<TransactionIndex>()]
     }
 
@@ -116,12 +122,7 @@ impl Rocksdb {
             .expect("should never get an unknown column")
     }
 
-    fn spawn_write(
-        db: Arc<DB>,
-        write_rx: mpsc::Receiver<WriteRequestWithCallback>,
-    ) -> anyhow::Result<()> {
-        use columns::*;
-
+    fn spawn_write(db: Arc<DB>, write_rx: mpsc::Receiver<WriteRequestWithCallback>) {
         loop {
             match write_rx.try_recv() {
                 Ok((
@@ -135,16 +136,16 @@ impl Rocksdb {
                 )) => {
                     let mut batch = WriteBatch::with_capacity_bytes(256 * 1024);
                     let mut buf = Vec::with_capacity(4 * 9);
-                    for (hash, offset, size) in txs_offset {
+                    for tx_offset in txs_offset {
                         buf.clear();
                         encode_varint(storage_id as u64, &mut buf);
                         encode_varint(slot, &mut buf);
-                        encode_varint(block_offset + offset, &mut buf);
-                        encode_varint(size, &mut buf);
+                        encode_varint(block_offset + tx_offset.offset, &mut buf);
+                        encode_varint(tx_offset.size, &mut buf);
 
                         batch.put_cf(
                             Self::cf_handle::<TransactionIndex>(&db),
-                            hash.to_be_bytes(),
+                            tx_offset.hash.to_be_bytes(),
                             &buf,
                         );
                     }
@@ -152,11 +153,11 @@ impl Rocksdb {
                     let options = WriteOptions::new();
                     let result = db.write_opt(batch, &options);
                     if tx.send(result.map_err(Into::into)).is_err() {
-                        return Ok(());
+                        break;
                     }
                 }
                 Err(mpsc::TryRecvError::Empty) => sleep(Duration::from_micros(100)),
-                Err(mpsc::TryRecvError::Disconnected) => return Ok(()),
+                Err(mpsc::TryRecvError::Disconnected) => break,
             }
         }
     }
@@ -177,7 +178,7 @@ pub struct WriteRequest {
     storage_id: StorageId,
     slot: Slot,
     block_offset: u64,
-    txs_offset: Vec<(u64, u64, u64)>, // hash, offset, size
+    txs_offset: Vec<BlockTransactionOffset>,
 }
 
 impl WriteRequest {
@@ -185,7 +186,7 @@ impl WriteRequest {
         storage_id: StorageId,
         slot: Slot,
         block_offset: u64,
-        txs_offset: Vec<(u64, u64, u64)>,
+        txs_offset: Vec<BlockTransactionOffset>,
     ) -> Self {
         Self {
             storage_id,

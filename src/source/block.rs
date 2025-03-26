@@ -13,12 +13,17 @@ use {
     std::{ops::Deref, sync::Arc},
 };
 
-type TxOffset = (u64, u64, u64); // hash, offset, size
+#[derive(Debug, Clone, Copy)]
+pub struct BlockTransactionOffset {
+    pub hash: u64,
+    pub offset: u64,
+    pub size: u64,
+}
 
 #[derive(Debug)]
 struct BlockWithBinaryInner {
     protobuf: Vec<u8>,
-    txs_offset: Vec<TxOffset>,
+    txs_offset: Vec<BlockTransactionOffset>,
 }
 
 #[derive(Debug, Clone)]
@@ -67,7 +72,7 @@ impl BlockWithBinary {
         self.inner.protobuf.clone()
     }
 
-    pub fn get_txs_offset(&self) -> Vec<TxOffset> {
+    pub fn get_txs_offset(&self) -> Vec<BlockTransactionOffset> {
         self.inner.txs_offset.clone()
     }
 }
@@ -85,7 +90,7 @@ struct ConfirmedBlockProtoRef<'a> {
 }
 
 impl ConfirmedBlockProtoRef<'_> {
-    fn encode_with_tx_offsets(&self) -> (Vec<u8>, Vec<TxOffset>) {
+    fn encode_with_tx_offsets(&self) -> (Vec<u8>, Vec<BlockTransactionOffset>) {
         let mut buf = Vec::with_capacity(self.encoded_len());
 
         if !self.previous_blockhash.is_empty() {
@@ -104,7 +109,11 @@ impl ConfirmedBlockProtoRef<'_> {
             let slice = tx.get_protobuf_ref();
             encode_varint(slice.len() as u64, &mut buf);
             buf.put_slice(slice);
-            offsets.push((tx.hash, offset, buf.len() as u64 - offset));
+            offsets.push(BlockTransactionOffset {
+                hash: tx.hash,
+                offset,
+                size: buf.len() as u64 - offset,
+            });
         }
         for reward in self.rewards {
             encoding::message::encode(5, &RewardWrapper(reward), &mut buf);
