@@ -39,6 +39,7 @@ pub struct Rocksdb {
 }
 
 impl Rocksdb {
+    #[allow(clippy::type_complexity)]
     pub fn open(
         config: ConfigStorageRocksdb,
     ) -> anyhow::Result<(Self, Vec<(String, Option<JoinHandle<anyhow::Result<()>>>)>)> {
