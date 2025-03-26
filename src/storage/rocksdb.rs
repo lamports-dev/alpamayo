@@ -12,8 +12,7 @@ use {
     solana_sdk::clock::Slot,
     std::{
         sync::{Arc, mpsc},
-        thread::{Builder, JoinHandle, sleep},
-        time::Duration,
+        thread::{Builder, JoinHandle},
     },
     tokio::sync::oneshot,
 };
@@ -136,43 +135,38 @@ impl Rocksdb {
     }
 
     fn spawn_write(db: Arc<DB>, write_rx: mpsc::Receiver<WriteRequestWithCallback>) {
-        loop {
-            match write_rx.try_recv() {
-                Ok((
-                    WriteRequest {
-                        storage_id,
-                        slot,
-                        txs_offset,
-                    },
-                    tx,
-                )) => {
-                    let mut batch = WriteBatch::with_capacity_bytes(256 * 1024);
-                    let mut buf = Vec::with_capacity(4 * 9);
-                    for tx_offset in txs_offset {
-                        buf.clear();
-                        TransactionIndexValue {
-                            storage_id,
-                            slot,
-                            offset: tx_offset.offset,
-                            size: tx_offset.size,
-                        }
-                        .encode(&mut buf);
-
-                        batch.put_cf(
-                            Self::cf_handle::<TransactionIndex>(&db),
-                            tx_offset.hash.to_be_bytes(),
-                            &buf,
-                        );
-                    }
-
-                    let options = WriteOptions::new();
-                    let result = db.write_opt(batch, &options);
-                    if tx.send(result.map_err(Into::into)).is_err() {
-                        break;
-                    }
+        while let Ok((
+            WriteRequest {
+                storage_id,
+                slot,
+                txs_offset,
+            },
+            tx,
+        )) = write_rx.recv()
+        {
+            let mut batch = WriteBatch::with_capacity_bytes(256 * 1024);
+            let mut buf = Vec::with_capacity(4 * 9);
+            for tx_offset in txs_offset {
+                buf.clear();
+                TransactionIndexValue {
+                    storage_id,
+                    slot,
+                    offset: tx_offset.offset,
+                    size: tx_offset.size,
                 }
-                Err(mpsc::TryRecvError::Empty) => sleep(Duration::from_micros(100)),
-                Err(mpsc::TryRecvError::Disconnected) => break,
+                .encode(&mut buf);
+
+                batch.put_cf(
+                    Self::cf_handle::<TransactionIndex>(&db),
+                    tx_offset.hash.to_be_bytes(),
+                    &buf,
+                );
+            }
+
+            let options = WriteOptions::new();
+            let result = db.write_opt(batch, &options);
+            if tx.send(result.map_err(Into::into)).is_err() {
+                break;
             }
         }
     }
