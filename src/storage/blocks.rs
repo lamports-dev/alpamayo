@@ -218,6 +218,9 @@ impl StoredBlocksWrite {
             }
         };
 
+        let request = WriteRequest::new(storage_id, slot, offset, block.get_txs_offset());
+        indices.send_write(request).await?;
+
         return self
             .push_block_confirmed(
                 slot,

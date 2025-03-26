@@ -13,11 +13,19 @@ use {
     std::{ops::Deref, sync::Arc},
 };
 
+type TxOffset = (u64, u64, u64); // hash, offset, size
+
+#[derive(Debug)]
+struct BlockWithBinaryInner {
+    protobuf: Vec<u8>,
+    txs_offset: Vec<TxOffset>,
+}
+
 #[derive(Debug, Clone)]
 pub struct BlockWithBinary {
     pub parent_slot: Slot,
     pub block_time: Option<UnixTimestamp>,
-    protobuf: Arc<Vec<u8>>,
+    inner: Arc<BlockWithBinaryInner>,
 }
 
 impl BlockWithBinary {
@@ -32,7 +40,7 @@ impl BlockWithBinary {
         block_time: Option<UnixTimestamp>,
         block_height: Option<u64>,
     ) -> Self {
-        let buffer = ConfirmedBlockProtoRef {
+        let (protobuf, txs_offset) = ConfirmedBlockProtoRef {
             previous_blockhash: &previous_blockhash,
             blockhash: &blockhash,
             parent_slot,
@@ -48,12 +56,19 @@ impl BlockWithBinary {
         Self {
             parent_slot,
             block_time,
-            protobuf: Arc::new(buffer),
+            inner: Arc::new(BlockWithBinaryInner {
+                protobuf,
+                txs_offset,
+            }),
         }
     }
 
     pub fn get_protobuf(&self) -> Vec<u8> {
-        self.protobuf.as_ref().clone()
+        self.inner.protobuf.clone()
+    }
+
+    pub fn get_txs_offset(&self) -> Vec<TxOffset> {
+        self.inner.txs_offset.clone()
     }
 }
 
@@ -70,7 +85,7 @@ struct ConfirmedBlockProtoRef<'a> {
 }
 
 impl ConfirmedBlockProtoRef<'_> {
-    fn encode_with_tx_offsets(&self) -> Vec<u8> {
+    fn encode_with_tx_offsets(&self) -> (Vec<u8>, Vec<TxOffset>) {
         let mut buf = Vec::with_capacity(self.encoded_len());
 
         if !self.previous_blockhash.is_empty() {
@@ -82,10 +97,14 @@ impl ConfirmedBlockProtoRef<'_> {
         if self.parent_slot != 0 {
             encoding::uint64::encode(3, &self.parent_slot, &mut buf);
         }
-        for slice in self.transactions.iter().map(|tx| tx.get_protobuf_ref()) {
+        let mut offsets = Vec::with_capacity(self.transactions.len());
+        for tx in self.transactions.iter() {
             encode_key(4, WireType::LengthDelimited, &mut buf);
+            let offset = buf.len() as u64;
+            let slice = tx.get_protobuf_ref();
             encode_varint(slice.len() as u64, &mut buf);
             buf.put_slice(slice);
+            offsets.push((tx.hash, offset, buf.len() as u64 - offset));
         }
         for reward in self.rewards {
             encoding::message::encode(5, &RewardWrapper(reward), &mut buf);
@@ -100,7 +119,7 @@ impl ConfirmedBlockProtoRef<'_> {
             encoding::message::encode(8, num_partitions, &mut buf);
         }
 
-        buf
+        (buf, offsets)
     }
 
     fn encoded_len(&self) -> usize {
