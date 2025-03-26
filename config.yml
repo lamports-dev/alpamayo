@@ -42,6 +42,8 @@ storage:
       - id: 0
         path: ./db/storage0
         size: 8gb
+  rocksdb:
+    path: ./db/alpamayo/rocksdb
   write:
     affinity: 2
   read:

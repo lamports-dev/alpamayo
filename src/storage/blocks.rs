@@ -1,7 +1,7 @@
 use {
     crate::{
         config::ConfigStorageBlocks,
-        source::block::ConfirmedBlockWithBinary,
+        source::block::BlockWithBinary,
         storage::{
             files::{StorageFilesWrite, StorageId},
             rocksdb::{Rocksdb, WriteRequest},
@@ -195,7 +195,7 @@ impl StoredBlocksWrite {
     pub async fn push_block(
         &mut self,
         slot: Slot,
-        block: Option<ConfirmedBlockWithBinary>,
+        block: Option<BlockWithBinary>,
         files: &mut StorageFilesWrite,
         indices: &Rocksdb,
     ) -> anyhow::Result<()> {

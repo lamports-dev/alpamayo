@@ -2,7 +2,7 @@ use {
     crate::{
         config::ConfigSource,
         source::{
-            block::ConfirmedBlockWithBinary,
+            block::BlockWithBinary,
             rpc::{GetBlockError, RpcSource},
             stream::{RecvError, StreamSource, StreamSourceMessage},
         },
@@ -24,7 +24,7 @@ pub enum RpcRequest {
     },
     Block {
         slot: Slot,
-        tx: oneshot::Sender<Result<ConfirmedBlockWithBinary, GetBlockError>>,
+        tx: oneshot::Sender<Result<BlockWithBinary, GetBlockError>>,
     },
 }
 
@@ -74,7 +74,7 @@ impl RpcSourceConnected {
     pub async fn get_block(
         &self,
         slot: Slot,
-    ) -> RpcSourceConnectedResult<ConfirmedBlockWithBinary, GetBlockError> {
+    ) -> RpcSourceConnectedResult<BlockWithBinary, GetBlockError> {
         let (tx, rx) = oneshot::channel();
         self.send(RpcRequest::Block { slot, tx }, rx).await
     }

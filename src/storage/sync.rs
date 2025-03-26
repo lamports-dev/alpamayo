@@ -1,6 +1,6 @@
 use {
     crate::{
-        source::block::ConfirmedBlockWithBinary,
+        source::block::BlockWithBinary,
         storage::{
             blocks::{StoredBlockPushSync, StoredBlocksRead},
             files::StorageFilesSyncInit,
@@ -19,7 +19,7 @@ pub enum ReadWriteSyncMessage {
     // when we build the block
     BlockNew {
         slot: Slot,
-        block: ConfirmedBlockWithBinary,
+        block: BlockWithBinary,
     },
     // block marked as dead
     BlockDead {
@@ -28,7 +28,7 @@ pub enum ReadWriteSyncMessage {
     // block confirmed
     BlockConfirmed {
         slot: Slot,
-        block: Option<ConfirmedBlockWithBinary>,
+        block: Option<BlockWithBinary>,
     },
     // confirmed/finalized block removed from the storage
     ConfirmedBlockPop,

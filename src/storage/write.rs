@@ -3,7 +3,7 @@ use {
         config::ConfigStorage,
         metrics,
         source::{
-            block::ConfirmedBlockWithBinary,
+            block::BlockWithBinary,
             rpc::GetBlockError,
             stream::{StreamSourceMessage, StreamSourceSlotStatus},
         },
@@ -123,9 +123,7 @@ async fn start2(
     let mut rpc_requests = FuturesUnordered::new();
     #[allow(clippy::type_complexity)]
     let get_confirmed_block = |rpc_requests: &mut FuturesUnordered<
-        JoinHandle<
-            Result<(u64, Option<ConfirmedBlockWithBinary>), RpcSourceConnectedError<GetBlockError>>,
-        >,
+        JoinHandle<Result<(u64, Option<BlockWithBinary>), RpcSourceConnectedError<GetBlockError>>>,
     >,
                                slot: Slot| {
         let mut max_retries = rpc_getblock_max_retries;
@@ -156,7 +154,7 @@ async fn start2(
     };
 
     // queue of confirmed blocks
-    let mut queued_slots = HashMap::<Slot, Option<ConfirmedBlockWithBinary>>::new();
+    let mut queued_slots = HashMap::<Slot, Option<BlockWithBinary>>::new();
     let mut queued_slots_backfilled = false;
 
     // fill the gap between stored and new

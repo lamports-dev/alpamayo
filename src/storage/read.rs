@@ -1,6 +1,6 @@
 use {
     crate::{
-        source::block::ConfirmedBlockWithBinary,
+        source::block::BlockWithBinary,
         storage::{
             blocks::{StorageBlockLocationResult, StoredBlocksRead},
             files::StorageFilesRead,
@@ -184,7 +184,7 @@ impl ReadRequest {
         lock: OwnedSemaphorePermit,
         files: &StorageFilesRead,
         blocks: &StoredBlocksRead,
-        confirmed_in_process: &Option<(Slot, Option<ConfirmedBlockWithBinary>)>,
+        confirmed_in_process: &Option<(Slot, Option<BlockWithBinary>)>,
     ) -> Option<LocalBoxFuture<'a, ()>> {
         match self {
             Self::GetBlock { deadline, slot, tx } => {

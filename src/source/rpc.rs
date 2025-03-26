@@ -1,5 +1,5 @@
 use {
-    crate::{config::ConfigSourceRpc, source::block::ConfirmedBlockWithBinary},
+    crate::{config::ConfigSourceRpc, source::block::BlockWithBinary},
     base64::{Engine, prelude::BASE64_STANDARD},
     solana_client::{
         client_error::{ClientError, ClientErrorKind},
@@ -106,7 +106,7 @@ impl RpcSource {
             .await
     }
 
-    pub async fn get_block(&self, slot: Slot) -> Result<ConfirmedBlockWithBinary, GetBlockError> {
+    pub async fn get_block(&self, slot: Slot) -> Result<BlockWithBinary, GetBlockError> {
         let config = RpcBlockConfig {
             encoding: Some(UiTransactionEncoding::Base64),
             transaction_details: Some(TransactionDetails::Full),
@@ -154,7 +154,7 @@ impl RpcSource {
                 warn!(slot, signature = ?tx.signatures[0], "missing metadata");
             }
         }
-        Ok(ConfirmedBlockWithBinary::new(block, None))
+        Ok(BlockWithBinary::new(block, None))
     }
 
     fn block_decode(block: UiConfirmedBlock) -> Result<ConfirmedBlock, BlockDecodeError> {

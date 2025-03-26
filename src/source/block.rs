@@ -13,13 +13,13 @@ use {
 };
 
 #[derive(Debug, Clone)]
-pub struct ConfirmedBlockWithBinary {
+pub struct BlockWithBinary {
     pub parent_slot: Slot,
     pub block_time: Option<UnixTimestamp>,
     protobuf: Arc<Vec<u8>>,
 }
 
-impl ConfirmedBlockWithBinary {
+impl BlockWithBinary {
     pub fn new(block: ConfirmedBlock, transactions_proto: Option<Vec<Vec<u8>>>) -> Self {
         let transactions_proto = transactions_proto.unwrap_or_else(|| {
             block
@@ -75,7 +75,7 @@ struct ConfirmedBlockProtoRef<'a> {
     num_partitions: Option<generated::NumPartitions>,
 }
 
-impl<'a> ConfirmedBlockProtoRef<'a> {
+impl ConfirmedBlockProtoRef<'_> {
     fn encode_with_tx_offsets(&self) -> Vec<u8> {
         let mut buf = Vec::with_capacity(self.encoded_len());
 

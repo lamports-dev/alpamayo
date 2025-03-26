@@ -1,7 +1,7 @@
 use {
     crate::{
         config::{ConfigSourceStream, ConfigSourceStreamKind},
-        source::block::ConfirmedBlockWithBinary,
+        source::block::BlockWithBinary,
     },
     futures::{StreamExt, ready, stream::Stream},
     maplit::hashmap,
@@ -68,7 +68,7 @@ pub enum StreamSourceSlotStatus {
 pub enum StreamSourceMessage {
     Block {
         slot: Slot,
-        block: ConfirmedBlockWithBinary,
+        block: BlockWithBinary,
     },
     SlotStatus {
         slot: Slot,
@@ -119,7 +119,7 @@ impl SlotInfo {
         }
     }
 
-    fn try_build_block(&mut self) -> Option<Result<ConfirmedBlockWithBinary, RecvError>> {
+    fn try_build_block(&mut self) -> Option<Result<BlockWithBinary, RecvError>> {
         if self.sealed
             || self
                 .block_meta
@@ -172,10 +172,7 @@ impl SlotInfo {
             block_height: block_meta.block_height.map(|obj| obj.block_height),
         };
 
-        Some(Ok(ConfirmedBlockWithBinary::new(
-            block,
-            Some(transactions_proto),
-        )))
+        Some(Ok(BlockWithBinary::new(block, Some(transactions_proto))))
     }
 }
 
