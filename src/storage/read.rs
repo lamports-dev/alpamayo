@@ -14,7 +14,13 @@ use {
         stream::{FuturesUnordered, StreamExt},
     },
     solana_sdk::clock::Slot,
-    std::{io, sync::Arc, thread, time::Instant},
+    std::{
+        collections::{BTreeMap, btree_map::Entry as BTreeMapEntry},
+        io,
+        sync::Arc,
+        thread,
+        time::Instant,
+    },
     tokio::{
         sync::{Mutex, OwnedSemaphorePermit, Semaphore, broadcast, mpsc, oneshot},
         time::timeout_at,
@@ -79,6 +85,7 @@ async fn start2(
         Err(broadcast::error::RecvError::Lagged(_)) => anyhow::bail!("read runtime lagged"),
     };
 
+    let mut storage_processed = StorageProcessed::default();
     let mut confirmed_in_process = None;
 
     let read_request_next =
@@ -97,11 +104,12 @@ async fn start2(
             // sync update
             message = sync_rx.recv() => match message {
                 Ok(ReadWriteSyncMessage::Init { .. }) => anyhow::bail!("unexpected second init"),
-                Ok(ReadWriteSyncMessage::BlockNew { slot: _slot, block: _block }) => continue,
-                Ok(ReadWriteSyncMessage::BlockDead { slot: _slot }) => continue,
+                Ok(ReadWriteSyncMessage::BlockNew { slot, block }) => storage_processed.add(slot, block),
+                Ok(ReadWriteSyncMessage::BlockDead { slot }) => storage_processed.mark_dead(slot),
                 Ok(ReadWriteSyncMessage::BlockConfirmed { slot, block }) => {
-                    confirmed_in_process = Some((slot, block));
                     stored_confirmed_slot.set_confirmed(index, slot);
+                    storage_processed.confirm(slot);
+                    confirmed_in_process = Some((slot, block));
                 },
                 Ok(ReadWriteSyncMessage::ConfirmedBlockPop) => blocks.pop_block(),
                 Ok(ReadWriteSyncMessage::ConfirmedBlockPush { block }) => {
@@ -155,6 +163,34 @@ async fn read_request_get_next(
     drop(rx);
 
     (read_requests_rx, lock, request)
+}
+
+#[derive(Debug, Default)]
+struct StorageProcessed {
+    confirmed: Slot,
+    blocks: BTreeMap<Slot, Option<Arc<BlockWithBinary>>>,
+}
+
+impl StorageProcessed {
+    fn add(&mut self, slot: Slot, block: Arc<BlockWithBinary>) {
+        if let BTreeMapEntry::Vacant(entry) = self.blocks.entry(slot) {
+            entry.insert(Some(block));
+        }
+    }
+
+    fn mark_dead(&mut self, slot: Slot) {
+        self.blocks.insert(slot, None);
+    }
+
+    fn confirm(&mut self, slot: Slot) {
+        self.confirmed = slot;
+        loop {
+            match self.blocks.first_key_value() {
+                Some((first_slot, _block)) if *first_slot <= slot => self.blocks.pop_first(),
+                _ => break,
+            };
+        }
+    }
 }
 
 #[derive(Debug)]

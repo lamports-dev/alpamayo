@@ -220,7 +220,6 @@ impl StoredBlocksWrite {
             self.pop_block(files).await?;
         };
 
-        // TODO: parallel
         let request = WriteRequest::new(storage_id, slot, block.txs_offset.clone());
         indices.send_write(request).await?;
 
