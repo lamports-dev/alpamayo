@@ -7,10 +7,13 @@ use {
             self, DecodeContext, WireType, encode_key, encode_varint, encoded_len_varint, key_len,
         },
     },
-    solana_sdk::clock::{Slot, UnixTimestamp},
+    solana_sdk::{
+        clock::{Slot, UnixTimestamp},
+        signature::Signature,
+    },
     solana_storage_proto::convert::generated,
     solana_transaction_status::{Reward, RewardType, Rewards},
-    std::ops::Deref,
+    std::{collections::HashMap, ops::Deref},
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -26,6 +29,7 @@ pub struct BlockWithBinary {
     pub block_time: Option<UnixTimestamp>,
     pub protobuf: Vec<u8>,
     pub txs_offset: Vec<BlockTransactionOffset>,
+    pub transactions: HashMap<Signature, TransactionWithBinary>,
 }
 
 impl BlockWithBinary {
@@ -53,11 +57,17 @@ impl BlockWithBinary {
         }
         .encode_with_tx_offsets();
 
+        let transactions = transactions
+            .into_iter()
+            .map(|tx| (tx.signature, tx))
+            .collect();
+
         Self {
             parent_slot,
             block_time,
             protobuf,
             txs_offset,
+            transactions,
         }
     }
 }
