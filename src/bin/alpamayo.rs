@@ -122,7 +122,6 @@ fn main() -> anyhow::Result<()> {
             Arc::clone(&read_requests_concurrency),
             Arc::clone(&read_requests_rx),
             stored_confirmed_slot.clone(),
-            shutdown.clone(),
         )?;
         threads.push((format!("alpStorageRd{index:02}"), Some(jh)));
     }

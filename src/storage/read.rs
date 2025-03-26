@@ -13,7 +13,6 @@ use {
         future::{FutureExt, LocalBoxFuture, pending},
         stream::{FuturesUnordered, StreamExt},
     },
-    richat_shared::shutdown::Shutdown,
     solana_sdk::clock::Slot,
     std::{io, sync::Arc, thread, time::Instant},
     tokio::{
@@ -30,7 +29,6 @@ pub fn start(
     read_requests_concurrency: Arc<Semaphore>,
     requests_rx: Arc<Mutex<mpsc::Receiver<ReadRequest>>>,
     stored_confirmed_slot: StoredConfirmedSlot,
-    shutdown: Shutdown,
 ) -> anyhow::Result<thread::JoinHandle<anyhow::Result<()>>> {
     thread::Builder::new()
         .name(format!("alpStorageRd{index:02}"))
@@ -48,7 +46,6 @@ pub fn start(
                     requests_rx,
                     &mut read_requests,
                     stored_confirmed_slot,
-                    shutdown,
                 )
                 .await;
                 while read_requests.next().await.is_some() {}
@@ -66,19 +63,20 @@ async fn start2(
     read_requests_rx: Arc<Mutex<mpsc::Receiver<ReadRequest>>>,
     read_requests: &mut FuturesUnordered<LocalBoxFuture<'_, ()>>,
     stored_confirmed_slot: StoredConfirmedSlot,
-    shutdown: Shutdown,
 ) -> anyhow::Result<()> {
-    tokio::pin!(shutdown);
-    let (mut blocks, storage_files) = tokio::select! {
-        message = sync_rx.recv() => {
-            let ReadWriteSyncMessage::Init { blocks, storage_files_init } = message.context("failed to get sync init message")? else {
-                anyhow::bail!("invalid sync message");
-            };
-
-            let storage_files = StorageFilesRead::open(storage_files_init).await.context("failed to open storage files")?;
+    let (mut blocks, storage_files) = match sync_rx.recv().await {
+        Ok(ReadWriteSyncMessage::Init {
+            blocks,
+            storage_files_init,
+        }) => {
+            let storage_files = StorageFilesRead::open(storage_files_init)
+                .await
+                .context("failed to open storage files")?;
             (blocks, storage_files)
         }
-        () = &mut shutdown => return Ok(()),
+        Ok(_) => anyhow::bail!("invalid sync message"),
+        Err(broadcast::error::RecvError::Closed) => return Ok(()), // shutdown
+        Err(broadcast::error::RecvError::Lagged(_)) => anyhow::bail!("read runtime lagged"),
     };
 
     let mut confirmed_in_process = None;
@@ -97,22 +95,24 @@ async fn start2(
         tokio::select! {
             biased;
             // sync update
-            message = sync_rx.recv() => match message.context("failed to get sync message")? {
-                ReadWriteSyncMessage::Init { .. } => anyhow::bail!("unexpected second init"),
-                ReadWriteSyncMessage::BlockNew { slot: _slot, block: _block } => continue,
-                ReadWriteSyncMessage::BlockDead { slot: _slot } => continue,
-                ReadWriteSyncMessage::BlockConfirmed { slot, block } => {
+            message = sync_rx.recv() => match message {
+                Ok(ReadWriteSyncMessage::Init { .. }) => anyhow::bail!("unexpected second init"),
+                Ok(ReadWriteSyncMessage::BlockNew { slot: _slot, block: _block }) => continue,
+                Ok(ReadWriteSyncMessage::BlockDead { slot: _slot }) => continue,
+                Ok(ReadWriteSyncMessage::BlockConfirmed { slot, block }) => {
                     confirmed_in_process = Some((slot, block));
                     stored_confirmed_slot.set_confirmed(index, slot);
                 },
-                ReadWriteSyncMessage::ConfirmedBlockPop => blocks.pop_block(),
-                ReadWriteSyncMessage::ConfirmedBlockPush { block } => {
+                Ok(ReadWriteSyncMessage::ConfirmedBlockPop) => blocks.pop_block(),
+                Ok(ReadWriteSyncMessage::ConfirmedBlockPush { block }) => {
                     let Some((slot, _block)) = confirmed_in_process.take() else {
                         anyhow::bail!("expected confirmed before push");
                     };
                     anyhow::ensure!(slot == block.slot(), "unexpect confirmed block: {slot} vs {}", block.slot());
                     blocks.push_block(block);
                 },
+                Err(broadcast::error::RecvError::Closed) => return Ok(()), // shutdown
+                Err(broadcast::error::RecvError::Lagged(_)) => anyhow::bail!("read runtime lagged"),
             },
             // existed request
             message = read_request_fut => match message {
@@ -133,8 +133,6 @@ async fn start2(
                     read_requests.push(future);
                 }
             },
-            // shutdown
-            () = &mut shutdown => return Ok(()),
         }
     }
 }
