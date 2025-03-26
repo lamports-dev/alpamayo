@@ -4,6 +4,7 @@ use {
         source::block::ConfirmedBlockWithBinary,
         storage::{
             files::{StorageFilesWrite, StorageId},
+            rocksdb::{Rocksdb, WriteRequest},
             slots::StoredSlots,
             sync::ReadWriteSyncMessage,
             util,
@@ -196,6 +197,7 @@ impl StoredBlocksWrite {
         slot: Slot,
         block: Option<ConfirmedBlockWithBinary>,
         files: &mut StorageFilesWrite,
+        indices: &Rocksdb,
     ) -> anyhow::Result<()> {
         if self.is_full() {
             self.pop_block(files).await?;
@@ -207,22 +209,24 @@ impl StoredBlocksWrite {
         };
 
         let mut buffer = block.get_protobuf();
-        loop {
+        let (storage_id, offset) = loop {
             let (buffer2, result) = files.push_block(buffer).await?;
             buffer = buffer2;
 
             if let Some((storage_id, offset)) = result {
-                return self
-                    .push_block_confirmed(
-                        slot,
-                        block.block_time,
-                        storage_id,
-                        offset,
-                        buffer.len() as u64,
-                    )
-                    .await;
+                break (storage_id, offset);
             }
-        }
+        };
+
+        return self
+            .push_block_confirmed(
+                slot,
+                block.block_time,
+                storage_id,
+                offset,
+                buffer.len() as u64,
+            )
+            .await;
     }
 
     async fn push_block_dead(&mut self, slot: Slot) -> anyhow::Result<()> {

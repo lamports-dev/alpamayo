@@ -1,11 +1,17 @@
 use {
     crate::config::ConfigStorageRocksdb,
     anyhow::Context,
+    richat_shared::shutdown::Shutdown,
     rocksdb::{
         ColumnFamily, ColumnFamilyDescriptor, DB, DBCompressionType, ErrorKind as RocksErrorKind,
         FifoCompactOptions, Options, WriteBatchWithTransaction, WriteOptions,
     },
-    std::{path::Path, sync::Arc},
+    std::{
+        sync::{Arc, mpsc},
+        thread::{Builder, JoinHandle, sleep},
+        time::Duration,
+    },
+    tokio::sync::oneshot,
 };
 
 mod columns {
@@ -21,20 +27,37 @@ impl ColumnName for columns::TransactionIndex {
     const NAME: &'static str = "tx_index";
 }
 
+#[derive(Debug)]
+struct RocksdbInner {
+    db: DB,
+    write_tx: mpsc::SyncSender<WriteRequestWithCallback>,
+}
+
 #[derive(Debug, Clone)]
 pub struct Rocksdb {
-    db: Arc<DB>,
+    inner: Arc<RocksdbInner>,
 }
 
 impl Rocksdb {
-    pub fn open(config: ConfigStorageRocksdb) -> anyhow::Result<Self> {
+    pub fn open(
+        config: ConfigStorageRocksdb,
+    ) -> anyhow::Result<(Self, Vec<(String, Option<JoinHandle<anyhow::Result<()>>>)>)> {
         let db_options = Self::get_db_options();
         let cf_descriptors = Self::cf_descriptors();
 
         let db = DB::open_cf_descriptors(&db_options, &config.path, cf_descriptors)
             .with_context(|| format!("failed to open rocksdb with path: {:?}", config.path))?;
 
-        Ok(Self { db: Arc::new(db) })
+        let (write_tx, write_rx) = mpsc::sync_channel(1);
+
+        let mut threads = vec![];
+        let jh = Builder::new()
+            .name("rocksdbWrt".to_owned())
+            .spawn(move || Self::spawn_write(write_rx))?;
+        threads.push(("rocksdbWrt".to_owned(), Some(jh)));
+
+        let inner = Arc::new(RocksdbInner { db, write_tx });
+        Ok((Self { inner }, threads))
     }
 
     fn get_db_options() -> Options {
@@ -88,4 +111,33 @@ impl Rocksdb {
             Self::get_cf_options(),
         )]
     }
+
+    fn spawn_write(write_rx: mpsc::Receiver<WriteRequestWithCallback>) -> anyhow::Result<()> {
+        loop {
+            match write_rx.try_recv() {
+                Ok((request, tx)) => {
+                    //
+                    todo!()
+                }
+                Err(mpsc::TryRecvError::Empty) => sleep(Duration::from_micros(100)),
+                Err(mpsc::TryRecvError::Disconnected) => return Ok(()),
+            }
+        }
+    }
+
+    pub async fn send_write(&self, request: WriteRequest) -> anyhow::Result<()> {
+        let (tx, rx) = oneshot::channel();
+        self.inner
+            .write_tx
+            .send((request, tx))
+            .context("failed to send write request")?;
+        rx.await.context("failed to get write request result")?
+    }
+}
+
+type WriteRequestWithCallback = (WriteRequest, oneshot::Sender<anyhow::Result<()>>);
+
+#[derive(Debug)]
+pub struct WriteRequest {
+    //
 }

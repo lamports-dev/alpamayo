@@ -61,7 +61,8 @@ fn main() -> anyhow::Result<()> {
     let (read_requests_tx, read_requests_rx) = mpsc::channel(config.rpc.request_channel_capacity);
 
     // Open Rocksdb for indices
-    let db = storage::rocksdb::Rocksdb::open(config.storage.rocksdb.clone())?;
+    let (db, db_threads) = storage::rocksdb::Rocksdb::open(config.storage.rocksdb.clone())?;
+    threads.extend(db_threads);
 
     // Create source runtime
     let jh = thread::Builder::new().name("alpSource".to_owned()).spawn({

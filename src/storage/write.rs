@@ -42,7 +42,7 @@ use {
 pub fn start(
     config: ConfigStorage,
     stored_slots: StoredSlots,
-    rocksdb: Rocksdb,
+    storage_indices: Rocksdb,
     rpc_tx: mpsc::Sender<RpcRequest>,
     stream_start: Arc<Notify>,
     stream_rx: mpsc::Receiver<StreamSourceMessage>,
@@ -88,7 +88,7 @@ pub fn start(
                     &mut blocks,
                     &mut storage_files,
                     storage_memory,
-                    rocksdb,
+                    storage_indices,
                     sync_tx,
                     shutdown,
                 )
@@ -115,7 +115,7 @@ async fn start2(
     blocks: &mut StoredBlocksWrite,
     storage_files: &mut StorageFilesWrite,
     mut storage_memory: StorageMemory,
-    rocksdb: Rocksdb,
+    storage_indices: Rocksdb,
     sync_tx: broadcast::Sender<ReadWriteSyncMessage>,
     shutdown: Shutdown,
 ) -> anyhow::Result<()> {
@@ -214,7 +214,7 @@ async fn start2(
 
                 let timer = metrics::storage_block_sync_start_timer();
                 blocks
-                    .push_block(next_database_slot, block, storage_files)
+                    .push_block(next_database_slot, block, storage_files, &storage_indices)
                     .await?;
                 timer.observe_duration();
 
@@ -319,7 +319,7 @@ async fn start2(
 
             let timer = metrics::storage_block_sync_start_timer();
             blocks
-                .push_block(next_confirmed_slot, block, storage_files)
+                .push_block(next_confirmed_slot, block, storage_files, &storage_indices)
                 .await?;
             timer.observe_duration();
 

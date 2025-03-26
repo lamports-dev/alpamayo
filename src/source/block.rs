@@ -49,7 +49,7 @@ impl ConfirmedBlockWithBinary {
                 .num_partitions
                 .map(|num_partitions| generated::NumPartitions { num_partitions }),
         }
-        .encode_to_vec();
+        .encode_with_tx_offsets();
 
         Self {
             parent_slot,
@@ -75,38 +75,48 @@ struct ConfirmedBlockProtoRef<'a> {
     num_partitions: Option<generated::NumPartitions>,
 }
 
+impl<'a> ConfirmedBlockProtoRef<'a> {
+    fn encode_with_tx_offsets(&self) -> Vec<u8> {
+        let mut buf = Vec::with_capacity(self.encoded_len());
+
+        if !self.previous_blockhash.is_empty() {
+            bytes_encode(1, self.previous_blockhash.as_ref(), &mut buf);
+        }
+        if !self.blockhash.is_empty() {
+            bytes_encode(2, self.blockhash.as_ref(), &mut buf);
+        }
+        if self.parent_slot != 0 {
+            encoding::uint64::encode(3, &self.parent_slot, &mut buf);
+        }
+        for tx in self.transactions {
+            encode_key(4, WireType::LengthDelimited, &mut buf);
+            encode_varint(tx.len() as u64, &mut buf);
+            buf.put_slice(tx);
+        }
+        for reward in self.rewards {
+            encoding::message::encode(5, &RewardWrapper(reward), &mut buf);
+        }
+        if let Some(block_time) = &self.block_time {
+            encoding::message::encode(6, block_time, &mut buf);
+        }
+        if let Some(block_height) = &self.block_height {
+            encoding::message::encode(7, block_height, &mut buf);
+        }
+        if let Some(num_partitions) = &self.num_partitions {
+            encoding::message::encode(8, num_partitions, &mut buf);
+        }
+
+        buf
+    }
+}
+
 impl Message for ConfirmedBlockProtoRef<'_> {
-    fn encode_raw<B>(&self, buf: &mut B)
+    fn encode_raw<B>(&self, _buf: &mut B)
     where
         B: BufMut,
         Self: Sized,
     {
-        if !self.previous_blockhash.is_empty() {
-            bytes_encode(1, self.previous_blockhash.as_ref(), buf);
-        }
-        if !self.blockhash.is_empty() {
-            bytes_encode(2, self.blockhash.as_ref(), buf);
-        }
-        if self.parent_slot != 0 {
-            encoding::uint64::encode(3, &self.parent_slot, buf);
-        }
-        for tx in self.transactions {
-            encode_key(4, WireType::LengthDelimited, buf);
-            encode_varint(tx.len() as u64, buf);
-            buf.put_slice(tx);
-        }
-        for reward in self.rewards {
-            encoding::message::encode(5, &RewardWrapper(reward), buf);
-        }
-        if let Some(block_time) = &self.block_time {
-            encoding::message::encode(6, block_time, buf);
-        }
-        if let Some(block_height) = &self.block_height {
-            encoding::message::encode(7, block_height, buf);
-        }
-        if let Some(num_partitions) = &self.num_partitions {
-            encoding::message::encode(8, num_partitions, buf);
-        }
+        unimplemented!()
     }
 
     fn encoded_len(&self) -> usize {
