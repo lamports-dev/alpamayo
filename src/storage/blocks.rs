@@ -216,6 +216,8 @@ impl StoredBlocksWrite {
             if let Some((storage_id, offset)) = result {
                 break (storage_id, offset);
             }
+
+            self.pop_block(files).await?;
         };
 
         // TODO: parallel
