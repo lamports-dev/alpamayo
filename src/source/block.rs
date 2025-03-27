@@ -100,13 +100,13 @@ impl ConfirmedBlockProtoRef<'_> {
         let mut offsets = Vec::with_capacity(self.transactions.len());
         for tx in self.transactions.iter() {
             encode_key(4, WireType::LengthDelimited, &mut buf);
-            let offset = buf.len() as u64;
             encode_varint(tx.protobuf.len() as u64, &mut buf);
+            let offset = buf.len() as u64;
             buf.put_slice(&tx.protobuf);
             offsets.push(BlockTransactionOffset {
                 hash: tx.hash,
                 offset,
-                size: buf.len() as u64 - offset,
+                size: tx.protobuf.len() as u64,
             });
         }
         for reward in self.rewards {
