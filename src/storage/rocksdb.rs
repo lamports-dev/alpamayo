@@ -170,7 +170,7 @@ impl Rocksdb {
             tx,
         }) = write_rx.recv()
         {
-            let mut batch = WriteBatch::with_capacity_bytes(256 * 1024);
+            let mut batch = WriteBatch::with_capacity_bytes((8 + 4 * 9) * 10_000);
             let mut buf = Vec::with_capacity(4 * 9);
             for tx_offset in txs_offset {
                 buf.clear();

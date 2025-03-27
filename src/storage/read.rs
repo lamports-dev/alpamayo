@@ -328,7 +328,7 @@ impl ReadRequest {
 
                 let read_fut =
                     storage_files.read(location.storage_id, location.offset, location.size);
-                let fut = async move {
+                Some(Box::pin(async move {
                     let result = match timeout_at(deadline.into(), read_fut).await {
                         Ok(Ok(bytes)) => ReadResultGetBlock::Block(bytes),
                         Ok(Err(error)) => ReadResultGetBlock::ReadError(error),
@@ -337,9 +337,7 @@ impl ReadRequest {
                     let _ = tx.send(result);
                     drop(lock);
                     None
-                }
-                .boxed_local();
-                Some(fut)
+                }))
             }
             Self::Transaction {
                 deadline,
@@ -370,7 +368,7 @@ impl ReadRequest {
                     }
                 };
 
-                let fut = async move {
+                Some(Box::pin(async move {
                     let result = match read_tx_index.await {
                         Ok(Some(index)) => {
                             return Some(ReadRequest::Transaction2 {
@@ -386,9 +384,7 @@ impl ReadRequest {
 
                     let _ = tx.send(result);
                     None
-                }
-                .boxed_local();
-                Some(fut)
+                }))
             }
             Self::Transaction2 {
                 deadline,
@@ -429,7 +425,7 @@ impl ReadRequest {
                     location.offset + index.offset,
                     index.size,
                 );
-                let fut = async move {
+                Some(Box::pin(async move {
                     let result = match timeout_at(deadline.into(), read_fut).await {
                         Ok(Ok(bytes)) => ReadResultGetTransaction::Transaction {
                             slot: index.slot,
@@ -444,9 +440,7 @@ impl ReadRequest {
                     let _ = tx.send(result);
                     drop(lock);
                     None
-                }
-                .boxed_local();
-                Some(fut)
+                }))
             }
         }
     }

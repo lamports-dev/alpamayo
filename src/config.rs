@@ -194,7 +194,7 @@ pub struct ConfigStorageRocksdb {
 
 impl ConfigStorageRocksdb {
     fn default_read_channel_size() -> usize {
-        num_cpus::get() * 10
+        num_cpus::get() * 5
     }
 
     fn default_read_workers() -> usize {
