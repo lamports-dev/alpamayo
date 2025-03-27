@@ -4,7 +4,7 @@ use {
         source::block::BlockWithBinary,
         storage::{
             files::{StorageFilesWrite, StorageId},
-            rocksdb::{Rocksdb, WriteRequest},
+            rocksdb::Rocksdb,
             slots::StoredSlots,
             sync::ReadWriteSyncMessage,
             util,
@@ -220,8 +220,10 @@ impl StoredBlocksWrite {
             self.pop_block(files).await?;
         };
 
-        let request = WriteRequest::new(storage_id, slot, block.txs_offset.clone());
-        indices.send_write(request).await?;
+        // TODO
+        indices
+            .write_tx_index(slot, block.txs_offset.clone())
+            .await?;
 
         return self
             .push_block_confirmed(
@@ -514,6 +516,7 @@ impl StorageBlocksBoundaries {
 #[derive(Debug, Clone, Copy)]
 pub struct StorageBlockLocation {
     pub slot: Slot,
+    pub block_time: Option<UnixTimestamp>,
     pub storage_id: StorageId,
     pub offset: u64,
     pub size: u64,
@@ -523,6 +526,7 @@ impl From<StoredBlock> for StorageBlockLocation {
     fn from(block: StoredBlock) -> Self {
         Self {
             slot: block.slot,
+            block_time: block.block_time,
             storage_id: block.storage_id,
             offset: block.offset,
             size: block.size,

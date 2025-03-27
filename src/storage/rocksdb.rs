@@ -1,17 +1,14 @@
 use {
-    crate::{
-        config::ConfigStorageRocksdb, source::block::BlockTransactionOffset,
-        storage::files::StorageId,
-    },
+    crate::{config::ConfigStorageRocksdb, source::block::BlockTransactionOffset},
     anyhow::Context,
-    prost::encoding::encode_varint,
-    rocksdb::{
-        ColumnFamily, ColumnFamilyDescriptor, DB, DBCompressionType, Options, WriteBatch,
-        WriteOptions,
-    },
-    solana_sdk::clock::Slot,
+    foldhash::quality::SeedableRandomState,
+    futures::future::BoxFuture,
+    prost::encoding::{decode_varint, encode_varint},
+    rocksdb::{ColumnFamily, ColumnFamilyDescriptor, DB, DBCompressionType, Options, WriteBatch},
+    solana_sdk::{clock::Slot, signature::Signature},
     std::{
-        sync::{Arc, mpsc},
+        hash::BuildHasher,
+        sync::{Arc, Mutex, mpsc},
         thread::{Builder, JoinHandle},
     },
     tokio::sync::oneshot,
@@ -22,32 +19,50 @@ trait ColumnName {
 }
 
 #[derive(Debug)]
-struct TransactionIndex;
+pub struct TransactionIndex;
 
 impl ColumnName for TransactionIndex {
     const NAME: &'static str = "tx_index";
 }
 
+impl TransactionIndex {
+    pub fn key(signature: &Signature) -> [u8; 8] {
+        thread_local! {
+            static HASHER: SeedableRandomState = SeedableRandomState::fixed();
+        }
+
+        let hash = HASHER.with(|hasher| hasher.hash_one(signature));
+        hash.to_be_bytes()
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct TransactionIndexValue {
-    storage_id: StorageId,
-    slot: Slot,
-    offset: u64,
-    size: u64,
+    pub slot: Slot,
+    pub offset: u64,
+    pub size: u64,
 }
 
 impl TransactionIndexValue {
     fn encode(&self, buf: &mut Vec<u8>) {
-        encode_varint(self.storage_id as u64, buf);
         encode_varint(self.slot, buf);
         encode_varint(self.offset, buf);
         encode_varint(self.size, buf);
+    }
+
+    fn decode(mut slice: &[u8]) -> anyhow::Result<Self> {
+        Ok(Self {
+            slot: decode_varint(&mut slice).context("failed to decode slot")?,
+            offset: decode_varint(&mut slice).context("failed to decode offset")?,
+            size: decode_varint(&mut slice).context("failed to decode size")?,
+        })
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct Rocksdb {
-    write_tx: mpsc::SyncSender<WriteRequestWithCallback>,
+    write_tx: mpsc::SyncSender<WriteRequest>,
+    read_tx: mpsc::SyncSender<ReadRequest>,
 }
 
 impl Rocksdb {
@@ -64,6 +79,7 @@ impl Rocksdb {
         );
 
         let (write_tx, write_rx) = mpsc::sync_channel(1);
+        let (read_tx, read_rx) = mpsc::sync_channel(config.read_channel_size);
 
         let mut threads = vec![];
         let jh = Builder::new().name("rocksdbWrt".to_owned()).spawn({
@@ -74,8 +90,21 @@ impl Rocksdb {
             }
         })?;
         threads.push(("rocksdbWrt".to_owned(), Some(jh)));
+        let read_rx = Arc::new(Mutex::new(read_rx));
+        for index in 0..config.read_workers {
+            let th_name = format!("rocksdbRd{index:02}");
+            let jh = Builder::new().name(th_name.clone()).spawn({
+                let db = Arc::clone(&db);
+                let read_rx = Arc::clone(&read_rx);
+                move || {
+                    Self::spawn_read(db, read_rx);
+                    Ok(())
+                }
+            })?;
+            threads.push((th_name, Some(jh)));
+        }
 
-        Ok((Self { write_tx }, threads))
+        Ok((Self { write_tx, read_tx }, threads))
     }
 
     fn get_db_options() -> Options {
@@ -134,22 +163,18 @@ impl Rocksdb {
             .expect("should never get an unknown column")
     }
 
-    fn spawn_write(db: Arc<DB>, write_rx: mpsc::Receiver<WriteRequestWithCallback>) {
-        while let Ok((
-            WriteRequest {
-                storage_id,
-                slot,
-                txs_offset,
-            },
+    fn spawn_write(db: Arc<DB>, write_rx: mpsc::Receiver<WriteRequest>) {
+        while let Ok(WriteRequest {
+            slot,
+            txs_offset,
             tx,
-        )) = write_rx.recv()
+        }) = write_rx.recv()
         {
             let mut batch = WriteBatch::with_capacity_bytes(256 * 1024);
             let mut buf = Vec::with_capacity(4 * 9);
             for tx_offset in txs_offset {
                 buf.clear();
                 TransactionIndexValue {
-                    storage_id,
                     slot,
                     offset: tx_offset.offset,
                     size: tx_offset.size,
@@ -158,43 +183,88 @@ impl Rocksdb {
 
                 batch.put_cf(
                     Self::cf_handle::<TransactionIndex>(&db),
-                    tx_offset.hash.to_be_bytes(),
+                    tx_offset.hash,
                     &buf,
                 );
             }
 
-            let options = WriteOptions::new();
-            let result = db.write_opt(batch, &options);
+            let result = db.write(batch);
             if tx.send(result.map_err(Into::into)).is_err() {
                 break;
             }
         }
     }
 
-    pub async fn send_write(&self, request: WriteRequest) -> anyhow::Result<()> {
+    pub async fn write_tx_index(
+        &self,
+        slot: Slot,
+        txs_offset: Vec<BlockTransactionOffset>,
+    ) -> anyhow::Result<()> {
         let (tx, rx) = oneshot::channel();
         self.write_tx
-            .send((request, tx))
-            .context("failed to send write request")?;
-        rx.await.context("failed to get write request result")?
+            .send(WriteRequest {
+                slot,
+                txs_offset,
+                tx,
+            })
+            .context("failed to send write_tx_index request")?;
+        rx.await
+            .context("failed to get write_tx_index request result")?
     }
-}
 
-type WriteRequestWithCallback = (WriteRequest, oneshot::Sender<anyhow::Result<()>>);
+    fn spawn_read(db: Arc<DB>, read_rx: Arc<Mutex<mpsc::Receiver<ReadRequest>>>) {
+        loop {
+            let lock = read_rx.lock().expect("unpanicked mutex");
+            let Ok(request) = lock.recv() else {
+                break;
+            };
+            drop(lock);
 
-#[derive(Debug)]
-pub struct WriteRequest {
-    storage_id: StorageId,
-    slot: Slot,
-    txs_offset: Vec<BlockTransactionOffset>,
-}
+            match request {
+                ReadRequest::Transaction { signature, tx } => {
+                    let result = match db.get_pinned_cf(
+                        Self::cf_handle::<TransactionIndex>(&db),
+                        TransactionIndex::key(&signature),
+                    ) {
+                        Ok(Some(slice)) => TransactionIndexValue::decode(slice.as_ref()).map(Some),
+                        Ok(None) => Ok(None),
+                        Err(error) => Err(anyhow::anyhow!("failed to get tx location: {error:?}")),
+                    };
 
-impl WriteRequest {
-    pub fn new(storage_id: StorageId, slot: Slot, txs_offset: Vec<BlockTransactionOffset>) -> Self {
-        Self {
-            storage_id,
-            slot,
-            txs_offset,
+                    if tx.send(result).is_err() {
+                        break;
+                    }
+                }
+            }
         }
     }
+
+    pub fn read_tx_index(
+        &self,
+        signature: Signature,
+    ) -> anyhow::Result<BoxFuture<'static, anyhow::Result<Option<TransactionIndexValue>>>> {
+        let (tx, rx) = oneshot::channel();
+        self.read_tx
+            .send(ReadRequest::Transaction { signature, tx })
+            .context("failed to send read_tx_index request")?;
+        Ok(Box::pin(async move {
+            rx.await
+                .context("failed to get read_tx_index request result")?
+        }))
+    }
+}
+
+#[derive(Debug)]
+struct WriteRequest {
+    slot: Slot,
+    txs_offset: Vec<BlockTransactionOffset>,
+    tx: oneshot::Sender<anyhow::Result<()>>,
+}
+
+#[derive(Debug)]
+enum ReadRequest {
+    Transaction {
+        signature: Signature,
+        tx: oneshot::Sender<anyhow::Result<Option<TransactionIndexValue>>>,
+    },
 }

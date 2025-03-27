@@ -18,7 +18,7 @@ Please use issues only for reporting bugs or discussing feature-related topics. 
 - [ ] `getRecentPrioritizationFees`
 - [ ] `getSignatureStatuses`
 - [x] `getSlot`
-- [ ] `getTransaction`
+- [x] `getTransaction`
 - [ ] `getVersion`
 - [ ] `isBlockhashValid`
 

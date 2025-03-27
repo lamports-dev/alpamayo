@@ -18,7 +18,7 @@ use {
 
 #[derive(Debug, Clone, Copy)]
 pub struct BlockTransactionOffset {
-    pub hash: u64,
+    pub hash: [u8; 8],
     pub offset: u64,
     pub size: u64,
 }

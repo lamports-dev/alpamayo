@@ -44,6 +44,8 @@ storage:
         size: 8gb
   rocksdb:
     path: ./db/alpamayo/rocksdb
+    read_channel_size: 80 # number of CPUs on the system * 10
+    read_workers: 8 # number of CPUs on the system
   write:
     affinity: 2
   read:
@@ -60,6 +62,7 @@ rpc:
   calls:
     - getBlock
     - getSlot
+    - getTransaction
   request_channel_capacity: 4096
   upstream:
     endpoint: http://127.0.0.1:8899

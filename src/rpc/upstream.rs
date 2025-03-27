@@ -3,8 +3,8 @@ use {
     jsonrpsee_types::{Id, Response},
     reqwest::{Client, StatusCode, Version, header::CONTENT_TYPE},
     serde_json::json,
-    solana_rpc_client_api::config::RpcBlockConfig,
-    solana_sdk::{clock::Slot, commitment_config::CommitmentConfig},
+    solana_rpc_client_api::config::{RpcBlockConfig, RpcTransactionConfig},
+    solana_sdk::{clock::Slot, commitment_config::CommitmentConfig, signature::Signature},
     solana_transaction_status::{BlockEncodingOptions, UiTransactionEncoding},
     std::time::{Duration, Instant},
     tokio::time::{sleep, timeout_at},
@@ -56,6 +56,32 @@ impl RpcClient {
                     commitment: Some(commitment),
                     max_supported_transaction_version: encoding_options
                         .max_supported_transaction_version,
+                }]
+            }))
+            .expect("json serialization never fail"),
+        )
+        .await
+    }
+
+    pub async fn get_transaction(
+        &self,
+        deadline: Instant,
+        id: Id<'static>,
+        signature: Signature,
+        commitment: CommitmentConfig,
+        encoding: UiTransactionEncoding,
+        max_supported_transaction_version: Option<u8>,
+    ) -> RpcClientResult {
+        self.call_with_timeout(
+            deadline,
+            serde_json::to_string(&json!({
+                "jsonrpc": "2.0",
+                "method": "getTransaction",
+                "id": id,
+                "params": [signature.to_string(), RpcTransactionConfig {
+                    encoding: Some(encoding),
+                    commitment: Some(commitment),
+                    max_supported_transaction_version,
                 }]
             }))
             .expect("json serialization never fail"),

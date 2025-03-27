@@ -3,7 +3,7 @@ use {
         config::{ConfigRpc, ConfigRpcCall},
         rpc::{upstream::RpcClient, workers::WorkRequest},
         storage::{
-            read::{ReadRequest, ReadResultGetBlock},
+            read::{ReadRequest, ReadResultGetBlock, ReadResultGetTransaction},
             slots::StoredSlots,
         },
     },
@@ -23,15 +23,21 @@ use {
     prost::Message,
     serde::{Deserialize, de},
     solana_rpc_client_api::{
-        config::{RpcBlockConfig, RpcContextConfig, RpcEncodingConfigWrapper},
+        config::{
+            RpcBlockConfig, RpcContextConfig, RpcEncodingConfigWrapper, RpcTransactionConfig,
+        },
         custom_error::RpcCustomError,
     },
     solana_sdk::{
-        clock::Slot,
+        clock::{Slot, UnixTimestamp},
         commitment_config::{CommitmentConfig, CommitmentLevel},
+        signature::Signature,
     },
     solana_storage_proto::convert::generated,
-    solana_transaction_status::{BlockEncodingOptions, ConfirmedBlock, UiTransactionEncoding},
+    solana_transaction_status::{
+        BlockEncodingOptions, ConfirmedBlock, ConfirmedTransactionWithStatusMeta,
+        TransactionWithStatusMeta, UiTransactionEncoding,
+    },
     std::{
         fmt,
         sync::Arc,
@@ -86,6 +92,7 @@ fn jsonrpc_response_error(
 struct SupportedCalls {
     get_block: bool,
     get_slot: bool,
+    get_transaction: bool,
 }
 
 impl SupportedCalls {
@@ -93,6 +100,7 @@ impl SupportedCalls {
         Ok(Self {
             get_block: Self::check_call_support(calls, ConfigRpcCall::GetBlock)?,
             get_slot: Self::check_call_support(calls, ConfigRpcCall::GetSlot)?,
+            get_transaction: Self::check_call_support(calls, ConfigRpcCall::GetTransaction)?,
         })
     }
 
@@ -219,9 +227,13 @@ impl<'a> RpcRequests<'a> {
     }
 }
 
+#[allow(clippy::enum_variant_names)]
 enum RpcRequest {
     GetBlock(RpcRequestGetBlock),
     GetSlot { response: RpcRequestResult },
+    GetTransaction(RpcRequestGetTransaction),
+    // Remove clippy rule
+    // IsBlockhashValid,
 }
 
 impl RpcRequest {
@@ -251,11 +263,7 @@ impl RpcRequest {
                 };
                 let commitment = config.commitment.unwrap_or_default();
                 if let Err(error) = Self::check_is_at_least_confirmed(commitment) {
-                    return Err(Response {
-                        jsonrpc: Some(TwoPointZero),
-                        payload: ResponsePayload::error(error),
-                        id,
-                    });
+                    return Err(Self::response_error(id, error));
                 }
 
                 Ok(Self::GetBlock(RpcRequestGetBlock {
@@ -300,6 +308,45 @@ impl RpcRequest {
                     response: Self::response_success(id.into_owned(), slot.into()),
                 })
             }
+            "getTransaction" if state.supported_calls.get_transaction => {
+                #[derive(Debug, Deserialize)]
+                struct ReqParams {
+                    signature_str: String,
+                    #[serde(default)]
+                    config: Option<RpcEncodingConfigWrapper<RpcTransactionConfig>>,
+                }
+
+                let (
+                    id,
+                    ReqParams {
+                        signature_str,
+                        config,
+                    },
+                ) = Self::parse_params(request)?;
+
+                let signature = match Self::verify_signature(&signature_str) {
+                    Ok(signature) => signature,
+                    Err(error) => return Err(Self::response_error(id, error)),
+                };
+
+                let config = config
+                    .map(|config| config.convert_to_current())
+                    .unwrap_or_default();
+                let encoding = config.encoding.unwrap_or(UiTransactionEncoding::Json);
+                let max_supported_transaction_version = config.max_supported_transaction_version;
+                let commitment = config.commitment.unwrap_or_default();
+                if let Err(error) = Self::check_is_at_least_confirmed(commitment) {
+                    return Err(Self::response_error(id, error));
+                }
+
+                Ok(Self::GetTransaction(RpcRequestGetTransaction {
+                    id: id.into_owned(),
+                    signature,
+                    commitment,
+                    encoding,
+                    max_supported_transaction_version,
+                }))
+            }
             _ => Err(Response {
                 jsonrpc: Some(TwoPointZero),
                 payload: ResponsePayload::error(ErrorCode::MethodNotFound),
@@ -336,6 +383,24 @@ impl RpcRequest {
         Ok(())
     }
 
+    fn verify_signature(input: &str) -> Result<Signature, ErrorObjectOwned> {
+        input.parse().map_err(|error| {
+            ErrorObject::owned::<()>(
+                ErrorCode::InvalidParams.code(),
+                format!("Invalid param: {error:?}"),
+                None,
+            )
+        })
+    }
+
+    fn response_error(id: Id<'_>, error: ErrorObjectOwned) -> Response<'_, serde_json::Value> {
+        Response {
+            jsonrpc: Some(TwoPointZero),
+            payload: ResponsePayload::error(error),
+            id,
+        }
+    }
+
     fn response_success(id: Id<'static>, payload: serde_json::Value) -> RpcRequestResult {
         Ok(Response {
             jsonrpc: Some(TwoPointZero),
@@ -348,6 +413,7 @@ impl RpcRequest {
         match self {
             Self::GetBlock(request) => request.process(state, upstream_disabled).await,
             Self::GetSlot { response } => response,
+            Self::GetTransaction(request) => request.process(state, upstream_disabled).await,
         }
     }
 
@@ -405,7 +471,7 @@ impl RpcRequestGetBlock {
         anyhow::ensure!(
             state
                 .requests_tx
-                .send(ReadRequest::GetBlock {
+                .send(ReadRequest::Block {
                     deadline,
                     slot: self.slot,
                     tx
@@ -524,13 +590,17 @@ impl RpcRequestGetBlockWorkRequest {
             Ok(block) => match ConfirmedBlock::try_from(block) {
                 Ok(block) => block,
                 Err(error) => {
-                    error!(self.slot, ?error, "failed to decode block / bincode");
-                    anyhow::bail!("failed to decode block / bincode")
+                    error!(self.slot, ?error, "failed to decode block");
+                    anyhow::bail!("failed to decode block")
                 }
             },
             Err(error) => {
-                error!(self.slot, ?error, "failed to decode block / prost");
-                anyhow::bail!("failed to decode block / prost")
+                error!(
+                    self.slot,
+                    ?error,
+                    "failed to decode block protobuf / bincode"
+                );
+                anyhow::bail!("failed to decode block protobuf / bincode")
             }
         };
 
@@ -544,6 +614,175 @@ impl RpcRequestGetBlockWorkRequest {
 
         // serialize
         let data = serde_json::to_value(&block).expect("json serialization never fail");
+
+        RpcRequest::response_success(self.id, data)
+    }
+}
+
+struct RpcRequestGetTransaction {
+    id: Id<'static>,
+    signature: Signature,
+    commitment: CommitmentConfig,
+    encoding: UiTransactionEncoding,
+    max_supported_transaction_version: Option<u8>,
+}
+
+impl RpcRequestGetTransaction {
+    async fn process(self, state: Arc<State>, upstream_disabled: bool) -> RpcRequestResult {
+        let deadline = Instant::now() + state.request_timeout;
+
+        // request
+        let (tx, rx) = oneshot::channel();
+        anyhow::ensure!(
+            state
+                .requests_tx
+                .send(ReadRequest::Transaction {
+                    deadline,
+                    signature: self.signature,
+                    tx
+                })
+                .await
+                .is_ok(),
+            "request channel is closed"
+        );
+        let Ok(result) = rx.await else {
+            anyhow::bail!("rx channel is closed");
+        };
+        let (slot, block_time, bytes) = match result {
+            ReadResultGetTransaction::Timeout => anyhow::bail!("timeout"),
+            ReadResultGetTransaction::NotFound => {
+                return self
+                    .fetch_upstream(state, upstream_disabled, deadline)
+                    .await;
+            }
+            ReadResultGetTransaction::Transaction {
+                slot,
+                block_time,
+                bytes,
+            } => (slot, block_time, bytes),
+            ReadResultGetTransaction::ReadError(error) => anyhow::bail!("read error: {error}"),
+        };
+
+        // verify commitment
+        if self.commitment.is_finalized() && state.stored_slots.finalized_load() < slot {
+            return RpcRequest::response_success(self.id, serde_json::json!(None::<()>));
+        }
+
+        // verify that we still have data for that block (i.e. we read correct data)
+        if slot <= state.stored_slots.first_available_load() {
+            return self
+                .fetch_upstream(state, upstream_disabled, deadline)
+                .await;
+        }
+
+        // parse, encode and serialize
+        RpcRequest::process_with_workers(
+            state,
+            RpcRequestGetTransactionWorkRequest::create(self, slot, block_time, bytes),
+        )
+        .await
+    }
+
+    async fn fetch_upstream(
+        self,
+        state: Arc<State>,
+        upstream_disabled: bool,
+        deadline: Instant,
+    ) -> RpcRequestResult {
+        if let Some(upstream) = (!upstream_disabled)
+            .then_some(state.upstream.as_ref())
+            .flatten()
+        {
+            upstream
+                .get_transaction(
+                    deadline,
+                    self.id,
+                    self.signature,
+                    self.commitment,
+                    self.encoding,
+                    self.max_supported_transaction_version,
+                )
+                .await
+        } else {
+            Ok(jsonrpc_response_error(
+                self.id,
+                RpcCustomError::TransactionHistoryNotAvailable,
+            ))
+        }
+    }
+}
+
+pub struct RpcRequestGetTransactionWorkRequest {
+    slot: Slot,
+    block_time: Option<UnixTimestamp>,
+    bytes: Vec<u8>,
+    id: Id<'static>,
+    encoding: UiTransactionEncoding,
+    max_supported_transaction_version: Option<u8>,
+    tx: Option<oneshot::Sender<RpcRequestResult>>,
+}
+
+impl RpcRequestGetTransactionWorkRequest {
+    fn create(
+        request: RpcRequestGetTransaction,
+        slot: Slot,
+        block_time: Option<UnixTimestamp>,
+        bytes: Vec<u8>,
+    ) -> (WorkRequest, oneshot::Receiver<RpcRequestResult>) {
+        let (tx, rx) = oneshot::channel();
+        let this = Self {
+            slot,
+            block_time,
+            bytes,
+            id: request.id,
+            encoding: request.encoding,
+            max_supported_transaction_version: request.max_supported_transaction_version,
+            tx: Some(tx),
+        };
+        (WorkRequest::Transaction(this), rx)
+    }
+
+    pub fn process(mut self) {
+        if let Some(tx) = self.tx.take() {
+            let _ = tx.send(self.process2());
+        }
+    }
+
+    fn process2(self) -> RpcRequestResult {
+        // parse
+        let tx_with_meta = match generated::ConfirmedTransaction::decode(self.bytes.as_ref()) {
+            Ok(tx) => match TransactionWithStatusMeta::try_from(tx) {
+                Ok(tx_with_meta) => tx_with_meta,
+                Err(error) => {
+                    error!(self.slot, ?error, "failed to decode transaction");
+                    anyhow::bail!("failed to decode transaction")
+                }
+            },
+            Err(error) => {
+                error!(
+                    self.slot,
+                    ?error,
+                    "failed to decode transaction protobuf / bincode"
+                );
+                anyhow::bail!("failed to decode transaction protobuf / bincode")
+            }
+        };
+
+        // encode
+        let confirmed_tx = ConfirmedTransactionWithStatusMeta {
+            slot: self.slot,
+            tx_with_meta,
+            block_time: self.block_time,
+        };
+        let tx = match confirmed_tx.encode(self.encoding, self.max_supported_transaction_version) {
+            Ok(tx) => tx,
+            Err(error) => {
+                return Ok(jsonrpc_response_error(self.id, RpcCustomError::from(error)));
+            }
+        };
+
+        // serialize
+        let data = serde_json::to_value(&tx).expect("json serialization never fail");
 
         RpcRequest::response_success(self.id, data)
     }

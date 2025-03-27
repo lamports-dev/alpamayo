@@ -1,5 +1,8 @@
 use {
-    crate::{config::ConfigRpcWorkers, rpc::api_solana::RpcRequestGetBlockWorkRequest},
+    crate::{
+        config::ConfigRpcWorkers,
+        rpc::api_solana::{RpcRequestGetBlockWorkRequest, RpcRequestGetTransactionWorkRequest},
+    },
     crossbeam::channel::{self, Receiver, RecvTimeoutError, Sender},
     futures::future::{BoxFuture, FutureExt, TryFutureExt, try_join_all},
     richat_shared::shutdown::Shutdown,
@@ -9,6 +12,7 @@ use {
 
 pub enum WorkRequest {
     Block(RpcRequestGetBlockWorkRequest),
+    Transaction(RpcRequestGetTransactionWorkRequest),
 }
 
 #[allow(clippy::type_complexity)]
@@ -79,6 +83,7 @@ fn wrk_loop(rx: Receiver<WorkRequest>, shutdown: Shutdown) {
 
         match request {
             WorkRequest::Block(request) => request.process(),
+            WorkRequest::Transaction(request) => request.process(),
         }
     }
 }

@@ -4,6 +4,7 @@ use {
         storage::{
             blocks::{StoredBlockPushSync, StoredBlocksRead},
             files::StorageFilesSyncInit,
+            rocksdb::Rocksdb,
         },
     },
     solana_sdk::clock::Slot,
@@ -15,6 +16,7 @@ pub enum ReadWriteSyncMessage {
     // once, on initialization
     Init {
         blocks: StoredBlocksRead,
+        storage_indices: Rocksdb,
         storage_files_init: StorageFilesSyncInit,
     },
     // when we build the block

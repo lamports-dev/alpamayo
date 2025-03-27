@@ -180,6 +180,26 @@ pub struct ConfigStorageFile {
 #[serde(deny_unknown_fields)]
 pub struct ConfigStorageRocksdb {
     pub path: PathBuf,
+    #[serde(
+        default = "ConfigStorageRocksdb::default_read_channel_size",
+        deserialize_with = "deserialize_num_str"
+    )]
+    pub read_channel_size: usize,
+    #[serde(
+        default = "ConfigStorageRocksdb::default_read_workers",
+        deserialize_with = "deserialize_num_str"
+    )]
+    pub read_workers: usize,
+}
+
+impl ConfigStorageRocksdb {
+    fn default_read_channel_size() -> usize {
+        num_cpus::get() * 10
+    }
+
+    fn default_read_workers() -> usize {
+        num_cpus::get()
+    }
 }
 
 #[derive(Debug, Default, Clone, Deserialize)]
@@ -267,6 +287,7 @@ impl ConfigRpc {
 pub enum ConfigRpcCall {
     GetBlock,
     GetSlot,
+    GetTransaction,
 }
 
 #[derive(Debug, Clone, Deserialize)]

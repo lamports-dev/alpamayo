@@ -73,6 +73,7 @@ pub fn start(
                 sync_tx
                     .send(ReadWriteSyncMessage::Init {
                         blocks: blocks_read_sync_init,
+                        storage_indices: storage_indices.clone(),
                         storage_files_init: storage_files_read_sync_init,
                     })
                     .context("failed to send read/write init message")?;
