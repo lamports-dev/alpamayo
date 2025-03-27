@@ -54,7 +54,7 @@ fn main() -> anyhow::Result<()> {
     let (rpc_tx, rpc_rx) = mpsc::channel(2048);
 
     // Storage write / storage read channels
-    let (sync_tx, _sync_rx) = broadcast::channel(1024);
+    let (sync_tx, _) = broadcast::channel(1024);
 
     // Storage read / rpc channels
     let stored_slots = storage::slots::StoredSlots::default();
