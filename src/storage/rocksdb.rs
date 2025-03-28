@@ -302,59 +302,71 @@ impl Rocksdb {
     fn spawn_write(db: Arc<DB>, write_rx: mpsc::Receiver<WriteRequest>) {
         let mut buf = vec![];
 
-        while let Ok(WriteRequest { slot, data, tx }) = write_rx.recv() {
-            let mut batch = WriteBatch::with_capacity_bytes(1024 * 1024); // 1MiB
+        loop {
+            let Ok(request) = write_rx.recv() else {
+                break;
+            };
 
-            let block = if let Some((block, storage_id, offset)) = data {
-                for tx_offset in block.txs_offset.iter() {
+            match request {
+                WriteRequest::TransactionsWithSlot { slot, data, tx } => {
+                    let mut batch = WriteBatch::with_capacity_bytes(1024 * 1024); // 1MiB
+
+                    let block = if let Some((block, storage_id, offset)) = data {
+                        for tx_offset in block.txs_offset.iter() {
+                            buf.clear();
+                            TransactionIndexValue {
+                                slot,
+                                offset: tx_offset.offset,
+                                size: tx_offset.size,
+                            }
+                            .encode(&mut buf);
+                            batch.put_cf(
+                                Self::cf_handle::<TransactionIndex>(&db),
+                                tx_offset.hash,
+                                &buf,
+                            );
+                        }
+
+                        SlotIndexValue {
+                            dead: false,
+                            block_time: block.block_time,
+                            block_height: block.block_height,
+                            storage_id,
+                            offset,
+                            size: block.protobuf.len() as u64,
+                            transactions: block.txs_offset.iter().map(|txo| txo.hash).collect(),
+                        }
+                    } else {
+                        SlotIndexValue {
+                            dead: true,
+                            ..Default::default()
+                        }
+                    };
                     buf.clear();
-                    TransactionIndexValue {
-                        slot,
-                        offset: tx_offset.offset,
-                        size: tx_offset.size,
-                    }
-                    .encode(&mut buf);
+                    block.encode(&mut buf);
                     batch.put_cf(
-                        Self::cf_handle::<TransactionIndex>(&db),
-                        tx_offset.hash,
+                        Self::cf_handle::<SlotIndex>(&db),
+                        SlotIndex::key(slot),
                         &buf,
                     );
-                }
 
-                SlotIndexValue {
-                    dead: false,
-                    block_time: block.block_time,
-                    block_height: block.block_height,
-                    storage_id,
-                    offset,
-                    size: block.protobuf.len() as u64,
-                    transactions: block.txs_offset.iter().map(|txo| txo.hash).collect(),
+                    let result = db.write(batch);
+                    if tx.send(result.map_err(Into::into)).is_err() {
+                        break;
+                    }
                 }
-            } else {
-                SlotIndexValue {
-                    dead: true,
-                    ..Default::default()
-                }
-            };
-            buf.clear();
-            block.encode(&mut buf);
-            batch.put_cf(
-                Self::cf_handle::<SlotIndex>(&db),
-                SlotIndex::key(slot),
-                &buf,
-            );
-
-            let result = db.write(batch);
-            if tx.send(result.map_err(Into::into)).is_err() {
-                break;
             }
         }
     }
 
-    pub async fn write(&self, slot: Slot, data: WriteRequestData) -> anyhow::Result<()> {
+    pub async fn write(
+        &self,
+        slot: Slot,
+        data: Option<(Arc<BlockWithBinary>, StorageId, u64)>,
+    ) -> anyhow::Result<()> {
         let (tx, rx) = oneshot::channel();
         self.write_tx
-            .send(WriteRequest { slot, data, tx })
+            .send(WriteRequest::TransactionsWithSlot { slot, data, tx })
             .context("failed to send write_tx_index request")?;
         rx.await
             .context("failed to get write_tx_index request result")?
@@ -438,13 +450,13 @@ impl Rocksdb {
     }
 }
 
-type WriteRequestData = Option<(Arc<BlockWithBinary>, StorageId, u64)>;
-
 #[derive(Debug)]
-struct WriteRequest {
-    slot: Slot,
-    data: WriteRequestData,
-    tx: oneshot::Sender<anyhow::Result<()>>,
+enum WriteRequest {
+    TransactionsWithSlot {
+        slot: Slot,
+        data: Option<(Arc<BlockWithBinary>, StorageId, u64)>,
+        tx: oneshot::Sender<anyhow::Result<()>>,
+    },
 }
 
 #[derive(Debug)]
