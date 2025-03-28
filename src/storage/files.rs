@@ -12,7 +12,7 @@ use {
     tokio_uring::fs::File,
 };
 
-pub type StorageId = u32;
+pub type StorageId = u8;
 
 #[derive(Debug)]
 pub struct StorageFilesRead {

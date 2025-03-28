@@ -404,7 +404,7 @@ impl StoredBlock {
             block_time: flags
                 .contains(StoredBlockFlags::BLOCK_TIME)
                 .then_some(UnixTimestamp::from_be_bytes(bytes[16..24].try_into()?)),
-            storage_id: StorageId::from_be_bytes(bytes[4..8].try_into()?),
+            storage_id: StorageId::from_be_bytes(bytes[4..5].try_into()?),
             offset: u64::from_be_bytes(bytes[24..32].try_into()?),
             size: u64::from_be_bytes(bytes[32..40].try_into()?),
         })
@@ -429,7 +429,7 @@ impl StoredBlock {
         bytes[0..4].copy_from_slice(&flags.bits().to_be_bytes()[..]);
 
         // storage_id: u32
-        bytes[4..8].copy_from_slice(&self.storage_id.to_be_bytes()[..]);
+        bytes[4..8].copy_from_slice(&(self.storage_id as u32).to_be_bytes()[..]);
 
         // slot: u64
         bytes[8..16].copy_from_slice(&self.slot.to_be_bytes()[..]);
