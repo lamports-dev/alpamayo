@@ -336,14 +336,14 @@ impl StoredBlocksWrite {
 }
 
 #[derive(Debug, Default, Clone, Copy)]
-struct StoredBlock {
-    exists: bool,
-    dead: bool,
-    slot: Slot,
-    block_time: Option<UnixTimestamp>,
-    storage_id: StorageId,
-    offset: u64,
-    size: u64,
+pub struct StoredBlock {
+    pub exists: bool,
+    pub dead: bool,
+    pub slot: Slot,
+    pub block_time: Option<UnixTimestamp>,
+    pub storage_id: StorageId,
+    pub offset: u64,
+    pub size: u64,
 }
 
 impl StoredBlock {

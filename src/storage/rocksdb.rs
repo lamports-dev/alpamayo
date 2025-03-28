@@ -1,6 +1,8 @@
 use {
     crate::{
-        config::ConfigStorageRocksdb, source::block::BlockWithBinary, storage::files::StorageId,
+        config::ConfigStorageRocksdb,
+        source::block::BlockWithBinary,
+        storage::{blocks::StoredBlock, files::StorageId},
     },
     anyhow::Context,
     bitflags::bitflags,
@@ -10,7 +12,10 @@ use {
         bytes::Buf,
         encoding::{decode_varint, encode_varint},
     },
-    rocksdb::{ColumnFamily, ColumnFamilyDescriptor, DB, DBCompressionType, Options, WriteBatch},
+    rocksdb::{
+        ColumnFamily, ColumnFamilyDescriptor, DB, DBCompressionType, IteratorMode, Options,
+        WriteBatch,
+    },
     solana_sdk::{
         clock::{Slot, UnixTimestamp},
         signature::Signature,
@@ -37,6 +42,13 @@ impl ColumnName for SlotIndex {
 impl SlotIndex {
     pub fn key(slot: Slot) -> [u8; 8] {
         slot.to_be_bytes()
+    }
+
+    pub fn decode(slice: &[u8]) -> anyhow::Result<Slot> {
+        slice
+            .try_into()
+            .map(Slot::from_be_bytes)
+            .context("invalid slice size")
     }
 }
 
@@ -84,7 +96,7 @@ impl SlotIndexValue {
         }
     }
 
-    fn decode(mut slice: &[u8]) -> anyhow::Result<Self> {
+    fn decode(mut slice: &[u8], decode_transactions: bool) -> anyhow::Result<Self> {
         let flags =
             SlotIndexValueFlags::from_bits(slice.try_get_u8().context("failed to read flags")?)
                 .context("invalid flags")?;
@@ -116,11 +128,16 @@ impl SlotIndexValue {
             size: decode_varint(&mut slice).context("failed to read size")?,
             transactions: {
                 anyhow::ensure!(slice.len() % 8 == 0, "invalid size of transactions");
-                let mut transactions = Vec::with_capacity(slice.len() / 8);
-                for i in 0..slice.len() / 8 {
-                    transactions[i] = slice[i * 8..(i + 1) * 8].try_into().expect("valid slice");
+                if decode_transactions {
+                    let mut transactions = Vec::with_capacity(slice.len() / 8);
+                    for i in 0..slice.len() / 8 {
+                        transactions[i] =
+                            slice[i * 8..(i + 1) * 8].try_into().expect("valid slice");
+                    }
+                    transactions
+                } else {
+                    vec![]
                 }
-                transactions
             },
         })
     }
@@ -352,6 +369,11 @@ impl Rocksdb {
             drop(lock);
 
             match request {
+                ReadRequest::Slots { tx } => {
+                    if tx.send(Self::spawn_read_slots(&db)).is_err() {
+                        break;
+                    }
+                }
                 ReadRequest::Transaction { signature, tx } => {
                     let result = match db.get_pinned_cf(
                         Self::cf_handle::<TransactionIndex>(&db),
@@ -368,6 +390,37 @@ impl Rocksdb {
                 }
             }
         }
+    }
+
+    fn spawn_read_slots(db: &DB) -> anyhow::Result<Vec<StoredBlock>> {
+        let mut slots = vec![];
+        for item in db.iterator_cf(Self::cf_handle::<SlotIndex>(db), IteratorMode::Start) {
+            let (key, value) = item?;
+            let value = SlotIndexValue::decode(&value, false)?;
+            slots.push(StoredBlock {
+                exists: true,
+                dead: value.dead,
+                slot: SlotIndex::decode(&key)?,
+                block_time: value.block_time,
+                storage_id: value.storage_id,
+                offset: value.offset,
+                size: value.size,
+            });
+        }
+        Ok(slots)
+    }
+
+    pub fn read_slot_indexes(
+        &self,
+    ) -> anyhow::Result<BoxFuture<'static, anyhow::Result<Vec<StoredBlock>>>> {
+        let (tx, rx) = oneshot::channel();
+        self.read_tx
+            .send(ReadRequest::Slots { tx })
+            .context("failed to send read_tx_index request")?;
+        Ok(Box::pin(async move {
+            rx.await
+                .context("failed to get read_tx_index request result")?
+        }))
     }
 
     pub fn read_tx_index(
@@ -396,6 +449,9 @@ struct WriteRequest {
 
 #[derive(Debug)]
 enum ReadRequest {
+    Slots {
+        tx: oneshot::Sender<anyhow::Result<Vec<StoredBlock>>>,
+    },
     Transaction {
         signature: Signature,
         tx: oneshot::Sender<anyhow::Result<Option<TransactionIndexValue>>>,
