@@ -60,7 +60,7 @@ fn main() -> anyhow::Result<()> {
     let stored_slots = storage::slots::StoredSlots::default();
     let (read_requests_tx, read_requests_rx) = mpsc::channel(config.rpc.request_channel_capacity);
 
-    // Open Rocksdb for indices
+    // Open Rocksdb for slots and indexes
     let (db, db_threads) = storage::rocksdb::Rocksdb::open(config.storage.rocksdb.clone())?;
     threads.extend(db_threads);
 

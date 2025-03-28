@@ -16,7 +16,7 @@ pub enum ReadWriteSyncMessage {
     // once, on initialization
     Init {
         blocks: StoredBlocksRead,
-        storage_indices: Rocksdb,
+        rocksdb: Rocksdb,
         storage_files_init: StorageFilesSyncInit,
     },
     // when we build the block

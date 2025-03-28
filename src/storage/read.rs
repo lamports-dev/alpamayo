@@ -48,16 +48,16 @@ pub fn start(
                     affinity::set_thread_affinity(&cpus).expect("failed to set affinity")
                 }
 
-                let (mut blocks, storage_indices, storage_files) = match sync_rx.recv().await {
+                let (mut blocks, rocksdb, storage_files) = match sync_rx.recv().await {
                     Ok(ReadWriteSyncMessage::Init {
                         blocks,
-                        storage_indices,
+                        rocksdb,
                         storage_files_init,
                     }) => {
                         let storage_files = StorageFilesRead::open(storage_files_init)
                             .await
                             .context("failed to open storage files")?;
-                        (blocks, storage_indices, storage_files)
+                        (blocks, rocksdb, storage_files)
                     }
                     Ok(_) => anyhow::bail!("invalid sync message"),
                     Err(broadcast::error::RecvError::Closed) => return Ok(()), // shutdown
@@ -72,7 +72,7 @@ pub fn start(
                     index,
                     sync_rx,
                     &mut blocks,
-                    &storage_indices,
+                    &rocksdb,
                     &storage_files,
                     &mut confirmed_in_process,
                     read_requests_concurrency,
@@ -87,7 +87,7 @@ pub fn start(
                         Some(Some(request)) => {
                             if let Some(future) = request.process(
                                 &blocks,
-                                &storage_indices,
+                                &rocksdb,
                                 &storage_files,
                                 &confirmed_in_process,
                                 None,
@@ -111,7 +111,7 @@ async fn start2(
     index: usize,
     mut sync_rx: broadcast::Receiver<ReadWriteSyncMessage>,
     blocks: &mut StoredBlocksRead,
-    storage_indices: &Rocksdb,
+    rocksdb: &Rocksdb,
     storage_files: &StorageFilesRead,
     confirmed_in_process: &mut Option<(Slot, Option<Arc<BlockWithBinary>>)>,
     read_requests_concurrency: Arc<Semaphore>,
@@ -158,7 +158,7 @@ async fn start2(
             // existed request
             message = read_request_fut => match message {
                 Some(Some(request)) => {
-                    if let Some(future) = request.process(blocks, storage_indices, storage_files, confirmed_in_process, None) {
+                    if let Some(future) = request.process(blocks, rocksdb, storage_files, confirmed_in_process, None) {
                         read_requests.push(future);
                     }
                 }
@@ -175,7 +175,7 @@ async fn start2(
                     return Ok(());
                 };
 
-                if let Some(future) = request.process(blocks, storage_indices, storage_files, confirmed_in_process, Some(lock)) {
+                if let Some(future) = request.process(blocks, rocksdb, storage_files, confirmed_in_process, Some(lock)) {
                     read_requests.push(future);
                 }
             },

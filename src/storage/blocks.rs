@@ -1,10 +1,8 @@
 use {
     crate::{
         config::ConfigStorageBlocks,
-        source::block::BlockWithBinary,
         storage::{
             files::{StorageFilesWrite, StorageId},
-            rocksdb::Rocksdb,
             slots::StoredSlots,
             sync::ReadWriteSyncMessage,
             util,
@@ -13,7 +11,7 @@ use {
     anyhow::Context,
     bitflags::bitflags,
     solana_sdk::clock::{Slot, UnixTimestamp},
-    std::{collections::HashMap, io, sync::Arc},
+    std::{collections::HashMap, io},
     thiserror::Error,
     tokio::sync::broadcast,
     tokio_uring::fs::File,
@@ -192,49 +190,11 @@ impl StoredBlocksWrite {
         block.exists.then_some(block.slot)
     }
 
-    pub async fn push_block(
-        &mut self,
-        slot: Slot,
-        block: Option<Arc<BlockWithBinary>>,
-        files: &mut StorageFilesWrite,
-        indices: &Rocksdb,
-    ) -> anyhow::Result<()> {
-        if self.is_full() {
-            self.pop_block(files).await?;
-        }
-
-        let Some(block) = block else {
-            self.push_block_dead(slot).await?;
-            return Ok(());
-        };
-
-        let mut buffer = block.protobuf.clone();
-        let (storage_id, offset) = loop {
-            let (buffer2, result) = files.push_block(buffer).await?;
-            buffer = buffer2;
-
-            if let Some((storage_id, offset)) = result {
-                break (storage_id, offset);
-            }
-
-            self.pop_block(files).await?;
-        };
-
-        let block_time = block.block_time;
-        indices
-            .write(slot, Some((block, storage_id, offset)))
-            .await?;
-
-        return self
-            .push_block_confirmed(slot, block_time, storage_id, offset, buffer.len() as u64)
-            .await;
-    }
-
-    async fn push_block_dead(&mut self, slot: Slot) -> anyhow::Result<()> {
+    pub async fn push_block_dead(&mut self, slot: Slot) -> anyhow::Result<()> {
         self.push_block2(StoredBlock::new_dead(slot)).await
     }
 
-    async fn push_block_confirmed(
+    pub async fn push_block_confirmed(
         &mut self,
         slot: Slot,
         block_time: Option<UnixTimestamp>,
@@ -269,7 +229,7 @@ impl StoredBlocksWrite {
         Ok(())
     }
 
-    async fn pop_block(&mut self, files: &mut StorageFilesWrite) -> anyhow::Result<()> {
+    pub async fn pop_block(&mut self, files: &mut StorageFilesWrite) -> anyhow::Result<()> {
         let Some(block) = self.pop_block2().await? else {
             anyhow::bail!("no blocks to remove");
         };

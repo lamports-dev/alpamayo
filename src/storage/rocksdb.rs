@@ -2,7 +2,10 @@ use {
     crate::{
         config::ConfigStorageRocksdb,
         source::block::BlockWithBinary,
-        storage::{blocks::StoredBlock, files::StorageId},
+        storage::{
+            blocks::{StoredBlock, StoredBlocksWrite},
+            files::{StorageFilesWrite, StorageId},
+        },
     },
     anyhow::Context,
     bitflags::bitflags,
@@ -357,6 +360,42 @@ impl Rocksdb {
                 }
             }
         }
+    }
+
+    pub async fn push_block(
+        &self,
+        slot: Slot,
+        block: Option<Arc<BlockWithBinary>>,
+        files: &mut StorageFilesWrite,
+        blocks: &mut StoredBlocksWrite,
+    ) -> anyhow::Result<()> {
+        if blocks.is_full() {
+            blocks.pop_block(files).await?;
+        }
+
+        let Some(block) = block else {
+            blocks.push_block_dead(slot).await?;
+            return Ok(());
+        };
+
+        let mut buffer = block.protobuf.clone();
+        let (storage_id, offset) = loop {
+            let (buffer2, result) = files.push_block(buffer).await?;
+            buffer = buffer2;
+
+            if let Some((storage_id, offset)) = result {
+                break (storage_id, offset);
+            }
+
+            blocks.pop_block(files).await?;
+        };
+
+        let block_time = block.block_time;
+        self.write(slot, Some((block, storage_id, offset))).await?;
+
+        blocks
+            .push_block_confirmed(slot, block_time, storage_id, offset, buffer.len() as u64)
+            .await
     }
 
     pub async fn write(

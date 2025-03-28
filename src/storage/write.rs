@@ -42,7 +42,7 @@ use {
 pub fn start(
     config: ConfigStorage,
     stored_slots: StoredSlots,
-    storage_indices: Rocksdb,
+    rocksdb: Rocksdb,
     rpc_tx: mpsc::Sender<RpcRequest>,
     stream_start: Arc<Notify>,
     stream_rx: mpsc::Receiver<StreamSourceMessage>,
@@ -73,7 +73,7 @@ pub fn start(
                 sync_tx
                     .send(ReadWriteSyncMessage::Init {
                         blocks: blocks_read_sync_init,
-                        storage_indices: storage_indices.clone(),
+                        rocksdb: rocksdb.clone(),
                         storage_files_init: storage_files_read_sync_init,
                     })
                     .context("failed to send read/write init message")?;
@@ -89,7 +89,7 @@ pub fn start(
                     &mut blocks,
                     &mut storage_files,
                     storage_memory,
-                    storage_indices,
+                    rocksdb,
                     sync_tx,
                     shutdown,
                 )
@@ -116,7 +116,7 @@ async fn start2(
     blocks: &mut StoredBlocksWrite,
     storage_files: &mut StorageFilesWrite,
     mut storage_memory: StorageMemory,
-    storage_indices: Rocksdb,
+    rocksdb: Rocksdb,
     sync_tx: broadcast::Sender<ReadWriteSyncMessage>,
     shutdown: Shutdown,
 ) -> anyhow::Result<()> {
@@ -212,8 +212,8 @@ async fn start2(
                 });
 
                 let timer = metrics::storage_block_sync_start_timer();
-                blocks
-                    .push_block(next_database_slot, block, storage_files, &storage_indices)
+                rocksdb
+                    .push_block(next_database_slot, block, storage_files, blocks)
                     .await?;
                 timer.observe_duration();
 
@@ -318,8 +318,8 @@ async fn start2(
             });
 
             let timer = metrics::storage_block_sync_start_timer();
-            blocks
-                .push_block(next_confirmed_slot, block, storage_files, &storage_indices)
+            rocksdb
+                .push_block(next_confirmed_slot, block, storage_files, blocks)
                 .await?;
             timer.observe_duration();
 
