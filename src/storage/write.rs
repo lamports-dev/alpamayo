@@ -8,7 +8,7 @@ use {
             stream::{StreamSourceMessage, StreamSourceSlotStatus},
         },
         storage::{
-            blocks::StoredBlocksWrite,
+            blocks::{StoredBlocks, StoredBlocksWrite},
             files::StorageFilesWrite,
             memory::{MemoryConfirmedBlock, StorageMemory},
             rocksdb::Rocksdb,
@@ -63,16 +63,18 @@ pub fn start(
                 let rpc = RpcSourceConnected::new(rpc_tx);
 
                 let files = config.blocks.files.clone();
-                let (mut blocks, blocks_read_sync_init) =
+                let blocks =
+                    StoredBlocks::new(rocksdb.read_slot_indexes()?.await?, config.blocks.max)?;
+                let mut blocks2 =
                     StoredBlocksWrite::open(config.blocks, stored_slots.clone(), sync_tx.clone())
                         .await?;
                 let (mut storage_files, storage_files_read_sync_init) =
-                    StorageFilesWrite::open(files, &blocks).await?;
+                    StorageFilesWrite::open(files, &blocks2).await?;
                 let storage_memory = StorageMemory::default();
 
                 sync_tx
                     .send(ReadWriteSyncMessage::Init {
-                        blocks: blocks_read_sync_init,
+                        blocks: blocks.clone(),
                         rocksdb: rocksdb.clone(),
                         storage_files_init: storage_files_read_sync_init,
                     })
@@ -86,7 +88,7 @@ pub fn start(
                     rpc,
                     stream_start,
                     stream_rx,
-                    &mut blocks,
+                    &mut blocks2,
                     &mut storage_files,
                     storage_memory,
                     rocksdb,
@@ -95,7 +97,7 @@ pub fn start(
                 )
                 .await;
 
-                blocks.close().await;
+                blocks2.close().await;
                 storage_files.close().await;
 
                 result

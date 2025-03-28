@@ -2,7 +2,7 @@ use {
     crate::{
         source::block::BlockWithBinary,
         storage::{
-            blocks::{StorageBlockLocationResult, StoredBlocksRead},
+            blocks::{StorageBlockLocationResult, StoredBlocks},
             files::StorageFilesRead,
             rocksdb::{Rocksdb, TransactionIndexValue},
             slots::StoredConfirmedSlot,
@@ -110,7 +110,7 @@ pub fn start(
 async fn start2(
     index: usize,
     mut sync_rx: broadcast::Receiver<ReadWriteSyncMessage>,
-    blocks: &mut StoredBlocksRead,
+    blocks: &mut StoredBlocks,
     rocksdb: &Rocksdb,
     storage_files: &StorageFilesRead,
     confirmed_in_process: &mut Option<(Slot, Option<Arc<BlockWithBinary>>)>,
@@ -276,7 +276,7 @@ pub enum ReadRequest {
 impl ReadRequest {
     pub fn process<'a>(
         self,
-        blocks: &StoredBlocksRead,
+        blocks: &StoredBlocks,
         storage_indices: &Rocksdb,
         storage_files: &StorageFilesRead,
         confirmed_in_process: &Option<(Slot, Option<Arc<BlockWithBinary>>)>,

@@ -2,7 +2,7 @@ use {
     crate::{
         source::block::BlockWithBinary,
         storage::{
-            blocks::{StoredBlockPushSync, StoredBlocksRead},
+            blocks::{StoredBlockPushSync, StoredBlocks},
             files::StorageFilesSyncInit,
             rocksdb::Rocksdb,
         },
@@ -15,7 +15,7 @@ use {
 pub enum ReadWriteSyncMessage {
     // once, on initialization
     Init {
-        blocks: StoredBlocksRead,
+        blocks: StoredBlocks,
         rocksdb: Rocksdb,
         storage_files_init: StorageFilesSyncInit,
     },

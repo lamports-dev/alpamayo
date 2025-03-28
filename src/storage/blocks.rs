@@ -18,13 +18,43 @@ use {
 };
 
 #[derive(Debug, Clone)]
-pub struct StoredBlocksRead {
+pub struct StoredBlocks {
     blocks: Vec<StoredBlock>,
     tail: usize, // lowest slot
     head: usize, // highest slot
 }
 
-impl StoredBlocksRead {
+impl StoredBlocks {
+    pub fn new(mut blocks: Vec<StoredBlock>, max: usize) -> anyhow::Result<Self> {
+        anyhow::ensure!(
+            blocks.len() <= max,
+            "shrinking of stored blocks is not supported yet"
+        );
+
+        blocks.resize(max, StoredBlock::new_noexists());
+
+        let iter = blocks
+            .iter()
+            .enumerate()
+            .filter(|(_index, block)| block.exists && !block.dead);
+        let tail = iter
+            .clone()
+            .min_by_key(|(_index, block)| block.slot)
+            .map(|(index, _block)| index)
+            .unwrap_or_default();
+        let head = iter
+            .max_by_key(|(_index, block)| block.slot)
+            .map(|(index, _block)| index)
+            .unwrap_or_else(|| blocks.len() - 1);
+
+        Ok(Self { blocks, tail, head })
+    }
+
+    pub fn is_full(&self) -> bool {
+        let next = (self.head + 1) % self.blocks.len();
+        self.blocks[next].exists
+    }
+
     pub fn pop_block(&mut self) {
         self.blocks[self.tail] = StoredBlock::new_noexists();
         self.tail = (self.tail + 1) % self.blocks.len();
@@ -75,7 +105,7 @@ impl StoredBlocksWrite {
         config: ConfigStorageBlocks,
         stored_slots: StoredSlots,
         sync_tx: broadcast::Sender<ReadWriteSyncMessage>,
-    ) -> anyhow::Result<(Self, StoredBlocksRead)> {
+    ) -> anyhow::Result<Self> {
         let (file, file_size_current) = util::open(&config.path).await?;
 
         // init, truncate, load, allocate
@@ -106,13 +136,7 @@ impl StoredBlocksWrite {
         };
         stored_slots.first_available_store(write.front_slot());
 
-        let read = StoredBlocksRead {
-            blocks: write.blocks.clone(),
-            tail: write.tail,
-            head: write.head,
-        };
-
-        Ok((write, read))
+        Ok(write)
     }
 
     async fn open_init(file: &File, max: usize) -> io::Result<Vec<StoredBlock>> {
