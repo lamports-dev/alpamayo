@@ -1,7 +1,6 @@
 use {
     crate::{
-        config::ConfigStorageRocksdb, source::block::BlockTransactionOffset,
-        storage::files::StorageId,
+        config::ConfigStorageRocksdb, source::block::BlockWithBinary, storage::files::StorageId,
     },
     anyhow::Context,
     bitflags::bitflags,
@@ -41,7 +40,7 @@ impl SlotIndex {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Default, Clone)]
 pub struct SlotIndexValue {
     pub dead: bool,
     pub block_time: Option<UnixTimestamp>,
@@ -54,6 +53,11 @@ pub struct SlotIndexValue {
 
 impl SlotIndexValue {
     fn encode(&self, buf: &mut Vec<u8>) {
+        if self.dead {
+            encode_varint(SlotIndexValueFlags::DEAD.bits() as u64, buf);
+            return;
+        }
+
         let mut flags = SlotIndexValueFlags::empty();
         if self.dead {
             flags |= SlotIndexValueFlags::DEAD;
@@ -85,8 +89,15 @@ impl SlotIndexValue {
             SlotIndexValueFlags::from_bits(slice.try_get_u8().context("failed to read flags")?)
                 .context("invalid flags")?;
 
+        if flags.contains(SlotIndexValueFlags::DEAD) {
+            return Ok(Self {
+                dead: true,
+                ..Default::default()
+            });
+        }
+
         Ok(Self {
-            dead: flags.contains(SlotIndexValueFlags::DEAD),
+            dead: false,
             block_time: flags
                 .contains(SlotIndexValueFlags::BLOCK_TIME)
                 .then(|| decode_varint(&mut slice).map(|bt| bt as i64))
@@ -272,29 +283,49 @@ impl Rocksdb {
     }
 
     fn spawn_write(db: Arc<DB>, write_rx: mpsc::Receiver<WriteRequest>) {
-        while let Ok(WriteRequest {
-            slot,
-            txs_offset,
-            tx,
-        }) = write_rx.recv()
-        {
-            let mut batch = WriteBatch::with_capacity_bytes((8 + 4 * 9) * 10_000);
-            let mut buf = Vec::with_capacity(4 * 9);
-            for tx_offset in txs_offset {
-                buf.clear();
-                TransactionIndexValue {
-                    slot,
-                    offset: tx_offset.offset,
-                    size: tx_offset.size,
-                }
-                .encode(&mut buf);
+        let mut buf = vec![];
 
-                batch.put_cf(
-                    Self::cf_handle::<TransactionIndex>(&db),
-                    tx_offset.hash,
-                    &buf,
-                );
-            }
+        while let Ok(WriteRequest { slot, data, tx }) = write_rx.recv() {
+            let mut batch = WriteBatch::with_capacity_bytes(1024 * 1024); // 1MiB
+
+            let block = if let Some((block, storage_id, offset)) = data {
+                for tx_offset in block.txs_offset.iter() {
+                    buf.clear();
+                    TransactionIndexValue {
+                        slot,
+                        offset: tx_offset.offset,
+                        size: tx_offset.size,
+                    }
+                    .encode(&mut buf);
+                    batch.put_cf(
+                        Self::cf_handle::<TransactionIndex>(&db),
+                        tx_offset.hash,
+                        &buf,
+                    );
+                }
+
+                SlotIndexValue {
+                    dead: false,
+                    block_time: block.block_time,
+                    block_height: block.block_height,
+                    storage_id,
+                    offset,
+                    size: block.protobuf.len() as u64,
+                    transactions: block.txs_offset.iter().map(|txo| txo.hash).collect(),
+                }
+            } else {
+                SlotIndexValue {
+                    dead: true,
+                    ..Default::default()
+                }
+            };
+            buf.clear();
+            block.encode(&mut buf);
+            batch.put_cf(
+                Self::cf_handle::<SlotIndex>(&db),
+                SlotIndex::key(slot),
+                &buf,
+            );
 
             let result = db.write(batch);
             if tx.send(result.map_err(Into::into)).is_err() {
@@ -303,18 +334,10 @@ impl Rocksdb {
         }
     }
 
-    pub async fn write_tx_index(
-        &self,
-        slot: Slot,
-        txs_offset: Vec<BlockTransactionOffset>,
-    ) -> anyhow::Result<()> {
+    pub async fn write(&self, slot: Slot, data: WriteRequestData) -> anyhow::Result<()> {
         let (tx, rx) = oneshot::channel();
         self.write_tx
-            .send(WriteRequest {
-                slot,
-                txs_offset,
-                tx,
-            })
+            .send(WriteRequest { slot, data, tx })
             .context("failed to send write_tx_index request")?;
         rx.await
             .context("failed to get write_tx_index request result")?
@@ -362,10 +385,12 @@ impl Rocksdb {
     }
 }
 
+type WriteRequestData = Option<(Arc<BlockWithBinary>, StorageId, u64)>;
+
 #[derive(Debug)]
 struct WriteRequest {
     slot: Slot,
-    txs_offset: Vec<BlockTransactionOffset>,
+    data: WriteRequestData,
     tx: oneshot::Sender<anyhow::Result<()>>,
 }
 

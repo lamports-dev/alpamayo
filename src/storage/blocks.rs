@@ -220,19 +220,13 @@ impl StoredBlocksWrite {
             self.pop_block(files).await?;
         };
 
-        // TODO
+        let block_time = block.block_time;
         indices
-            .write_tx_index(slot, block.txs_offset.clone())
+            .write(slot, Some((block, storage_id, offset)))
             .await?;
 
         return self
-            .push_block_confirmed(
-                slot,
-                block.block_time,
-                storage_id,
-                offset,
-                buffer.len() as u64,
-            )
+            .push_block_confirmed(slot, block_time, storage_id, offset, buffer.len() as u64)
             .await;
     }
 

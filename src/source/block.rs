@@ -27,6 +27,7 @@ pub struct BlockTransactionOffset {
 pub struct BlockWithBinary {
     pub parent_slot: Slot,
     pub block_time: Option<UnixTimestamp>,
+    pub block_height: Option<Slot>,
     pub protobuf: Vec<u8>,
     pub txs_offset: Vec<BlockTransactionOffset>,
     pub transactions: HashMap<Signature, TransactionWithBinary>,
@@ -42,7 +43,7 @@ impl BlockWithBinary {
         rewards: Rewards,
         num_partitions: Option<u64>,
         block_time: Option<UnixTimestamp>,
-        block_height: Option<u64>,
+        block_height: Option<Slot>,
     ) -> Self {
         let (protobuf, txs_offset) = ConfirmedBlockProtoRef {
             previous_blockhash: &previous_blockhash,
@@ -65,6 +66,7 @@ impl BlockWithBinary {
         Self {
             parent_slot,
             block_time,
+            block_height,
             protobuf,
             txs_offset,
             transactions,
