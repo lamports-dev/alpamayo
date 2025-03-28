@@ -8,10 +8,10 @@ use {
             stream::{StreamSourceMessage, StreamSourceSlotStatus},
         },
         storage::{
-            blocks::{StoredBlocks, StoredBlocksWrite},
+            blocks::StoredBlocksWrite,
             files::StorageFilesWrite,
             memory::{MemoryConfirmedBlock, StorageMemory},
-            rocksdb::Rocksdb,
+            rocksdb::{RocksdbRead, RocksdbWrite},
             slots::StoredSlots,
             source::{RpcRequest, RpcSourceConnected, RpcSourceConnectedError},
             sync::ReadWriteSyncMessage,
@@ -42,7 +42,8 @@ use {
 pub fn start(
     config: ConfigStorage,
     stored_slots: StoredSlots,
-    rocksdb: Rocksdb,
+    db_write: RocksdbWrite,
+    db_read: RocksdbRead,
     rpc_tx: mpsc::Sender<RpcRequest>,
     stream_start: Arc<Notify>,
     stream_rx: mpsc::Receiver<StreamSourceMessage>,
@@ -63,19 +64,20 @@ pub fn start(
                 let rpc = RpcSourceConnected::new(rpc_tx);
 
                 let files = config.blocks.files.clone();
-                let blocks =
-                    StoredBlocks::new(rocksdb.read_slot_indexes()?.await?, config.blocks.max)?;
-                let mut blocks2 =
-                    StoredBlocksWrite::open(config.blocks, stored_slots.clone(), sync_tx.clone())
-                        .await?;
+                let blocks = StoredBlocksWrite::new(
+                    db_read.read_slot_indexes()?.await?,
+                    config.blocks.max,
+                    stored_slots.clone(),
+                    sync_tx.clone(),
+                )?;
                 let (mut storage_files, storage_files_read_sync_init) =
-                    StorageFilesWrite::open(files, &blocks2).await?;
+                    StorageFilesWrite::open(files, &blocks).await?;
                 let storage_memory = StorageMemory::default();
 
                 sync_tx
                     .send(ReadWriteSyncMessage::Init {
-                        blocks: blocks.clone(),
-                        rocksdb: rocksdb.clone(),
+                        blocks: blocks.to_read(),
+                        db_read: db_read.clone(),
                         storage_files_init: storage_files_read_sync_init,
                     })
                     .context("failed to send read/write init message")?;
@@ -88,16 +90,15 @@ pub fn start(
                     rpc,
                     stream_start,
                     stream_rx,
-                    &mut blocks2,
+                    blocks,
+                    db_write,
                     &mut storage_files,
                     storage_memory,
-                    rocksdb,
                     sync_tx,
                     shutdown,
                 )
                 .await;
 
-                blocks2.close().await;
                 storage_files.close().await;
 
                 result
@@ -115,10 +116,10 @@ async fn start2(
     rpc: RpcSourceConnected,
     stream_start: Arc<Notify>,
     mut stream_rx: mpsc::Receiver<StreamSourceMessage>,
-    blocks: &mut StoredBlocksWrite,
+    mut blocks: StoredBlocksWrite,
+    db_write: RocksdbWrite,
     storage_files: &mut StorageFilesWrite,
     mut storage_memory: StorageMemory,
-    rocksdb: Rocksdb,
     sync_tx: broadcast::Sender<ReadWriteSyncMessage>,
     shutdown: Shutdown,
 ) -> anyhow::Result<()> {
@@ -214,8 +215,8 @@ async fn start2(
                 });
 
                 let timer = metrics::storage_block_sync_start_timer();
-                rocksdb
-                    .push_block(next_database_slot, block, storage_files, blocks)
+                db_write
+                    .push_block(next_database_slot, block, storage_files, &mut blocks)
                     .await?;
                 timer.observe_duration();
 
@@ -320,8 +321,8 @@ async fn start2(
             });
 
             let timer = metrics::storage_block_sync_start_timer();
-            rocksdb
-                .push_block(next_confirmed_slot, block, storage_files, blocks)
+            db_write
+                .push_block(next_confirmed_slot, block, storage_files, &mut blocks)
                 .await?;
             timer.observe_duration();
 

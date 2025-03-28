@@ -2,9 +2,9 @@ use {
     crate::{
         source::block::BlockWithBinary,
         storage::{
-            blocks::{StoredBlockPushSync, StoredBlocks},
+            blocks::{StoredBlockPushSync, StoredBlocksRead},
             files::StorageFilesSyncInit,
-            rocksdb::Rocksdb,
+            rocksdb::RocksdbRead,
         },
     },
     solana_sdk::clock::Slot,
@@ -15,8 +15,8 @@ use {
 pub enum ReadWriteSyncMessage {
     // once, on initialization
     Init {
-        blocks: StoredBlocks,
-        rocksdb: Rocksdb,
+        blocks: StoredBlocksRead,
+        db_read: RocksdbRead,
         storage_files_init: StorageFilesSyncInit,
     },
     // when we build the block

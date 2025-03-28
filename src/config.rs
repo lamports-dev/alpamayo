@@ -134,7 +134,6 @@ pub struct ConfigStorage {
 pub struct ConfigStorageBlocks {
     #[serde(deserialize_with = "deserialize_num_str")]
     pub max: usize,
-    pub path: PathBuf,
     #[serde(
         default = "ConfigStorageBlocks::default_rpc_getblock_max_retries",
         deserialize_with = "deserialize_num_str"

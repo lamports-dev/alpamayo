@@ -2,7 +2,7 @@ use {
     crate::{
         config::ConfigStorageFile,
         storage::{
-            blocks::{StorageBlockLocation, StoredBlocksWrite},
+            blocks::{StoredBlock, StoredBlocksWrite},
             util,
         },
     },
@@ -168,7 +168,7 @@ impl StorageFilesWrite {
         Ok((buffer, Some((file.id, offset))))
     }
 
-    pub fn pop_block(&mut self, block: StorageBlockLocation) -> anyhow::Result<()> {
+    pub fn pop_block(&mut self, block: StoredBlock) -> anyhow::Result<()> {
         let Some(file_index) = self.id2file.get(&block.storage_id).copied() else {
             anyhow::bail!("unknown storage id: {}", block.storage_id);
         };

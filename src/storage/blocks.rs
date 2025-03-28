@@ -1,31 +1,26 @@
 use {
-    crate::{
-        config::ConfigStorageBlocks,
-        storage::{
-            files::{StorageFilesWrite, StorageId},
-            slots::StoredSlots,
-            sync::ReadWriteSyncMessage,
-            util,
-        },
-    },
-    anyhow::Context,
-    bitflags::bitflags,
+    crate::storage::{files::StorageId, slots::StoredSlots, sync::ReadWriteSyncMessage},
     solana_sdk::clock::{Slot, UnixTimestamp},
-    std::{collections::HashMap, io},
-    thiserror::Error,
+    std::collections::HashMap,
     tokio::sync::broadcast,
-    tokio_uring::fs::File,
 };
 
-#[derive(Debug, Clone)]
-pub struct StoredBlocks {
+#[derive(Debug)]
+pub struct StoredBlocksWrite {
     blocks: Vec<StoredBlock>,
     tail: usize, // lowest slot
     head: usize, // highest slot
+    stored_slots: StoredSlots,
+    sync_tx: broadcast::Sender<ReadWriteSyncMessage>,
 }
 
-impl StoredBlocks {
-    pub fn new(mut blocks: Vec<StoredBlock>, max: usize) -> anyhow::Result<Self> {
+impl StoredBlocksWrite {
+    pub fn new(
+        mut blocks: Vec<StoredBlock>,
+        max: usize,
+        stored_slots: StoredSlots,
+        sync_tx: broadcast::Sender<ReadWriteSyncMessage>,
+    ) -> anyhow::Result<Self> {
         anyhow::ensure!(
             blocks.len() <= max,
             "shrinking of stored blocks is not supported yet"
@@ -47,7 +42,21 @@ impl StoredBlocks {
             .map(|(index, _block)| index)
             .unwrap_or_else(|| blocks.len() - 1);
 
-        Ok(Self { blocks, tail, head })
+        Ok(Self {
+            blocks,
+            tail,
+            head,
+            stored_slots,
+            sync_tx,
+        })
+    }
+
+    pub fn to_read(&self) -> StoredBlocksRead {
+        StoredBlocksRead {
+            blocks: self.blocks.clone(),
+            tail: self.tail,
+            head: self.head,
+        }
     }
 
     pub fn is_full(&self) -> bool {
@@ -55,6 +64,100 @@ impl StoredBlocks {
         self.blocks[next].exists
     }
 
+    pub fn get_stored_boundaries(&self) -> HashMap<StorageId, StorageBlocksBoundaries> {
+        let mut map = HashMap::<StorageId, StorageBlocksBoundaries>::new();
+        for block in self.blocks.iter() {
+            if block.exists && !block.dead {
+                map.entry(block.storage_id).or_default().update(block);
+            }
+        }
+        map
+    }
+
+    pub fn get_latest_slot(&self) -> Option<Slot> {
+        let block = self.blocks[self.head];
+        block.exists.then_some(block.slot)
+    }
+
+    pub fn push_block_dead(&mut self, slot: Slot) -> anyhow::Result<()> {
+        self.push_block2(StoredBlock::new_dead(slot))
+    }
+
+    pub fn push_block_confirmed(
+        &mut self,
+        slot: Slot,
+        block_time: Option<UnixTimestamp>,
+        block_height: Option<Slot>,
+        storage_id: StorageId,
+        offset: u64,
+        block_size: u64,
+    ) -> anyhow::Result<()> {
+        self.push_block2(StoredBlock::new_confirmed(
+            slot,
+            block_time,
+            block_height,
+            storage_id,
+            offset,
+            block_size,
+        ))
+    }
+
+    fn push_block2(&mut self, block: StoredBlock) -> anyhow::Result<()> {
+        self.head = (self.head + 1) % self.blocks.len();
+        anyhow::ensure!(!self.blocks[self.head].exists, "no free slot");
+
+        let _ = self.sync_tx.send(ReadWriteSyncMessage::ConfirmedBlockPush {
+            block: block.into(),
+        });
+
+        self.blocks[self.head] = block;
+
+        // update stored if db was initialized
+        if self.tail == 0 && self.head == 0 {
+            self.stored_slots.first_available_store(self.front_slot());
+        }
+
+        Ok(())
+    }
+
+    pub fn pop_block(&mut self) -> Option<StoredBlock> {
+        if self.blocks[self.tail].exists {
+            let block = std::mem::replace(&mut self.blocks[self.tail], StoredBlock::new_noexists());
+            self.tail = (self.tail + 1) % self.blocks.len();
+            Some(block)
+        } else {
+            None
+        }
+    }
+
+    fn front_slot(&self) -> Option<Slot> {
+        if self.tail == 0 && self.head == self.blocks.len() - 1 {
+            return None;
+        }
+
+        let mut index = self.tail;
+        loop {
+            let block = &self.blocks[index];
+            if block.exists {
+                return Some(block.slot);
+            }
+            index = (index + 1) % self.blocks.len();
+            if index == self.head {
+                break;
+            }
+        }
+        None
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct StoredBlocksRead {
+    blocks: Vec<StoredBlock>,
+    tail: usize, // lowest slot
+    head: usize, // highest slot
+}
+
+impl StoredBlocksRead {
     pub fn pop_block(&mut self) {
         self.blocks[self.tail] = StoredBlock::new_noexists();
         self.tail = (self.tail + 1) % self.blocks.len();
@@ -82,240 +185,11 @@ impl StoredBlocks {
             if block.dead {
                 StorageBlockLocationResult::Dead
             } else {
-                StorageBlockLocationResult::Found(block.into())
+                StorageBlockLocationResult::Found(block)
             }
         } else {
             StorageBlockLocationResult::SlotMismatch
         }
-    }
-}
-
-#[derive(Debug)]
-pub struct StoredBlocksWrite {
-    file: File,
-    blocks: Vec<StoredBlock>,
-    tail: usize, // lowest slot
-    head: usize, // highest slot
-    stored_slots: StoredSlots,
-    sync_tx: broadcast::Sender<ReadWriteSyncMessage>,
-}
-
-impl StoredBlocksWrite {
-    pub async fn open(
-        config: ConfigStorageBlocks,
-        stored_slots: StoredSlots,
-        sync_tx: broadcast::Sender<ReadWriteSyncMessage>,
-    ) -> anyhow::Result<Self> {
-        let (file, file_size_current) = util::open(&config.path).await?;
-
-        // init, truncate, load, allocate
-        let file_size_expected = (config.max * StoredBlock::BYTES_SIZE) as u64;
-        let (blocks, tail, head) = if file_size_current == 0 {
-            let blocks = Self::open_init(&file, config.max)
-                .await
-                .with_context(|| format!("failed to init file {:?}", config.path))?;
-            let head = blocks.len() - 1;
-            (blocks, 0, head)
-        } else if file_size_current < file_size_expected {
-            unimplemented!("truncate");
-        } else if file_size_current == file_size_expected {
-            Self::open_load(&file, config.max)
-                .await
-                .with_context(|| format!("failed to load file {:?}", config.path))?
-        } else {
-            unimplemented!("allocate");
-        };
-
-        let write = Self {
-            file,
-            blocks,
-            tail,
-            head,
-            stored_slots: stored_slots.clone(),
-            sync_tx,
-        };
-        stored_slots.first_available_store(write.front_slot());
-
-        Ok(write)
-    }
-
-    async fn open_init(file: &File, max: usize) -> io::Result<Vec<StoredBlock>> {
-        let mut buffer = vec![0; max * StoredBlock::BYTES_SIZE];
-        let blocks = vec![StoredBlock::new_noexists(); max];
-        for (index, block) in blocks.iter().enumerate() {
-            let offset = index * StoredBlock::BYTES_SIZE;
-            let bytes = &mut buffer[offset..offset + StoredBlock::BYTES_SIZE];
-            block.copy_to_slice(bytes).expect("valid slice len");
-        }
-
-        let (result, _buffer) = file.write_all_at(buffer, 0).await;
-        let () = result?;
-
-        Ok(blocks)
-    }
-
-    async fn open_load(
-        file: &File,
-        max: usize,
-    ) -> anyhow::Result<(Vec<StoredBlock>, usize, usize)> {
-        let buffer = Vec::with_capacity(max * StoredBlock::BYTES_SIZE);
-        let (result, buffer) = file.read_exact_at(buffer, 0).await;
-        let () = result?;
-
-        let blocks = (0..max)
-            .map(|index| {
-                let offset = index * StoredBlock::BYTES_SIZE;
-                let bytes = &buffer[offset..offset + StoredBlock::BYTES_SIZE];
-                StoredBlock::from_bytes(bytes)
-            })
-            .collect::<Result<Vec<_>, _>>()
-            .context("failed to parse block header")?;
-
-        let iter = blocks
-            .iter()
-            .enumerate()
-            .filter(|(_index, block)| block.exists && !block.dead);
-
-        let tail = iter
-            .clone()
-            .min_by_key(|(_index, block)| block.slot)
-            .map(|(index, _block)| index)
-            .unwrap_or_default();
-
-        let head = iter
-            .max_by_key(|(_index, block)| block.slot)
-            .map(|(index, _block)| index)
-            .unwrap_or_else(|| blocks.len() - 1);
-
-        Ok((blocks, tail, head))
-    }
-
-    pub async fn close(self) {
-        let _: io::Result<()> = self.file.close().await;
-    }
-
-    pub fn get_stored_boundaries(&self) -> HashMap<StorageId, StorageBlocksBoundaries> {
-        let mut map = HashMap::<StorageId, StorageBlocksBoundaries>::new();
-        for block in self.blocks.iter() {
-            if block.exists && !block.dead {
-                map.entry(block.storage_id).or_default().update(block);
-            }
-        }
-        map
-    }
-
-    pub fn is_full(&self) -> bool {
-        let next = (self.head + 1) % self.blocks.len();
-        self.blocks[next].exists
-    }
-
-    pub fn get_latest_slot(&self) -> Option<Slot> {
-        let block = self.blocks[self.head];
-        block.exists.then_some(block.slot)
-    }
-
-    pub async fn push_block_dead(&mut self, slot: Slot) -> anyhow::Result<()> {
-        self.push_block2(StoredBlock::new_dead(slot)).await
-    }
-
-    pub async fn push_block_confirmed(
-        &mut self,
-        slot: Slot,
-        block_time: Option<UnixTimestamp>,
-        storage_id: StorageId,
-        offset: u64,
-        block_size: u64,
-    ) -> anyhow::Result<()> {
-        self.push_block2(StoredBlock::new_confirmed(
-            slot, block_time, storage_id, offset, block_size,
-        ))
-        .await
-    }
-
-    async fn push_block2(&mut self, block: StoredBlock) -> anyhow::Result<()> {
-        self.head = (self.head + 1) % self.blocks.len();
-        anyhow::ensure!(!self.blocks[self.head].exists, "no free slot");
-
-        let _ = self.sync_tx.send(ReadWriteSyncMessage::ConfirmedBlockPush {
-            block: block.into(),
-        });
-
-        self.blocks[self.head] = block;
-        self.sync(self.head)
-            .await
-            .map_err(|error| anyhow::anyhow!("failed to sync block headers: {error:?}"))?;
-
-        // update stored if db was initialized
-        if self.tail == 0 && self.head == 0 {
-            self.stored_slots.first_available_store(self.front_slot());
-        }
-
-        Ok(())
-    }
-
-    pub async fn pop_block(&mut self, files: &mut StorageFilesWrite) -> anyhow::Result<()> {
-        let Some(block) = self.pop_block2().await? else {
-            anyhow::bail!("no blocks to remove");
-        };
-
-        if block.size == 0 {
-            Ok(())
-        } else {
-            files.pop_block(block)
-        }
-    }
-
-    async fn pop_block2(&mut self) -> io::Result<Option<StorageBlockLocation>> {
-        if !self.blocks[self.tail].exists {
-            return Ok(None);
-        }
-
-        let _ = self.sync_tx.send(ReadWriteSyncMessage::ConfirmedBlockPop);
-
-        let block = std::mem::replace(&mut self.blocks[self.tail], StoredBlock::new_noexists());
-
-        self.stored_slots.first_available_store(self.front_slot());
-
-        self.sync(self.tail).await?;
-
-        self.tail = (self.tail + 1) % self.blocks.len();
-
-        Ok(Some(block.into()))
-    }
-
-    async fn sync(&self, index: usize) -> io::Result<()> {
-        let mut buffer = vec![0; StoredBlock::BYTES_SIZE];
-        self.blocks[index]
-            .copy_to_slice(&mut buffer)
-            .expect("valid slice len");
-
-        let (result, _buffer) = self
-            .file
-            .write_all_at(buffer, (index * StoredBlock::BYTES_SIZE) as u64)
-            .await;
-        let () = result?;
-        self.file.sync_data().await?;
-
-        Ok(())
-    }
-
-    fn front_slot(&self) -> Option<Slot> {
-        if self.tail == 0 && self.head == self.blocks.len() - 1 {
-            return None;
-        }
-
-        let mut index = self.tail;
-        loop {
-            let block = &self.blocks[index];
-            if block.exists {
-                return Some(block.slot);
-            }
-            index = (index + 1) % self.blocks.len();
-            if index == self.head {
-                break;
-            }
-        }
-        None
     }
 }
 
@@ -325,21 +199,13 @@ pub struct StoredBlock {
     pub dead: bool,
     pub slot: Slot,
     pub block_time: Option<UnixTimestamp>,
+    pub block_height: Option<Slot>,
     pub storage_id: StorageId,
     pub offset: u64,
     pub size: u64,
 }
 
 impl StoredBlock {
-    // flags: u32
-    // storage_id: u32
-    // slot: u64
-    // block_time: i64
-    // offset: u64
-    // size: u64
-    // total: 40 bytes
-    const BYTES_SIZE: usize = 64;
-
     fn new_noexists() -> Self {
         Self::default()
     }
@@ -356,6 +222,7 @@ impl StoredBlock {
     fn new_confirmed(
         slot: Slot,
         block_time: Option<UnixTimestamp>,
+        block_height: Option<Slot>,
         storage_id: StorageId,
         offset: u64,
         size: u64,
@@ -365,95 +232,11 @@ impl StoredBlock {
             dead: false,
             slot,
             block_time,
+            block_height,
             storage_id,
             offset,
             size,
         }
-    }
-
-    fn from_bytes(bytes: &[u8]) -> Result<Self, StoredBlockParseError> {
-        if bytes.len() != Self::BYTES_SIZE {
-            return Err(StoredBlockParseError::InvalidLength(bytes.len()));
-        }
-
-        let bits = u32::from_be_bytes(bytes[0..4].try_into()?);
-        let Some(flags) = StoredBlockFlags::from_bits(bits) else {
-            return Err(StoredBlockParseError::InvalidBits(bits));
-        };
-
-        Ok(Self {
-            exists: flags.contains(StoredBlockFlags::EXISTS),
-            dead: flags.contains(StoredBlockFlags::DEAD),
-            slot: u64::from_be_bytes(bytes[8..16].try_into()?),
-            block_time: flags
-                .contains(StoredBlockFlags::BLOCK_TIME)
-                .then_some(UnixTimestamp::from_be_bytes(bytes[16..24].try_into()?)),
-            storage_id: StorageId::from_be_bytes(bytes[4..5].try_into()?),
-            offset: u64::from_be_bytes(bytes[24..32].try_into()?),
-            size: u64::from_be_bytes(bytes[32..40].try_into()?),
-        })
-    }
-
-    fn copy_to_slice(self, bytes: &mut [u8]) -> Result<(), StoredBlocksParseError> {
-        if bytes.len() != Self::BYTES_SIZE {
-            return Err(StoredBlocksParseError::InvalidLength(bytes.len()));
-        }
-
-        // flags: u32
-        let mut flags = StoredBlockFlags::empty();
-        if self.exists {
-            flags |= StoredBlockFlags::EXISTS;
-        }
-        if self.dead {
-            flags |= StoredBlockFlags::DEAD;
-        }
-        if self.block_time.is_some() {
-            flags |= StoredBlockFlags::BLOCK_TIME;
-        }
-        bytes[0..4].copy_from_slice(&flags.bits().to_be_bytes()[..]);
-
-        // storage_id: u32
-        bytes[4..8].copy_from_slice(&(self.storage_id as u32).to_be_bytes()[..]);
-
-        // slot: u64
-        bytes[8..16].copy_from_slice(&self.slot.to_be_bytes()[..]);
-
-        // block_time: u64
-        if let Some(block_time) = self.block_time {
-            bytes[16..24].copy_from_slice(&block_time.to_be_bytes()[..]);
-        }
-
-        // offset: u64
-        bytes[24..32].copy_from_slice(&self.offset.to_be_bytes()[..]);
-
-        // size: u64
-        bytes[32..40].copy_from_slice(&self.size.to_be_bytes()[..]);
-
-        Ok(())
-    }
-}
-
-#[derive(Debug, Error)]
-enum StoredBlockParseError {
-    #[error("slice length is invalid: {0} (expected 64)")]
-    InvalidLength(usize),
-    #[error("invalid bits: {0}")]
-    InvalidBits(u32),
-    #[error(transparent)]
-    TryFromSliceError(#[from] std::array::TryFromSliceError),
-}
-
-#[derive(Debug, Error)]
-enum StoredBlocksParseError {
-    #[error("slice length is invalid: {0} (expected 64)")]
-    InvalidLength(usize),
-}
-
-bitflags! {
-    struct StoredBlockFlags: u32 {
-        const EXISTS =     0b00000001;
-        const DEAD =       0b00000010;
-        const BLOCK_TIME = 0b00000100;
     }
 }
 
@@ -491,34 +274,13 @@ impl StorageBlocksBoundaries {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct StorageBlockLocation {
-    pub slot: Slot,
-    pub block_time: Option<UnixTimestamp>,
-    pub storage_id: StorageId,
-    pub offset: u64,
-    pub size: u64,
-}
-
-impl From<StoredBlock> for StorageBlockLocation {
-    fn from(block: StoredBlock) -> Self {
-        Self {
-            slot: block.slot,
-            block_time: block.block_time,
-            storage_id: block.storage_id,
-            offset: block.offset,
-            size: block.size,
-        }
-    }
-}
-
 #[derive(Debug)]
 pub enum StorageBlockLocationResult {
     Removed,      // block is not available anymore
     Dead,         // skipped or forked block for this slot
     NotAvailable, // not confirmed yet
     SlotMismatch,
-    Found(StorageBlockLocation),
+    Found(StoredBlock),
 }
 
 #[derive(Debug, Clone, Copy)]

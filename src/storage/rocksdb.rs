@@ -5,6 +5,7 @@ use {
         storage::{
             blocks::{StoredBlock, StoredBlocksWrite},
             files::{StorageFilesWrite, StorageId},
+            sync::ReadWriteSyncMessage,
         },
     },
     anyhow::Context,
@@ -28,7 +29,7 @@ use {
         sync::{Arc, Mutex, mpsc},
         thread::{Builder, JoinHandle},
     },
-    tokio::sync::oneshot,
+    tokio::sync::{broadcast, oneshot},
 };
 
 trait ColumnName {
@@ -134,8 +135,8 @@ impl SlotIndexValue {
                 if decode_transactions {
                     let mut transactions = Vec::with_capacity(slice.len() / 8);
                     for i in 0..slice.len() / 8 {
-                        transactions[i] =
-                            slice[i * 8..(i + 1) * 8].try_into().expect("valid slice");
+                        let hash = slice[i * 8..(i + 1) * 8].try_into().expect("valid slice");
+                        transactions.push(hash);
                     }
                     transactions
                 } else {
@@ -196,16 +197,18 @@ impl TransactionIndexValue {
 }
 
 #[derive(Debug, Clone)]
-pub struct Rocksdb {
-    write_tx: mpsc::SyncSender<WriteRequest>,
-    read_tx: mpsc::SyncSender<ReadRequest>,
-}
+pub struct Rocksdb;
 
 impl Rocksdb {
     #[allow(clippy::type_complexity)]
     pub fn open(
         config: ConfigStorageRocksdb,
-    ) -> anyhow::Result<(Self, Vec<(String, Option<JoinHandle<anyhow::Result<()>>>)>)> {
+        sync_tx: broadcast::Sender<ReadWriteSyncMessage>,
+    ) -> anyhow::Result<(
+        RocksdbWrite,
+        RocksdbRead,
+        Vec<(String, Option<JoinHandle<anyhow::Result<()>>>)>,
+    )> {
         let db_options = Self::get_db_options();
         let cf_descriptors = Self::cf_descriptors();
 
@@ -221,7 +224,7 @@ impl Rocksdb {
         let jh = Builder::new().name("rocksdbWrt".to_owned()).spawn({
             let db = Arc::clone(&db);
             move || {
-                Self::spawn_write(db, write_rx);
+                RocksdbWrite::spawn(db, write_rx);
                 Ok(())
             }
         })?;
@@ -233,14 +236,21 @@ impl Rocksdb {
                 let db = Arc::clone(&db);
                 let read_rx = Arc::clone(&read_rx);
                 move || {
-                    Self::spawn_read(db, read_rx);
+                    RocksdbRead::spawn(db, read_rx);
                     Ok(())
                 }
             })?;
             threads.push((th_name, Some(jh)));
         }
 
-        Ok((Self { write_tx, read_tx }, threads))
+        Ok((
+            RocksdbWrite {
+                req_tx: write_tx,
+                sync_tx,
+            },
+            RocksdbRead { req_tx: read_tx },
+            threads,
+        ))
     }
 
     fn get_db_options() -> Options {
@@ -301,8 +311,34 @@ impl Rocksdb {
         db.cf_handle(C::NAME)
             .expect("should never get an unknown column")
     }
+}
 
-    fn spawn_write(db: Arc<DB>, write_rx: mpsc::Receiver<WriteRequest>) {
+#[derive(Debug)]
+enum WriteRequest {
+    Transactions {
+        slot: Slot,
+        block: Arc<BlockWithBinary>,
+        tx: oneshot::Sender<anyhow::Result<()>>,
+    },
+    SlotAdd {
+        slot: Slot,
+        data: Option<(Arc<BlockWithBinary>, StorageId, u64)>,
+        tx: oneshot::Sender<anyhow::Result<()>>,
+    },
+    SlotRemove {
+        slot: Slot,
+        tx: oneshot::Sender<anyhow::Result<()>>,
+    },
+}
+
+#[derive(Debug)]
+pub struct RocksdbWrite {
+    req_tx: mpsc::SyncSender<WriteRequest>,
+    sync_tx: broadcast::Sender<ReadWriteSyncMessage>,
+}
+
+impl RocksdbWrite {
+    fn spawn(db: Arc<DB>, write_rx: mpsc::Receiver<WriteRequest>) {
         let mut buf = vec![];
 
         loop {
@@ -311,25 +347,30 @@ impl Rocksdb {
             };
 
             match request {
-                WriteRequest::TransactionsWithSlot { slot, data, tx } => {
-                    let mut batch = WriteBatch::with_capacity_bytes(1024 * 1024); // 1MiB
+                WriteRequest::Transactions { slot, block, tx } => {
+                    let mut batch = WriteBatch::with_capacity_bytes(256 * 1024); // 256KiB
+                    for tx_offset in block.txs_offset.iter() {
+                        buf.clear();
+                        TransactionIndexValue {
+                            slot,
+                            offset: tx_offset.offset,
+                            size: tx_offset.size,
+                        }
+                        .encode(&mut buf);
+                        batch.put_cf(
+                            Rocksdb::cf_handle::<TransactionIndex>(&db),
+                            tx_offset.hash,
+                            &buf,
+                        );
+                    }
+                    if tx.send(db.write(batch).map_err(Into::into)).is_err() {
+                        break;
+                    }
+                }
+                WriteRequest::SlotAdd { slot, data, tx } => {
+                    let mut batch = WriteBatch::with_capacity_bytes(32 * 1024); // 32KiB
 
                     let block = if let Some((block, storage_id, offset)) = data {
-                        for tx_offset in block.txs_offset.iter() {
-                            buf.clear();
-                            TransactionIndexValue {
-                                slot,
-                                offset: tx_offset.offset,
-                                size: tx_offset.size,
-                            }
-                            .encode(&mut buf);
-                            batch.put_cf(
-                                Self::cf_handle::<TransactionIndex>(&db),
-                                tx_offset.hash,
-                                &buf,
-                            );
-                        }
-
                         SlotIndexValue {
                             dead: false,
                             block_time: block.block_time,
@@ -348,18 +389,37 @@ impl Rocksdb {
                     buf.clear();
                     block.encode(&mut buf);
                     batch.put_cf(
-                        Self::cf_handle::<SlotIndex>(&db),
+                        Rocksdb::cf_handle::<SlotIndex>(&db),
                         SlotIndex::key(slot),
                         &buf,
                     );
 
-                    let result = db.write(batch);
-                    if tx.send(result.map_err(Into::into)).is_err() {
+                    if tx.send(db.write(batch).map_err(Into::into)).is_err() {
+                        break;
+                    }
+                }
+                WriteRequest::SlotRemove { slot, tx } => {
+                    if tx.send(Self::spawn_remove_slot(&db, slot)).is_err() {
                         break;
                     }
                 }
             }
         }
+    }
+
+    fn spawn_remove_slot(db: &DB, slot: Slot) -> anyhow::Result<()> {
+        let value = db
+            .get_pinned_cf(Rocksdb::cf_handle::<SlotIndex>(db), SlotIndex::key(slot))
+            .context("failed to get existed slot")?
+            .ok_or_else(|| anyhow::anyhow!("existed slot {slot} not found"))?;
+        let value = SlotIndexValue::decode(&value, true).context("failed to decode slot data")?;
+
+        let mut batch = WriteBatch::with_capacity_bytes(32 * 1024); // 32KiB
+        batch.delete_cf(Rocksdb::cf_handle::<SlotIndex>(db), SlotIndex::key(slot));
+        for tx in value.transactions {
+            batch.delete_cf(Rocksdb::cf_handle::<TransactionIndex>(db), tx);
+        }
+        db.write(batch).map_err(Into::into)
     }
 
     pub async fn push_block(
@@ -369,49 +429,133 @@ impl Rocksdb {
         files: &mut StorageFilesWrite,
         blocks: &mut StoredBlocksWrite,
     ) -> anyhow::Result<()> {
+        // get some space if we reached blocks limit
         if blocks.is_full() {
-            blocks.pop_block(files).await?;
+            self.pop_block(files, blocks).await?;
         }
 
+        // store dead slot
         let Some(block) = block else {
-            blocks.push_block_dead(slot).await?;
+            // db
+            let (tx, rx) = oneshot::channel();
+            self.req_tx
+                .send(WriteRequest::SlotAdd {
+                    slot,
+                    data: None,
+                    tx,
+                })
+                .context("failed to send WriteRequest::SlotAdd request")?;
+            rx.await
+                .context("failed to get WriteRequest::SlotAdd request result")??;
+
+            // blocks
+            blocks.push_block_dead(slot)?;
+
             return Ok(());
         };
 
+        // 1) store block in file
+        // 2) tx-index in db
         let mut buffer = block.protobuf.clone();
-        let (storage_id, offset) = loop {
-            let (buffer2, result) = files.push_block(buffer).await?;
-            buffer = buffer2;
+        let ((storage_id, offset, buffer, blocks), block) = tokio::try_join!(
+            async move {
+                loop {
+                    let (buffer2, result) = files.push_block(buffer).await?;
+                    buffer = buffer2;
 
-            if let Some((storage_id, offset)) = result {
-                break (storage_id, offset);
+                    if let Some((storage_id, offset)) = result {
+                        return Ok((storage_id, offset, buffer, blocks));
+                    }
+
+                    self.pop_block(files, blocks).await?;
+                }
+            },
+            async move {
+                let (tx, rx) = oneshot::channel();
+                self.req_tx
+                    .send(WriteRequest::Transactions {
+                        slot,
+                        block: Arc::clone(&block),
+                        tx,
+                    })
+                    .context("failed to send WriteRequest::Transactions request")?;
+                rx.await
+                    .context("failed to get WriteRequest::Transactions request result")??;
+                Ok::<_, anyhow::Error>(block)
             }
-
-            blocks.pop_block(files).await?;
-        };
+        )?;
 
         let block_time = block.block_time;
-        self.write(slot, Some((block, storage_id, offset))).await?;
-
-        blocks
-            .push_block_confirmed(slot, block_time, storage_id, offset, buffer.len() as u64)
-            .await
-    }
-
-    pub async fn write(
-        &self,
-        slot: Slot,
-        data: Option<(Arc<BlockWithBinary>, StorageId, u64)>,
-    ) -> anyhow::Result<()> {
+        let block_height = block.block_height;
         let (tx, rx) = oneshot::channel();
-        self.write_tx
-            .send(WriteRequest::TransactionsWithSlot { slot, data, tx })
-            .context("failed to send write_tx_index request")?;
+        self.req_tx
+            .send(WriteRequest::SlotAdd {
+                slot,
+                data: Some((block, storage_id, offset)),
+                tx,
+            })
+            .context("failed to send WriteRequest::SlotAdd request")?;
         rx.await
-            .context("failed to get write_tx_index request result")?
+            .context("failed to get WriteRequest::SlotAdd request result")??;
+
+        blocks.push_block_confirmed(
+            slot,
+            block_time,
+            block_height,
+            storage_id,
+            offset,
+            buffer.len() as u64,
+        )
     }
 
-    fn spawn_read(db: Arc<DB>, read_rx: Arc<Mutex<mpsc::Receiver<ReadRequest>>>) {
+    async fn pop_block(
+        &self,
+        files: &mut StorageFilesWrite,
+        blocks: &mut StoredBlocksWrite,
+    ) -> anyhow::Result<()> {
+        let Some(block) = blocks.pop_block() else {
+            anyhow::bail!("no blocks to remove");
+        };
+        let _ = self.sync_tx.send(ReadWriteSyncMessage::ConfirmedBlockPop);
+
+        // remove from db
+        let (tx, rx) = oneshot::channel();
+        self.req_tx
+            .send(WriteRequest::SlotRemove {
+                slot: block.slot,
+                tx,
+            })
+            .context("failed to send WriteRequest::SlotRemove request")?;
+        rx.await
+            .context("failed to get WriteRequest::SlotRemove request result")??;
+
+        // update offset in file
+        if block.size == 0 {
+            Ok(())
+        } else {
+            files.pop_block(block)
+        }
+    }
+}
+
+#[derive(Debug)]
+enum ReadRequest {
+    Slots {
+        tx: oneshot::Sender<anyhow::Result<Vec<StoredBlock>>>,
+    },
+    Transaction {
+        signature: Signature,
+        tx: oneshot::Sender<anyhow::Result<Option<TransactionIndexValue>>>,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub struct RocksdbRead {
+    req_tx: mpsc::SyncSender<ReadRequest>,
+}
+
+impl RocksdbRead {
+    fn spawn(db: Arc<DB>, read_rx: Arc<Mutex<mpsc::Receiver<ReadRequest>>>) {
         loop {
             let lock = read_rx.lock().expect("unpanicked mutex");
             let Ok(request) = lock.recv() else {
@@ -421,13 +565,13 @@ impl Rocksdb {
 
             match request {
                 ReadRequest::Slots { tx } => {
-                    if tx.send(Self::spawn_read_slots(&db)).is_err() {
+                    if tx.send(Self::spawn_slots(&db)).is_err() {
                         break;
                     }
                 }
                 ReadRequest::Transaction { signature, tx } => {
                     let result = match db.get_pinned_cf(
-                        Self::cf_handle::<TransactionIndex>(&db),
+                        Rocksdb::cf_handle::<TransactionIndex>(&db),
                         TransactionIndex::key(&signature),
                     ) {
                         Ok(Some(slice)) => TransactionIndexValue::decode(slice.as_ref()).map(Some),
@@ -443,16 +587,18 @@ impl Rocksdb {
         }
     }
 
-    fn spawn_read_slots(db: &DB) -> anyhow::Result<Vec<StoredBlock>> {
+    fn spawn_slots(db: &DB) -> anyhow::Result<Vec<StoredBlock>> {
         let mut slots = vec![];
-        for item in db.iterator_cf(Self::cf_handle::<SlotIndex>(db), IteratorMode::Start) {
-            let (key, value) = item?;
-            let value = SlotIndexValue::decode(&value, false)?;
+        for item in db.iterator_cf(Rocksdb::cf_handle::<SlotIndex>(db), IteratorMode::Start) {
+            let (key, value) = item.context("failed to get next item")?;
+            let value =
+                SlotIndexValue::decode(&value, false).context("failed to decode slot data")?;
             slots.push(StoredBlock {
                 exists: true,
                 dead: value.dead,
-                slot: SlotIndex::decode(&key)?,
+                slot: SlotIndex::decode(&key).context("failed to decode slot key")?,
                 block_time: value.block_time,
+                block_height: value.block_height,
                 storage_id: value.storage_id,
                 offset: value.offset,
                 size: value.size,
@@ -465,12 +611,12 @@ impl Rocksdb {
         &self,
     ) -> anyhow::Result<BoxFuture<'static, anyhow::Result<Vec<StoredBlock>>>> {
         let (tx, rx) = oneshot::channel();
-        self.read_tx
+        self.req_tx
             .send(ReadRequest::Slots { tx })
-            .context("failed to send read_tx_index request")?;
+            .context("failed to send ReadRequest::Slots request")?;
         Ok(Box::pin(async move {
             rx.await
-                .context("failed to get read_tx_index request result")?
+                .context("failed to get ReadRequest::Slots request result")?
         }))
     }
 
@@ -479,32 +625,12 @@ impl Rocksdb {
         signature: Signature,
     ) -> anyhow::Result<BoxFuture<'static, anyhow::Result<Option<TransactionIndexValue>>>> {
         let (tx, rx) = oneshot::channel();
-        self.read_tx
+        self.req_tx
             .send(ReadRequest::Transaction { signature, tx })
-            .context("failed to send read_tx_index request")?;
+            .context("failed to send ReadRequest::Transaction request")?;
         Ok(Box::pin(async move {
             rx.await
-                .context("failed to get read_tx_index request result")?
+                .context("failed to get ReadRequest::Transaction request result")?
         }))
     }
-}
-
-#[derive(Debug)]
-enum WriteRequest {
-    TransactionsWithSlot {
-        slot: Slot,
-        data: Option<(Arc<BlockWithBinary>, StorageId, u64)>,
-        tx: oneshot::Sender<anyhow::Result<()>>,
-    },
-}
-
-#[derive(Debug)]
-enum ReadRequest {
-    Slots {
-        tx: oneshot::Sender<anyhow::Result<Vec<StoredBlock>>>,
-    },
-    Transaction {
-        signature: Signature,
-        tx: oneshot::Sender<anyhow::Result<Option<TransactionIndexValue>>>,
-    },
 }

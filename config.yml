@@ -34,7 +34,6 @@ source:
 storage:
   blocks:
     max: 1_000
-    path: ./db/blocks
     rpc_getblock_max_retries: 10
     rpc_getblock_backoff_init: 100ms
     rpc_getblock_max_concurrency: 15
