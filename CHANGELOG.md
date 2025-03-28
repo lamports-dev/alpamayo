@@ -15,6 +15,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 - rpc: add `getSlot` to config ([#1](https://github.com/lamports-dev/alpamayo/pull/1))
 - rpc: change upstream header to `x-bigtable: disabled` ([#5](https://github.com/lamports-dev/alpamayo/pull/5))
 - rpc: use confirmed during sync ([#6](https://github.com/lamports-dev/alpamayo/pull/6))
+- storage: remove transaction index on slot remove ([#8](https://github.com/lamports-dev/alpamayo/pull/8))
 
 ### Features
 
