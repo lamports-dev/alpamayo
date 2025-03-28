@@ -245,7 +245,7 @@ impl Message for RewardWrapper<'_> {
     }
 }
 
-pub const fn reward_type_as_i32(reward_type: Option<RewardType>) -> i32 {
+const fn reward_type_as_i32(reward_type: Option<RewardType>) -> i32 {
     match reward_type {
         None => 0,
         Some(RewardType::Fee) => 1,
@@ -256,14 +256,14 @@ pub const fn reward_type_as_i32(reward_type: Option<RewardType>) -> i32 {
 }
 
 #[inline]
-pub fn bytes_encode(tag: u32, value: &[u8], buf: &mut impl BufMut) {
+fn bytes_encode(tag: u32, value: &[u8], buf: &mut impl BufMut) {
     encode_key(tag, WireType::LengthDelimited, buf);
     encode_varint(value.len() as u64, buf);
     buf.put(value)
 }
 
 #[inline]
-pub fn bytes_encoded_len(tag: u32, value: &[u8]) -> usize {
+fn bytes_encoded_len(tag: u32, value: &[u8]) -> usize {
     key_len(tag) + encoded_len_varint(value.len() as u64) + value.len()
 }
 

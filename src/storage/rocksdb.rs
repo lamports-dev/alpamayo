@@ -1,11 +1,21 @@
 use {
-    crate::{config::ConfigStorageRocksdb, source::block::BlockTransactionOffset},
+    crate::{
+        config::ConfigStorageRocksdb, source::block::BlockTransactionOffset,
+        storage::files::StorageId,
+    },
     anyhow::Context,
+    bitflags::bitflags,
     foldhash::quality::SeedableRandomState,
     futures::future::BoxFuture,
-    prost::encoding::{decode_varint, encode_varint},
+    prost::{
+        bytes::Buf,
+        encoding::{decode_varint, encode_varint},
+    },
     rocksdb::{ColumnFamily, ColumnFamilyDescriptor, DB, DBCompressionType, Options, WriteBatch},
-    solana_sdk::{clock::Slot, signature::Signature},
+    solana_sdk::{
+        clock::{Slot, UnixTimestamp},
+        signature::Signature,
+    },
     std::{
         hash::BuildHasher,
         sync::{Arc, Mutex, mpsc},
@@ -16,6 +26,101 @@ use {
 
 trait ColumnName {
     const NAME: &'static str;
+}
+
+#[derive(Debug)]
+pub struct SlotIndex;
+
+impl ColumnName for SlotIndex {
+    const NAME: &'static str = "slot_index";
+}
+
+impl SlotIndex {
+    pub fn key(slot: Slot) -> [u8; 8] {
+        slot.to_be_bytes()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SlotIndexValue {
+    pub dead: bool,
+    pub block_time: Option<UnixTimestamp>,
+    pub block_height: Option<Slot>,
+    pub storage_id: StorageId,
+    pub offset: u64,
+    pub size: u64,
+    pub transactions: Vec<[u8; 8]>,
+}
+
+impl SlotIndexValue {
+    fn encode(&self, buf: &mut Vec<u8>) {
+        let mut flags = SlotIndexValueFlags::empty();
+        if self.dead {
+            flags |= SlotIndexValueFlags::DEAD;
+        }
+        if self.block_time.is_some() {
+            flags |= SlotIndexValueFlags::BLOCK_TIME;
+        }
+        if self.block_height.is_some() {
+            flags |= SlotIndexValueFlags::BLOCK_HEIGHT;
+        }
+
+        encode_varint(flags.bits() as u64, buf);
+        if let Some(block_time) = self.block_time {
+            encode_varint(block_time as u64, buf);
+        }
+        if let Some(block_height) = self.block_height {
+            encode_varint(block_height, buf);
+        }
+        encode_varint(self.storage_id as u64, buf);
+        encode_varint(self.offset, buf);
+        encode_varint(self.size, buf);
+        for hash in self.transactions.iter() {
+            buf.extend_from_slice(hash);
+        }
+    }
+
+    fn decode(mut slice: &[u8]) -> anyhow::Result<Self> {
+        let flags =
+            SlotIndexValueFlags::from_bits(slice.try_get_u8().context("failed to read flags")?)
+                .context("invalid flags")?;
+
+        Ok(Self {
+            dead: flags.contains(SlotIndexValueFlags::DEAD),
+            block_time: flags
+                .contains(SlotIndexValueFlags::BLOCK_TIME)
+                .then(|| decode_varint(&mut slice).map(|bt| bt as i64))
+                .transpose()
+                .context("failed to read block time")?,
+            block_height: flags
+                .contains(SlotIndexValueFlags::BLOCK_HEIGHT)
+                .then(|| decode_varint(&mut slice))
+                .transpose()
+                .context("failed to read block_height")?,
+            storage_id: decode_varint(&mut slice)
+                .context("failed to read storage id")?
+                .try_into()
+                .context("failed to convert storage id")?,
+            offset: decode_varint(&mut slice).context("failed to read offset")?,
+            size: decode_varint(&mut slice).context("failed to read size")?,
+            transactions: {
+                anyhow::ensure!(slice.len() % 8 == 0, "invalid size of transactions");
+                let mut transactions = Vec::with_capacity(slice.len() / 8);
+                for i in 0..slice.len() / 8 {
+                    transactions[i] = slice[i * 8..(i + 1) * 8].try_into().expect("valid slice");
+                }
+                transactions
+            },
+        })
+    }
+}
+
+bitflags! {
+    struct SlotIndexValueFlags: u8 {
+        const DEAD =         0b00000001;
+        const BLOCK_TIME =   0b00000010;
+        const BLOCK_HEIGHT = 0b00000100;
+    }
 }
 
 #[derive(Debug)]
@@ -151,7 +256,10 @@ impl Rocksdb {
     }
 
     fn cf_descriptors() -> Vec<ColumnFamilyDescriptor> {
-        vec![Self::cf_descriptor::<TransactionIndex>()]
+        vec![
+            Self::cf_descriptor::<SlotIndex>(),
+            Self::cf_descriptor::<TransactionIndex>(),
+        ]
     }
 
     fn cf_descriptor<C: ColumnName>() -> ColumnFamilyDescriptor {

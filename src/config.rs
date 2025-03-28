@@ -119,7 +119,7 @@ pub enum ConfigSourceStreamKind {
 pub struct ConfigStorage {
     /// Storage files for blocks
     pub blocks: ConfigStorageBlocks,
-    /// Indices storage (RocksDB)
+    /// Storage of slots and tx index (RocksDB)
     pub rocksdb: ConfigStorageRocksdb,
     /// Write thread config
     #[serde(default)]
