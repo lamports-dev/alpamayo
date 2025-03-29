@@ -1,7 +1,7 @@
 use {
     crate::{
         config::ConfigRpcWorkers,
-        rpc::api_solana::{RpcRequestGetBlockWorkRequest, RpcRequestGetTransactionWorkRequest},
+        rpc::api_solana::{RpcRequestBlockWorkRequest, RpcRequestTransactionWorkRequest},
     },
     crossbeam::channel::{self, Receiver, RecvTimeoutError, Sender},
     futures::future::{BoxFuture, FutureExt, TryFutureExt, try_join_all},
@@ -11,8 +11,8 @@ use {
 };
 
 pub enum WorkRequest {
-    Block(RpcRequestGetBlockWorkRequest),
-    Transaction(RpcRequestGetTransactionWorkRequest),
+    Block(RpcRequestBlockWorkRequest),
+    Transaction(RpcRequestTransactionWorkRequest),
 }
 
 #[allow(clippy::type_complexity)]

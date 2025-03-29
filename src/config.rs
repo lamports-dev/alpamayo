@@ -285,6 +285,7 @@ impl ConfigRpc {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub enum ConfigRpcCall {
     GetBlock,
+    GetBlockHeight,
     GetSlot,
     GetTransaction,
 }

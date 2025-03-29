@@ -11,11 +11,12 @@ Please use issues only for reporting bugs or discussing feature-related topics. 
 ### Solana Rpc methods:
 
 - [x] `getBlock`
-- [ ] `getBlockHeight`
+- [x] `getBlockHeight`
 - [ ] `getBlocks`
 - [ ] `getBlockTime`
 - [ ] `getLatestBlockhash`
 - [ ] `getRecentPrioritizationFees`
+- [ ] `getSignaturesForAddress`
 - [ ] `getSignatureStatuses`
 - [x] `getSlot`
 - [x] `getTransaction`

@@ -22,5 +22,6 @@ The minor version will be incremented upon a breaking change and the patch versi
 - source: add fast ConfirmedBlock serialization ([#3](https://github.com/lamports-dev/alpamayo/pull/3))
 - storage: add multiple readers ([#4](https://github.com/lamports-dev/alpamayo/pull/4))
 - storage: support getTransaction ([#7](https://github.com/lamports-dev/alpamayo/pull/7))
+- storage: support getBlockHeight ([#9](https://github.com/lamports-dev/alpamayo/pull/9))
 
 ### Breaking

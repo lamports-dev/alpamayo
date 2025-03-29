@@ -5,7 +5,7 @@ use {
             blocks::{StorageBlockLocationResult, StoredBlocksRead},
             files::StorageFilesRead,
             rocksdb::{RocksdbRead, TransactionIndexValue},
-            slots::StoredConfirmedSlot,
+            slots::{StoredConfirmedSlot, StoredSlots},
             sync::ReadWriteSyncMessage,
         },
     },
@@ -16,6 +16,7 @@ use {
     },
     solana_sdk::{
         clock::{Slot, UnixTimestamp},
+        commitment_config::CommitmentLevel,
         signature::Signature,
     },
     std::{
@@ -38,6 +39,7 @@ pub fn start(
     mut sync_rx: broadcast::Receiver<ReadWriteSyncMessage>,
     read_requests_concurrency: Arc<Semaphore>,
     requests_rx: Arc<Mutex<mpsc::Receiver<ReadRequest>>>,
+    stored_slots: StoredSlots,
     stored_confirmed_slot: StoredConfirmedSlot,
 ) -> anyhow::Result<thread::JoinHandle<anyhow::Result<()>>> {
     thread::Builder::new()
@@ -66,6 +68,7 @@ pub fn start(
                     }
                 };
                 let mut confirmed_in_process = None;
+                let mut storage_processed = StorageProcessed::default();
                 let mut read_requests = FuturesUnordered::new();
 
                 let result = start2(
@@ -75,6 +78,8 @@ pub fn start(
                     &db_read,
                     &storage_files,
                     &mut confirmed_in_process,
+                    &mut storage_processed,
+                    &stored_slots,
                     read_requests_concurrency,
                     requests_rx,
                     &mut read_requests,
@@ -90,6 +95,8 @@ pub fn start(
                                 &db_read,
                                 &storage_files,
                                 &confirmed_in_process,
+                                &storage_processed,
+                                &stored_slots,
                                 None,
                             ) {
                                 read_requests.push(future);
@@ -114,13 +121,13 @@ async fn start2(
     db_read: &RocksdbRead,
     storage_files: &StorageFilesRead,
     confirmed_in_process: &mut Option<(Slot, Option<Arc<BlockWithBinary>>)>,
+    storage_processed: &mut StorageProcessed,
+    stored_slots: &StoredSlots,
     read_requests_concurrency: Arc<Semaphore>,
     read_requests_rx: Arc<Mutex<mpsc::Receiver<ReadRequest>>>,
     read_requests: &mut FuturesUnordered<LocalBoxFuture<'_, Option<ReadRequest>>>,
     stored_confirmed_slot: StoredConfirmedSlot,
 ) -> anyhow::Result<()> {
-    let mut storage_processed = StorageProcessed::default();
-
     let read_request_next =
         read_request_get_next(Arc::clone(&read_requests_concurrency), read_requests_rx);
     tokio::pin!(read_request_next);
@@ -158,7 +165,15 @@ async fn start2(
             // existed request
             message = read_request_fut => match message {
                 Some(Some(request)) => {
-                    if let Some(future) = request.process(blocks, db_read, storage_files, confirmed_in_process, None) {
+                    if let Some(future) = request.process(
+                        blocks,
+                        db_read,
+                        storage_files,
+                        confirmed_in_process,
+                        storage_processed,
+                        stored_slots,
+                        None
+                    ) {
                         read_requests.push(future);
                     }
                 }
@@ -175,7 +190,15 @@ async fn start2(
                     return Ok(());
                 };
 
-                if let Some(future) = request.process(blocks, db_read, storage_files, confirmed_in_process, Some(lock)) {
+                if let Some(future) = request.process(
+                    blocks,
+                    db_read,
+                    storage_files,
+                    confirmed_in_process,
+                    storage_processed,
+                    stored_slots,
+                    Some(lock)
+                ) {
                     read_requests.push(future);
                 }
             },
@@ -229,10 +252,16 @@ impl StorageProcessed {
             };
         }
     }
+
+    fn get_processed_block_height(&self) -> Option<Slot> {
+        self.blocks
+            .last_key_value()
+            .and_then(|(_key, block)| block.as_ref().and_then(|block| block.block_height))
+    }
 }
 
 #[derive(Debug)]
-pub enum ReadResultGetBlock {
+pub enum ReadResultBlock {
     Timeout,
     Removed,
     Dead,
@@ -242,7 +271,14 @@ pub enum ReadResultGetBlock {
 }
 
 #[derive(Debug)]
-pub enum ReadResultGetTransaction {
+pub enum ReadResultBlockHeight {
+    Timeout,
+    BlockHeight(Slot),
+    ReadError(anyhow::Error),
+}
+
+#[derive(Debug)]
+pub enum ReadResultTransaction {
     Timeout,
     NotFound,
     Transaction {
@@ -258,34 +294,42 @@ pub enum ReadRequest {
     Block {
         deadline: Instant,
         slot: Slot,
-        tx: oneshot::Sender<ReadResultGetBlock>,
+        tx: oneshot::Sender<ReadResultBlock>,
+    },
+    BlockHeight {
+        deadline: Instant,
+        commitment: CommitmentLevel,
+        tx: oneshot::Sender<ReadResultBlockHeight>,
     },
     Transaction {
         deadline: Instant,
         signature: Signature,
-        tx: oneshot::Sender<ReadResultGetTransaction>,
+        tx: oneshot::Sender<ReadResultTransaction>,
     },
     Transaction2 {
         deadline: Instant,
         index: TransactionIndexValue,
-        tx: oneshot::Sender<ReadResultGetTransaction>,
+        tx: oneshot::Sender<ReadResultTransaction>,
         lock: Option<OwnedSemaphorePermit>,
     },
 }
 
 impl ReadRequest {
-    pub fn process<'a>(
+    #[allow(clippy::too_many_arguments)]
+    fn process<'a>(
         self,
         blocks: &StoredBlocksRead,
         db_read: &RocksdbRead,
         storage_files: &StorageFilesRead,
         confirmed_in_process: &Option<(Slot, Option<Arc<BlockWithBinary>>)>,
+        storage_processed: &StorageProcessed,
+        stored_slots: &StoredSlots,
         lock: Option<OwnedSemaphorePermit>,
     ) -> Option<LocalBoxFuture<'a, Option<Self>>> {
         match self {
             Self::Block { deadline, slot, tx } => {
                 if deadline < Instant::now() {
-                    let _ = tx.send(ReadResultGetBlock::Timeout);
+                    let _ = tx.send(ReadResultBlock::Timeout);
                     return None;
                 }
 
@@ -294,9 +338,9 @@ impl ReadRequest {
                 {
                     if *confirmed_in_process_slot == slot {
                         let _ = tx.send(if let Some(block) = confirmed_in_process_block {
-                            ReadResultGetBlock::Block(block.protobuf.clone())
+                            ReadResultBlock::Block(block.protobuf.clone())
                         } else {
-                            ReadResultGetBlock::Dead
+                            ReadResultBlock::Dead
                         });
                         return None;
                     }
@@ -304,20 +348,20 @@ impl ReadRequest {
 
                 let location = match blocks.get_block_location(slot) {
                     StorageBlockLocationResult::Removed => {
-                        let _ = tx.send(ReadResultGetBlock::Removed);
+                        let _ = tx.send(ReadResultBlock::Removed);
                         return None;
                     }
                     StorageBlockLocationResult::Dead => {
-                        let _ = tx.send(ReadResultGetBlock::Dead);
+                        let _ = tx.send(ReadResultBlock::Dead);
                         return None;
                     }
                     StorageBlockLocationResult::NotAvailable => {
-                        let _ = tx.send(ReadResultGetBlock::NotAvailable);
+                        let _ = tx.send(ReadResultBlock::NotAvailable);
                         return None;
                     }
                     StorageBlockLocationResult::SlotMismatch => {
                         error!(slot, "item/slot mismatch");
-                        let _ = tx.send(ReadResultGetBlock::ReadError(io::Error::new(
+                        let _ = tx.send(ReadResultBlock::ReadError(io::Error::new(
                             io::ErrorKind::Other,
                             "item/slot mismatch",
                         )));
@@ -330,14 +374,86 @@ impl ReadRequest {
                     storage_files.read(location.storage_id, location.offset, location.size);
                 Some(Box::pin(async move {
                     let result = match timeout_at(deadline.into(), read_fut).await {
-                        Ok(Ok(bytes)) => ReadResultGetBlock::Block(bytes),
-                        Ok(Err(error)) => ReadResultGetBlock::ReadError(error),
-                        Err(_error) => ReadResultGetBlock::Timeout,
+                        Ok(Ok(bytes)) => ReadResultBlock::Block(bytes),
+                        Ok(Err(error)) => ReadResultBlock::ReadError(error),
+                        Err(_error) => ReadResultBlock::Timeout,
                     };
                     let _ = tx.send(result);
                     drop(lock);
                     None
                 }))
+            }
+            Self::BlockHeight {
+                deadline,
+                commitment,
+                tx,
+            } => {
+                if deadline < Instant::now() {
+                    let _ = tx.send(ReadResultBlockHeight::Timeout);
+                    return None;
+                }
+
+                let mut block_height = None;
+                let mut commitment_slot = None;
+
+                if commitment == CommitmentLevel::Processed {
+                    block_height = storage_processed.get_processed_block_height();
+                }
+
+                if (commitment == CommitmentLevel::Confirmed)
+                    || (commitment == CommitmentLevel::Processed && block_height.is_none())
+                {
+                    if let Some((_confirmed_in_process_slot, Some(confirmed_in_process_block))) =
+                        confirmed_in_process
+                    {
+                        block_height = confirmed_in_process_block.block_height;
+                    }
+
+                    if block_height.is_none() {
+                        commitment_slot = Some(stored_slots.confirmed_load());
+                    }
+                }
+
+                if commitment == CommitmentLevel::Finalized {
+                    commitment_slot = Some(stored_slots.first_available_load())
+                }
+
+                if let Some(mut slot) = commitment_slot {
+                    while block_height.is_none() {
+                        match blocks.get_block_location(slot) {
+                            StorageBlockLocationResult::Dead => {
+                                slot -= 1;
+                            }
+                            StorageBlockLocationResult::SlotMismatch => {
+                                error!(slot = slot, "item/slot mismatch");
+                                let _ = tx.send(ReadResultBlockHeight::ReadError(anyhow::anyhow!(
+                                    io::Error::new(io::ErrorKind::Other, "item/slot mismatch",)
+                                )));
+                                return None;
+                            }
+                            StorageBlockLocationResult::Found(location) => {
+                                block_height = location.block_height;
+                            }
+                            _ => {
+                                let _ = tx.send(ReadResultBlockHeight::ReadError(anyhow::anyhow!(
+                                    "failed to find commitment slot"
+                                )));
+                                return None;
+                            }
+                        };
+                    }
+                }
+
+                let _ = tx.send(
+                    block_height
+                        .map(ReadResultBlockHeight::BlockHeight)
+                        .unwrap_or_else(|| {
+                            ReadResultBlockHeight::ReadError(anyhow::anyhow!(
+                                "failed to get block height"
+                            ))
+                        }),
+                );
+                None
             }
             Self::Transaction {
                 deadline,
@@ -345,13 +461,13 @@ impl ReadRequest {
                 tx,
             } => {
                 if deadline < Instant::now() {
-                    let _ = tx.send(ReadResultGetTransaction::Timeout);
+                    let _ = tx.send(ReadResultTransaction::Timeout);
                     return None;
                 }
 
                 if let Some((confirmed_in_process_slot, Some(block))) = confirmed_in_process {
                     if let Some(transaction) = block.transactions.get(&signature) {
-                        let _ = tx.send(ReadResultGetTransaction::Transaction {
+                        let _ = tx.send(ReadResultTransaction::Transaction {
                             slot: *confirmed_in_process_slot,
                             block_time: block.block_time,
                             bytes: transaction.protobuf.clone(),
@@ -363,7 +479,7 @@ impl ReadRequest {
                 let read_tx_index = match db_read.read_tx_index(signature) {
                     Ok(fut) => fut,
                     Err(error) => {
-                        let _ = tx.send(ReadResultGetTransaction::ReadError(error));
+                        let _ = tx.send(ReadResultTransaction::ReadError(error));
                         return None;
                     }
                 };
@@ -378,8 +494,8 @@ impl ReadRequest {
                                 lock,
                             });
                         }
-                        Ok(None) => ReadResultGetTransaction::NotFound,
-                        Err(error) => ReadResultGetTransaction::ReadError(error),
+                        Ok(None) => ReadResultTransaction::NotFound,
+                        Err(error) => ReadResultTransaction::ReadError(error),
                     };
 
                     let _ = tx.send(result);
@@ -393,31 +509,23 @@ impl ReadRequest {
                 lock,
             } => {
                 if deadline < Instant::now() {
-                    let _ = tx.send(ReadResultGetTransaction::Timeout);
+                    let _ = tx.send(ReadResultTransaction::Timeout);
                     return None;
                 }
 
                 let location = match blocks.get_block_location(index.slot) {
-                    StorageBlockLocationResult::Removed => {
-                        let _ = tx.send(ReadResultGetTransaction::NotFound);
-                        return None;
-                    }
-                    StorageBlockLocationResult::Dead => {
-                        let _ = tx.send(ReadResultGetTransaction::NotFound);
-                        return None;
-                    }
-                    StorageBlockLocationResult::NotAvailable => {
-                        let _ = tx.send(ReadResultGetTransaction::NotFound);
-                        return None;
-                    }
                     StorageBlockLocationResult::SlotMismatch => {
                         error!(slot = index.slot, "item/slot mismatch");
-                        let _ = tx.send(ReadResultGetTransaction::ReadError(anyhow::anyhow!(
+                        let _ = tx.send(ReadResultTransaction::ReadError(anyhow::anyhow!(
                             io::Error::new(io::ErrorKind::Other, "item/slot mismatch",)
                         )));
                         return None;
                     }
                     StorageBlockLocationResult::Found(location) => location,
+                    _ => {
+                        let _ = tx.send(ReadResultTransaction::NotFound);
+                        return None;
+                    }
                 };
 
                 let read_fut = storage_files.read(
@@ -427,15 +535,15 @@ impl ReadRequest {
                 );
                 Some(Box::pin(async move {
                     let result = match timeout_at(deadline.into(), read_fut).await {
-                        Ok(Ok(bytes)) => ReadResultGetTransaction::Transaction {
+                        Ok(Ok(bytes)) => ReadResultTransaction::Transaction {
                             slot: index.slot,
                             block_time: location.block_time,
                             bytes,
                         },
                         Ok(Err(error)) => {
-                            ReadResultGetTransaction::ReadError(anyhow::Error::new(error))
+                            ReadResultTransaction::ReadError(anyhow::Error::new(error))
                         }
-                        Err(_error) => ReadResultGetTransaction::Timeout,
+                        Err(_error) => ReadResultTransaction::Timeout,
                     };
                     let _ = tx.send(result);
                     drop(lock);

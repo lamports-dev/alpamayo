@@ -3,7 +3,7 @@ use {
         config::{ConfigRpc, ConfigRpcCall},
         rpc::{upstream::RpcClient, workers::WorkRequest},
         storage::{
-            read::{ReadRequest, ReadResultGetBlock, ReadResultGetTransaction},
+            read::{ReadRequest, ReadResultBlock, ReadResultBlockHeight, ReadResultTransaction},
             slots::StoredSlots,
         },
     },
@@ -91,6 +91,7 @@ fn jsonrpc_response_error(
 #[derive(Debug, Clone, Copy)]
 struct SupportedCalls {
     get_block: bool,
+    get_block_height: bool,
     get_slot: bool,
     get_transaction: bool,
 }
@@ -99,6 +100,7 @@ impl SupportedCalls {
     fn new(calls: &[ConfigRpcCall]) -> anyhow::Result<Self> {
         Ok(Self {
             get_block: Self::check_call_support(calls, ConfigRpcCall::GetBlock)?,
+            get_block_height: Self::check_call_support(calls, ConfigRpcCall::GetBlockHeight)?,
             get_slot: Self::check_call_support(calls, ConfigRpcCall::GetSlot)?,
             get_transaction: Self::check_call_support(calls, ConfigRpcCall::GetTransaction)?,
         })
@@ -227,13 +229,10 @@ impl<'a> RpcRequests<'a> {
     }
 }
 
-#[allow(clippy::enum_variant_names)]
 enum RpcRequest {
-    GetBlock(RpcRequestGetBlock),
-    GetSlot { response: RpcRequestResult },
-    GetTransaction(RpcRequestGetTransaction),
-    // Remove clippy rule
-    // IsBlockhashValid,
+    Block(RpcRequestBlock),
+    BlockHeight(RpcRequestBlockHeight),
+    Transaction(RpcRequestTransaction),
 }
 
 impl RpcRequest {
@@ -266,12 +265,46 @@ impl RpcRequest {
                     return Err(Self::response_error(id, error));
                 }
 
-                Ok(Self::GetBlock(RpcRequestGetBlock {
+                Ok(Self::Block(RpcRequestBlock {
                     id: id.into_owned(),
                     slot,
                     commitment,
                     encoding,
                     encoding_options,
+                }))
+            }
+            "getBlockHeight" if state.supported_calls.get_block_height => {
+                #[derive(Debug, Deserialize)]
+                struct ReqParams {
+                    #[serde(default)]
+                    config: Option<RpcContextConfig>,
+                }
+
+                let (id, ReqParams { config }) = Self::parse_params(request)?;
+                let RpcContextConfig {
+                    commitment,
+                    min_context_slot,
+                } = config.unwrap_or_default();
+
+                let commitment = commitment.unwrap_or_default().commitment;
+                let slot = match commitment {
+                    CommitmentLevel::Processed => state.stored_slots.processed_load(),
+                    CommitmentLevel::Confirmed => state.stored_slots.confirmed_load(),
+                    CommitmentLevel::Finalized => state.stored_slots.finalized_load(),
+                };
+
+                if let Some(min_context_slot) = min_context_slot {
+                    if slot < min_context_slot {
+                        return Err(jsonrpc_response_error(
+                            id.into_owned(),
+                            RpcCustomError::MinContextSlotNotReached { context_slot: slot },
+                        ));
+                    }
+                }
+
+                Ok(Self::BlockHeight(RpcRequestBlockHeight {
+                    id: id.into_owned(),
+                    commitment,
                 }))
             }
             "getSlot" if state.supported_calls.get_slot => {
@@ -295,18 +328,14 @@ impl RpcRequest {
 
                 if let Some(min_context_slot) = min_context_slot {
                     if slot < min_context_slot {
-                        return Ok(Self::GetSlot {
-                            response: Ok(jsonrpc_response_error(
-                                id.into_owned(),
-                                RpcCustomError::MinContextSlotNotReached { context_slot: slot },
-                            )),
-                        });
+                        return Err(jsonrpc_response_error(
+                            id.into_owned(),
+                            RpcCustomError::MinContextSlotNotReached { context_slot: slot },
+                        ));
                     }
                 }
 
-                Ok(Self::GetSlot {
-                    response: Self::response_success(id.into_owned(), slot.into()),
-                })
+                Err(Self::response_success(id.into_owned(), slot.into()))
             }
             "getTransaction" if state.supported_calls.get_transaction => {
                 #[derive(Debug, Deserialize)]
@@ -339,7 +368,7 @@ impl RpcRequest {
                     return Err(Self::response_error(id, error));
                 }
 
-                Ok(Self::GetTransaction(RpcRequestGetTransaction {
+                Ok(Self::Transaction(RpcRequestTransaction {
                     id: id.into_owned(),
                     signature,
                     commitment,
@@ -401,19 +430,19 @@ impl RpcRequest {
         }
     }
 
-    fn response_success(id: Id<'static>, payload: serde_json::Value) -> RpcRequestResult {
-        Ok(Response {
+    fn response_success(id: Id<'_>, payload: serde_json::Value) -> Response<'_, serde_json::Value> {
+        Response {
             jsonrpc: Some(TwoPointZero),
             payload: ResponsePayload::success(payload),
             id,
-        })
+        }
     }
 
     async fn process(self, state: Arc<State>, upstream_disabled: bool) -> RpcRequestResult {
         match self {
-            Self::GetBlock(request) => request.process(state, upstream_disabled).await,
-            Self::GetSlot { response } => response,
-            Self::GetTransaction(request) => request.process(state, upstream_disabled).await,
+            Self::Block(request) => request.process(state, upstream_disabled).await,
+            Self::BlockHeight(request) => request.process(state).await,
+            Self::Transaction(request) => request.process(state, upstream_disabled).await,
         }
     }
 
@@ -439,7 +468,7 @@ impl RpcRequest {
     }
 }
 
-struct RpcRequestGetBlock {
+struct RpcRequestBlock {
     id: Id<'static>,
     slot: Slot,
     commitment: CommitmentConfig,
@@ -447,7 +476,7 @@ struct RpcRequestGetBlock {
     encoding_options: BlockEncodingOptions,
 }
 
-impl RpcRequestGetBlock {
+impl RpcRequestBlock {
     async fn process(self, state: Arc<State>, upstream_disabled: bool) -> RpcRequestResult {
         let deadline = Instant::now() + state.request_timeout;
 
@@ -484,20 +513,20 @@ impl RpcRequestGetBlock {
             anyhow::bail!("rx channel is closed");
         };
         let bytes = match result {
-            ReadResultGetBlock::Timeout => anyhow::bail!("timeout"),
-            ReadResultGetBlock::Removed => {
+            ReadResultBlock::Timeout => anyhow::bail!("timeout"),
+            ReadResultBlock::Removed => {
                 return self
                     .fetch_upstream(state, upstream_disabled, deadline)
                     .await;
             }
-            ReadResultGetBlock::Dead => {
+            ReadResultBlock::Dead => {
                 return Self::error_skipped(self.id, self.slot);
             }
-            ReadResultGetBlock::NotAvailable => {
+            ReadResultBlock::NotAvailable => {
                 return Self::error_not_available(self.id, self.slot);
             }
-            ReadResultGetBlock::Block(bytes) => bytes,
-            ReadResultGetBlock::ReadError(error) => anyhow::bail!("read error: {error}"),
+            ReadResultBlock::Block(bytes) => bytes,
+            ReadResultBlock::ReadError(error) => anyhow::bail!("read error: {error}"),
         };
 
         // verify that we still have data for that block (i.e. we read correct data)
@@ -508,7 +537,7 @@ impl RpcRequestGetBlock {
         }
 
         // parse, encode and serialize
-        RpcRequest::process_with_workers(state, RpcRequestGetBlockWorkRequest::create(self, bytes))
+        RpcRequest::process_with_workers(state, RpcRequestBlockWorkRequest::create(self, bytes))
             .await
     }
 
@@ -552,7 +581,7 @@ impl RpcRequestGetBlock {
     }
 }
 
-pub struct RpcRequestGetBlockWorkRequest {
+pub struct RpcRequestBlockWorkRequest {
     bytes: Vec<u8>,
     id: Id<'static>,
     slot: Slot,
@@ -561,9 +590,9 @@ pub struct RpcRequestGetBlockWorkRequest {
     tx: Option<oneshot::Sender<RpcRequestResult>>,
 }
 
-impl RpcRequestGetBlockWorkRequest {
+impl RpcRequestBlockWorkRequest {
     fn create(
-        request: RpcRequestGetBlock,
+        request: RpcRequestBlock,
         bytes: Vec<u8>,
     ) -> (WorkRequest, oneshot::Receiver<RpcRequestResult>) {
         let (tx, rx) = oneshot::channel();
@@ -615,11 +644,49 @@ impl RpcRequestGetBlockWorkRequest {
         // serialize
         let data = serde_json::to_value(&block).expect("json serialization never fail");
 
-        RpcRequest::response_success(self.id, data)
+        Ok(RpcRequest::response_success(self.id, data))
     }
 }
 
-struct RpcRequestGetTransaction {
+struct RpcRequestBlockHeight {
+    id: Id<'static>,
+    commitment: CommitmentLevel,
+}
+
+impl RpcRequestBlockHeight {
+    async fn process(self, state: Arc<State>) -> RpcRequestResult {
+        let deadline = Instant::now() + state.request_timeout;
+
+        // request
+        let (tx, rx) = oneshot::channel();
+        anyhow::ensure!(
+            state
+                .requests_tx
+                .send(ReadRequest::BlockHeight {
+                    deadline,
+                    commitment: self.commitment,
+                    tx
+                })
+                .await
+                .is_ok(),
+            "request channel is closed"
+        );
+        let Ok(result) = rx.await else {
+            anyhow::bail!("rx channel is closed");
+        };
+        let block_height = match result {
+            ReadResultBlockHeight::Timeout => anyhow::bail!("timeout"),
+            ReadResultBlockHeight::BlockHeight(block_height) => block_height,
+            ReadResultBlockHeight::ReadError(error) => anyhow::bail!("read error: {error}"),
+        };
+        Ok(RpcRequest::response_success(
+            self.id,
+            serde_json::json!(block_height),
+        ))
+    }
+}
+
+struct RpcRequestTransaction {
     id: Id<'static>,
     signature: Signature,
     commitment: CommitmentConfig,
@@ -627,7 +694,7 @@ struct RpcRequestGetTransaction {
     max_supported_transaction_version: Option<u8>,
 }
 
-impl RpcRequestGetTransaction {
+impl RpcRequestTransaction {
     async fn process(self, state: Arc<State>, upstream_disabled: bool) -> RpcRequestResult {
         let deadline = Instant::now() + state.request_timeout;
 
@@ -649,23 +716,26 @@ impl RpcRequestGetTransaction {
             anyhow::bail!("rx channel is closed");
         };
         let (slot, block_time, bytes) = match result {
-            ReadResultGetTransaction::Timeout => anyhow::bail!("timeout"),
-            ReadResultGetTransaction::NotFound => {
+            ReadResultTransaction::Timeout => anyhow::bail!("timeout"),
+            ReadResultTransaction::NotFound => {
                 return self
                     .fetch_upstream(state, upstream_disabled, deadline)
                     .await;
             }
-            ReadResultGetTransaction::Transaction {
+            ReadResultTransaction::Transaction {
                 slot,
                 block_time,
                 bytes,
             } => (slot, block_time, bytes),
-            ReadResultGetTransaction::ReadError(error) => anyhow::bail!("read error: {error}"),
+            ReadResultTransaction::ReadError(error) => anyhow::bail!("read error: {error}"),
         };
 
         // verify commitment
         if self.commitment.is_finalized() && state.stored_slots.finalized_load() < slot {
-            return RpcRequest::response_success(self.id, serde_json::json!(None::<()>));
+            return Ok(RpcRequest::response_success(
+                self.id,
+                serde_json::json!(None::<()>),
+            ));
         }
 
         // verify that we still have data for that block (i.e. we read correct data)
@@ -678,7 +748,7 @@ impl RpcRequestGetTransaction {
         // parse, encode and serialize
         RpcRequest::process_with_workers(
             state,
-            RpcRequestGetTransactionWorkRequest::create(self, slot, block_time, bytes),
+            RpcRequestTransactionWorkRequest::create(self, slot, block_time, bytes),
         )
         .await
     }
@@ -712,7 +782,7 @@ impl RpcRequestGetTransaction {
     }
 }
 
-pub struct RpcRequestGetTransactionWorkRequest {
+pub struct RpcRequestTransactionWorkRequest {
     slot: Slot,
     block_time: Option<UnixTimestamp>,
     bytes: Vec<u8>,
@@ -722,9 +792,9 @@ pub struct RpcRequestGetTransactionWorkRequest {
     tx: Option<oneshot::Sender<RpcRequestResult>>,
 }
 
-impl RpcRequestGetTransactionWorkRequest {
+impl RpcRequestTransactionWorkRequest {
     fn create(
-        request: RpcRequestGetTransaction,
+        request: RpcRequestTransaction,
         slot: Slot,
         block_time: Option<UnixTimestamp>,
         bytes: Vec<u8>,
@@ -784,6 +854,6 @@ impl RpcRequestGetTransactionWorkRequest {
         // serialize
         let data = serde_json::to_value(&tx).expect("json serialization never fail");
 
-        RpcRequest::response_success(self.id, data)
+        Ok(RpcRequest::response_success(self.id, data))
     }
 }

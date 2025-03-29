@@ -60,6 +60,7 @@ rpc:
   request_timeout: 60s
   calls:
     - getBlock
+    - getBlockHeight
     - getSlot
     - getTransaction
   request_channel_capacity: 4096
