@@ -5,7 +5,7 @@ use {
             blocks::{StorageBlockLocationResult, StoredBlocksRead},
             files::StorageFilesRead,
             rocksdb::{RocksdbRead, TransactionIndexValue},
-            slots::{StoredConfirmedSlot, StoredSlots},
+            slots::StoredConfirmedSlot,
             sync::ReadWriteSyncMessage,
         },
     },
@@ -39,7 +39,6 @@ pub fn start(
     mut sync_rx: broadcast::Receiver<ReadWriteSyncMessage>,
     read_requests_concurrency: Arc<Semaphore>,
     requests_rx: Arc<Mutex<mpsc::Receiver<ReadRequest>>>,
-    stored_slots: StoredSlots,
     stored_confirmed_slot: StoredConfirmedSlot,
 ) -> anyhow::Result<thread::JoinHandle<anyhow::Result<()>>> {
     thread::Builder::new()
@@ -79,7 +78,6 @@ pub fn start(
                     &storage_files,
                     &mut confirmed_in_process,
                     &mut storage_processed,
-                    &stored_slots,
                     read_requests_concurrency,
                     requests_rx,
                     &mut read_requests,
@@ -96,7 +94,6 @@ pub fn start(
                                 &storage_files,
                                 &confirmed_in_process,
                                 &storage_processed,
-                                &stored_slots,
                                 None,
                             ) {
                                 read_requests.push(future);
@@ -122,7 +119,6 @@ async fn start2(
     storage_files: &StorageFilesRead,
     confirmed_in_process: &mut Option<(Slot, Option<Arc<BlockWithBinary>>)>,
     storage_processed: &mut StorageProcessed,
-    stored_slots: &StoredSlots,
     read_requests_concurrency: Arc<Semaphore>,
     read_requests_rx: Arc<Mutex<mpsc::Receiver<ReadRequest>>>,
     read_requests: &mut FuturesUnordered<LocalBoxFuture<'_, Option<ReadRequest>>>,
@@ -148,9 +144,12 @@ async fn start2(
                 Ok(ReadWriteSyncMessage::BlockDead { slot }) => storage_processed.mark_dead(slot),
                 Ok(ReadWriteSyncMessage::BlockConfirmed { slot, block }) => {
                     stored_confirmed_slot.set_confirmed(index, slot);
-                    storage_processed.confirm(slot);
+                    storage_processed.set_confirmed(slot);
                     *confirmed_in_process = Some((slot, block));
                 },
+                Ok(ReadWriteSyncMessage::SlotFinalized { slot }) => {
+                    storage_processed.set_finalized(slot);
+                }
                 Ok(ReadWriteSyncMessage::ConfirmedBlockPop) => blocks.pop_block(),
                 Ok(ReadWriteSyncMessage::ConfirmedBlockPush { block }) => {
                     let Some((slot, _block)) = confirmed_in_process.take() else {
@@ -171,7 +170,6 @@ async fn start2(
                         storage_files,
                         confirmed_in_process,
                         storage_processed,
-                        stored_slots,
                         None
                     ) {
                         read_requests.push(future);
@@ -196,7 +194,6 @@ async fn start2(
                     storage_files,
                     confirmed_in_process,
                     storage_processed,
-                    stored_slots,
                     Some(lock)
                 ) {
                     read_requests.push(future);
@@ -229,6 +226,7 @@ async fn read_request_get_next(
 #[derive(Debug, Default)]
 struct StorageProcessed {
     confirmed: Slot,
+    finalized: Slot,
     blocks: BTreeMap<Slot, Option<Arc<BlockWithBinary>>>,
 }
 
@@ -243,7 +241,7 @@ impl StorageProcessed {
         self.blocks.insert(slot, None);
     }
 
-    fn confirm(&mut self, slot: Slot) {
+    fn set_confirmed(&mut self, slot: Slot) {
         self.confirmed = slot;
         loop {
             match self.blocks.first_key_value() {
@@ -251,6 +249,10 @@ impl StorageProcessed {
                 _ => break,
             };
         }
+    }
+
+    fn set_finalized(&mut self, slot: Slot) {
+        self.finalized = slot;
     }
 
     fn get_processed_block_height(&self) -> Option<Slot> {
@@ -315,7 +317,6 @@ pub enum ReadRequest {
 }
 
 impl ReadRequest {
-    #[allow(clippy::too_many_arguments)]
     fn process<'a>(
         self,
         blocks: &StoredBlocksRead,
@@ -323,7 +324,6 @@ impl ReadRequest {
         storage_files: &StorageFilesRead,
         confirmed_in_process: &Option<(Slot, Option<Arc<BlockWithBinary>>)>,
         storage_processed: &StorageProcessed,
-        stored_slots: &StoredSlots,
         lock: Option<OwnedSemaphorePermit>,
     ) -> Option<LocalBoxFuture<'a, Option<Self>>> {
         match self {
@@ -410,12 +410,12 @@ impl ReadRequest {
                     }
 
                     if block_height.is_none() {
-                        commitment_slot = Some(stored_slots.confirmed_load());
+                        commitment_slot = Some(storage_processed.confirmed);
                     }
                 }
 
                 if commitment == CommitmentLevel::Finalized {
-                    commitment_slot = Some(stored_slots.first_available_load())
+                    commitment_slot = Some(storage_processed.finalized);
                 }
 
                 if let Some(mut slot) = commitment_slot {

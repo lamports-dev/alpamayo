@@ -33,6 +33,9 @@ pub enum ReadWriteSyncMessage {
         slot: Slot,
         block: Option<Arc<BlockWithBinary>>,
     },
+    SlotFinalized {
+        slot: Slot,
+    },
     // confirmed/finalized block removed from the storage
     ConfirmedBlockPop,
     // confirmed block added to storage

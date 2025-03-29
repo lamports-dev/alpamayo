@@ -267,7 +267,10 @@ async fn start2(
                                     let _ = sync_tx.send(ReadWriteSyncMessage::BlockDead { slot });
                                 },
                                 StreamSourceSlotStatus::Confirmed => storage_memory.set_confirmed(slot),
-                                StreamSourceSlotStatus::Finalized => stored_slots.finalized_store(slot),
+                                StreamSourceSlotStatus::Finalized => {
+                                    stored_slots.finalized_store(slot);
+                                    let _ = sync_tx.send(ReadWriteSyncMessage::SlotFinalized { slot });
+                                },
                             }
                         }
                     }
