@@ -168,7 +168,7 @@ impl ColumnName for TransactionIndex {
 }
 
 impl TransactionIndex {
-    pub fn key(signature: &Signature) -> [u8; 8] {
+    pub fn encode(signature: &Signature) -> [u8; 8] {
         let hash = HASHER.with(|hasher| hasher.hash_one(signature));
         hash.to_be_bytes()
     }
@@ -205,10 +205,18 @@ impl ColumnName for SfaIndex {
 }
 
 impl SfaIndex {
-    pub fn key(address: &Pubkey) -> [u8; 8] {
+    pub fn encode(address: &Pubkey, slot: Slot) -> [u8; 16] {
         let hash = HASHER.with(|hasher| hasher.hash_one(address));
-        hash.to_be_bytes()
+        let mut key = [0; 16];
+        key[0..8].copy_from_slice(&hash.to_be_bytes());
+        key[8..].copy_from_slice(&slot.to_be_bytes());
+        key
     }
+}
+
+#[derive(Debug)]
+pub struct SfaIndexValue {
+    //
 }
 
 #[derive(Debug, Clone)]
@@ -374,7 +382,7 @@ impl RocksdbWrite {
                         .encode(&mut buf);
                         batch.put_cf(
                             Rocksdb::cf_handle::<TransactionIndex>(&db),
-                            tx_offset.hash,
+                            tx_offset.key,
                             &buf,
                         );
                     }
@@ -385,7 +393,8 @@ impl RocksdbWrite {
                 WriteRequest::SlotAdd { slot, data, tx } => {
                     let mut batch = WriteBatch::with_capacity_bytes(32 * 1024); // 32KiB
 
-                    let block = if let Some((block, storage_id, offset)) = data {
+                    buf.clear();
+                    if let Some((block, storage_id, offset)) = data {
                         SlotIndexValue {
                             dead: false,
                             block_time: block.block_time,
@@ -393,16 +402,15 @@ impl RocksdbWrite {
                             storage_id,
                             offset,
                             size: block.protobuf.len() as u64,
-                            transactions: block.txs_offset.iter().map(|txo| txo.hash).collect(),
+                            transactions: block.txs_offset.iter().map(|txo| txo.key).collect(),
                         }
                     } else {
                         SlotIndexValue {
                             dead: true,
                             ..Default::default()
                         }
-                    };
-                    buf.clear();
-                    block.encode(&mut buf);
+                    }
+                    .encode(&mut buf);
                     batch.put_cf(
                         Rocksdb::cf_handle::<SlotIndex>(&db),
                         SlotIndex::key(slot),
@@ -587,7 +595,7 @@ impl RocksdbRead {
                 ReadRequest::Transaction { signature, tx } => {
                     let result = match db.get_pinned_cf(
                         Rocksdb::cf_handle::<TransactionIndex>(&db),
-                        TransactionIndex::key(&signature),
+                        TransactionIndex::encode(&signature),
                     ) {
                         Ok(Some(slice)) => TransactionIndexValue::decode(slice.as_ref()).map(Some),
                         Ok(None) => Ok(None),

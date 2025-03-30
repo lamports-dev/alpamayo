@@ -1,23 +1,23 @@
 use {
     crate::{source::sfa::SignatureForAddress, storage::rocksdb::TransactionIndex},
     prost::Message as _,
-    solana_sdk::signature::Signature,
+    solana_sdk::{clock::Slot, signature::Signature},
     solana_storage_proto::convert::generated,
     solana_transaction_status::{TransactionWithStatusMeta, extract_and_fmt_memos},
 };
 
 #[derive(Debug)]
 pub struct TransactionWithBinary {
-    pub hash: [u8; 8],
+    pub key: [u8; 8],
     pub signature: Signature,
     pub sfa: Vec<SignatureForAddress>,
     pub protobuf: Vec<u8>,
 }
 
 impl TransactionWithBinary {
-    pub fn new(tx: TransactionWithStatusMeta) -> Self {
+    pub fn new(slot: Slot, tx: TransactionWithStatusMeta) -> Self {
         let signature = *tx.transaction_signature();
-        let hash = TransactionIndex::key(&signature);
+        let key = TransactionIndex::encode(&signature);
 
         let sfa = match &tx {
             TransactionWithStatusMeta::MissingMetadata(_) => vec![],
@@ -27,6 +27,7 @@ impl TransactionWithBinary {
                 let mut sfa = Vec::with_capacity(account_keys.len());
                 for pubkey in account_keys.iter() {
                     sfa.push(SignatureForAddress::new(
+                        slot,
                         *pubkey,
                         signature,
                         tx.meta.status.clone().err(),
@@ -40,7 +41,7 @@ impl TransactionWithBinary {
         let protobuf = generated::ConfirmedTransaction::from(tx).encode_to_vec();
 
         Self {
-            hash,
+            key,
             signature,
             sfa,
             protobuf,

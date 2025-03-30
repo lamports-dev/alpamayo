@@ -1,11 +1,13 @@
 use {
     crate::storage::rocksdb::SfaIndex,
-    solana_sdk::{pubkey::Pubkey, signature::Signature, transaction::TransactionError},
+    solana_sdk::{
+        clock::Slot, pubkey::Pubkey, signature::Signature, transaction::TransactionError,
+    },
 };
 
 #[derive(Debug)]
 pub struct SignatureForAddress {
-    pub hash: [u8; 8],
+    pub key: [u8; 16],
     pub address: Pubkey,
     pub signature: Signature,
     pub err: Option<TransactionError>,
@@ -14,15 +16,14 @@ pub struct SignatureForAddress {
 
 impl SignatureForAddress {
     pub fn new(
+        slot: Slot,
         address: Pubkey,
         signature: Signature,
         err: Option<TransactionError>,
         memo: Option<String>,
     ) -> Self {
-        let hash = SfaIndex::key(&address);
-
         Self {
-            hash,
+            key: SfaIndex::encode(&address, slot),
             address,
             signature,
             err,
@@ -33,7 +34,7 @@ impl SignatureForAddress {
 
 #[derive(Debug)]
 pub struct SignaturesForAddress {
-    pub hash: [u8; 8],
+    pub key: [u8; 16],
     pub address: Pubkey,
     pub signatures: Vec<SignatureStatus>,
 }
@@ -41,7 +42,7 @@ pub struct SignaturesForAddress {
 impl SignaturesForAddress {
     pub fn new(sfa: SignatureForAddress) -> Self {
         Self {
-            hash: sfa.hash,
+            key: sfa.key,
             address: sfa.address,
             signatures: vec![SignatureStatus {
                 signature: sfa.signature,

@@ -376,7 +376,7 @@ impl Stream for StreamSource {
 
                                     slot_info
                                         .transactions
-                                        .push((index, TransactionWithBinary::new(tx)));
+                                        .push((index, TransactionWithBinary::new(slot, tx)));
                                     if let Some(first_processed) = first_processed {
                                         if slot <= first_processed {
                                             continue;

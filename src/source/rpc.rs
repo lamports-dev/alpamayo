@@ -165,7 +165,7 @@ impl RpcSource {
             block
                 .transactions
                 .into_iter()
-                .map(TransactionWithBinary::new)
+                .map(|tx| TransactionWithBinary::new(slot, tx))
                 .collect(),
             block.rewards,
             block.num_partitions,

@@ -21,7 +21,7 @@ use {
 
 #[derive(Debug, Clone, Copy)]
 pub struct BlockTransactionOffset {
-    pub hash: [u8; 8],
+    pub key: [u8; 8],
     pub offset: u64,
     pub size: u64,
 }
@@ -34,7 +34,7 @@ pub struct BlockWithBinary {
     pub protobuf: Vec<u8>,
     pub txs_offset: Vec<BlockTransactionOffset>,
     pub transactions: HashMap<Signature, TransactionWithBinary>,
-    pub sfa: HashMap<[u8; 8], SignaturesForAddress>,
+    pub sfa: HashMap<[u8; 16], SignaturesForAddress>,
 }
 
 impl BlockWithBinary {
@@ -62,10 +62,10 @@ impl BlockWithBinary {
         }
         .encode_with_tx_offsets();
 
-        let mut sfa = HashMap::<[u8; 8], SignaturesForAddress>::new();
+        let mut sfa = HashMap::<[u8; 16], SignaturesForAddress>::new();
         for tx in transactions.iter_mut().rev() {
             for tx_sfa in tx.sfa.drain(..) {
-                match sfa.entry(tx_sfa.hash) {
+                match sfa.entry(tx_sfa.key) {
                     HashMapEntry::Occupied(mut entry) => {
                         entry.get_mut().merge(tx_sfa);
                     }
@@ -125,7 +125,7 @@ impl ConfirmedBlockProtoRef<'_> {
             let offset = buf.len() as u64;
             buf.put_slice(&tx.protobuf);
             offsets.push(BlockTransactionOffset {
-                hash: tx.hash,
+                key: tx.key,
                 offset,
                 size: tx.protobuf.len() as u64,
             });
