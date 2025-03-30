@@ -22,6 +22,7 @@ use {
     },
     solana_sdk::{
         clock::{Slot, UnixTimestamp},
+        pubkey::Pubkey,
         signature::Signature,
     },
     std::{
@@ -31,6 +32,10 @@ use {
     },
     tokio::sync::{broadcast, oneshot},
 };
+
+thread_local! {
+    static HASHER: SeedableRandomState = SeedableRandomState::fixed();
+}
 
 trait ColumnName {
     const NAME: &'static str;
@@ -164,10 +169,6 @@ impl ColumnName for TransactionIndex {
 
 impl TransactionIndex {
     pub fn key(signature: &Signature) -> [u8; 8] {
-        thread_local! {
-            static HASHER: SeedableRandomState = SeedableRandomState::fixed();
-        }
-
         let hash = HASHER.with(|hasher| hasher.hash_one(signature));
         hash.to_be_bytes()
     }
@@ -193,6 +194,20 @@ impl TransactionIndexValue {
             offset: decode_varint(&mut slice).context("failed to decode offset")?,
             size: decode_varint(&mut slice).context("failed to decode size")?,
         })
+    }
+}
+
+#[derive(Debug)]
+pub struct SfaIndex;
+
+impl ColumnName for SfaIndex {
+    const NAME: &'static str = "sfa_index";
+}
+
+impl SfaIndex {
+    pub fn key(address: &Pubkey) -> [u8; 8] {
+        let hash = HASHER.with(|hasher| hasher.hash_one(address));
+        hash.to_be_bytes()
     }
 }
 
