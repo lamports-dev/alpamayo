@@ -24,13 +24,16 @@ use {
     serde::{Deserialize, de},
     solana_rpc_client_api::{
         config::{
-            RpcBlockConfig, RpcContextConfig, RpcEncodingConfigWrapper, RpcTransactionConfig,
+            RpcBlockConfig, RpcContextConfig, RpcEncodingConfigWrapper,
+            RpcSignaturesForAddressConfig, RpcTransactionConfig,
         },
         custom_error::RpcCustomError,
+        request::MAX_GET_CONFIRMED_SIGNATURES_FOR_ADDRESS2_LIMIT,
     },
     solana_sdk::{
         clock::{Slot, UnixTimestamp},
         commitment_config::{CommitmentConfig, CommitmentLevel},
+        pubkey::Pubkey,
         signature::Signature,
     },
     solana_storage_proto::convert::generated,
@@ -92,6 +95,7 @@ fn jsonrpc_response_error(
 struct SupportedCalls {
     get_block: bool,
     get_block_height: bool,
+    get_signatures_for_address: bool,
     get_slot: bool,
     get_transaction: bool,
 }
@@ -101,6 +105,10 @@ impl SupportedCalls {
         Ok(Self {
             get_block: Self::check_call_support(calls, ConfigRpcCall::GetBlock)?,
             get_block_height: Self::check_call_support(calls, ConfigRpcCall::GetBlockHeight)?,
+            get_signatures_for_address: Self::check_call_support(
+                calls,
+                ConfigRpcCall::GetSignaturesForAddress,
+            )?,
             get_slot: Self::check_call_support(calls, ConfigRpcCall::GetSlot)?,
             get_transaction: Self::check_call_support(calls, ConfigRpcCall::GetTransaction)?,
         })
@@ -307,6 +315,52 @@ impl RpcRequest {
                     commitment,
                 }))
             }
+            "getSignaturesForAddress" if state.supported_calls.get_signatures_for_address => {
+                #[derive(Debug, Deserialize)]
+                struct ReqParams {
+                    address: String,
+                    #[serde(default)]
+                    config: Option<RpcSignaturesForAddressConfig>,
+                }
+
+                let (id, ReqParams { address, config }) = Self::parse_params(request)?;
+                let RpcSignaturesForAddressConfig {
+                    before,
+                    until,
+                    limit,
+                    commitment,
+                    min_context_slot,
+                } = config.unwrap_or_default();
+
+                let (address, before, until, limit) =
+                    match Self::verify_and_parse_signatures_for_address_params(
+                        address, before, until, limit,
+                    ) {
+                        Ok(value) => value,
+                        Err(error) => return Err(Self::response_error(id, error)),
+                    };
+
+                let commitment = commitment.unwrap_or_default();
+                if let Err(error) = Self::check_is_at_least_confirmed(commitment) {
+                    return Err(Self::response_error(id, error));
+                }
+
+                if let Some(min_context_slot) = min_context_slot {
+                    let slot = match commitment.commitment {
+                        CommitmentLevel::Processed => unreachable!(),
+                        CommitmentLevel::Confirmed => state.stored_slots.confirmed_load(),
+                        CommitmentLevel::Finalized => state.stored_slots.finalized_load(),
+                    };
+                    if slot < min_context_slot {
+                        return Err(jsonrpc_response_error(
+                            id.into_owned(),
+                            RpcCustomError::MinContextSlotNotReached { context_slot: slot },
+                        ));
+                    }
+                }
+
+                todo!()
+            }
             "getSlot" if state.supported_calls.get_slot => {
                 #[derive(Debug, Deserialize)]
                 struct ReqParams {
@@ -420,6 +474,42 @@ impl RpcRequest {
                 None,
             )
         })
+    }
+
+    fn verify_pubkey(input: &str) -> Result<Pubkey, ErrorObjectOwned> {
+        input.parse().map_err(|error| {
+            ErrorObject::owned::<()>(
+                ErrorCode::InvalidParams.code(),
+                format!("Invalid param: {error:?}"),
+                None,
+            )
+        })
+    }
+
+    fn verify_and_parse_signatures_for_address_params(
+        address: String,
+        before: Option<String>,
+        until: Option<String>,
+        limit: Option<usize>,
+    ) -> Result<(Pubkey, Option<Signature>, Option<Signature>, usize), ErrorObjectOwned> {
+        let address = Self::verify_pubkey(&address)?;
+        let before = before
+            .map(|ref before| Self::verify_signature(before))
+            .transpose()?;
+        let until = until
+            .map(|ref until| Self::verify_signature(until))
+            .transpose()?;
+        let limit = limit.unwrap_or(MAX_GET_CONFIRMED_SIGNATURES_FOR_ADDRESS2_LIMIT);
+
+        if limit == 0 || limit > MAX_GET_CONFIRMED_SIGNATURES_FOR_ADDRESS2_LIMIT {
+            Err(ErrorObject::owned::<()>(
+                ErrorCode::InvalidParams.code(),
+                format!("Invalid limit; max {MAX_GET_CONFIRMED_SIGNATURES_FOR_ADDRESS2_LIMIT}"),
+                None,
+            ))
+        } else {
+            Ok((address, before, until, limit))
+        }
     }
 
     fn response_error(id: Id<'_>, error: ErrorObjectOwned) -> Response<'_, serde_json::Value> {

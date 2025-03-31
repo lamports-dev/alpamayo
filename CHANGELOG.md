@@ -23,5 +23,6 @@ The minor version will be incremented upon a breaking change and the patch versi
 - storage: add multiple readers ([#4](https://github.com/lamports-dev/alpamayo/pull/4))
 - storage: support getTransaction ([#7](https://github.com/lamports-dev/alpamayo/pull/7))
 - storage: support getBlockHeight ([#9](https://github.com/lamports-dev/alpamayo/pull/9))
+- storage: support getSignaturesForAddress ([#10](https://github.com/lamports-dev/alpamayo/pull/10))
 
 ### Breaking

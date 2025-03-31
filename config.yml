@@ -61,6 +61,7 @@ rpc:
   calls:
     - getBlock
     - getBlockHeight
+    - getSignaturesForAddress
     - getSlot
     - getTransaction
   request_channel_capacity: 4096
