@@ -8,6 +8,7 @@ use {
 #[derive(Debug)]
 pub struct SignatureForAddress {
     pub key: [u8; 16],
+    pub address_hash: [u8; 8],
     pub address: Pubkey,
     pub signature: Signature,
     pub err: Option<TransactionError>,
@@ -24,6 +25,7 @@ impl SignatureForAddress {
     ) -> Self {
         Self {
             key: SfaIndex::encode(&address, slot),
+            address_hash: SfaIndex::address_hash(&address),
             address,
             signature,
             err,
@@ -35,7 +37,7 @@ impl SignatureForAddress {
 #[derive(Debug)]
 pub struct SignaturesForAddress {
     pub key: [u8; 16],
-    pub address: Pubkey,
+    pub address_hash: [u8; 8],
     pub signatures: Vec<SignatureStatus>,
 }
 
@@ -43,7 +45,7 @@ impl SignaturesForAddress {
     pub fn new(sfa: SignatureForAddress) -> Self {
         Self {
             key: sfa.key,
-            address: sfa.address,
+            address_hash: sfa.address_hash,
             signatures: vec![SignatureStatus {
                 signature: sfa.signature,
                 err: sfa.err,
@@ -61,7 +63,7 @@ impl SignaturesForAddress {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SignatureStatus {
     pub signature: Signature,
     pub err: Option<TransactionError>,

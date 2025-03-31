@@ -1,7 +1,7 @@
 use {
     crate::{
         config::ConfigStorageRocksdb,
-        source::block::BlockWithBinary,
+        source::{block::BlockWithBinary, sfa::SignatureStatus},
         storage::{
             blocks::{StoredBlock, StoredBlocksWrite},
             files::{StorageFilesWrite, StorageId},
@@ -26,6 +26,7 @@ use {
         signature::Signature,
     },
     std::{
+        borrow::Cow,
         hash::BuildHasher,
         sync::{Arc, Mutex, mpsc},
         thread::{Builder, JoinHandle},
@@ -70,6 +71,7 @@ pub struct SlotIndexValue {
     pub offset: u64,
     pub size: u64,
     pub transactions: Vec<[u8; 8]>,
+    pub sfa: Vec<[u8; 8]>,
 }
 
 impl SlotIndexValue {
@@ -100,12 +102,17 @@ impl SlotIndexValue {
         encode_varint(self.storage_id as u64, buf);
         encode_varint(self.offset, buf);
         encode_varint(self.size, buf);
+        encode_varint(self.transactions.len() as u64, buf);
         for hash in self.transactions.iter() {
+            buf.extend_from_slice(hash);
+        }
+        encode_varint(self.sfa.len() as u64, buf);
+        for hash in self.sfa.iter() {
             buf.extend_from_slice(hash);
         }
     }
 
-    fn decode(mut slice: &[u8], decode_transactions: bool) -> anyhow::Result<Self> {
+    fn decode(mut slice: &[u8], decode_indexes: bool) -> anyhow::Result<Self> {
         let flags =
             SlotIndexValueFlags::from_bits(slice.try_get_u8().context("failed to read flags")?)
                 .context("invalid flags")?;
@@ -136,14 +143,35 @@ impl SlotIndexValue {
             offset: decode_varint(&mut slice).context("failed to read offset")?,
             size: decode_varint(&mut slice).context("failed to read size")?,
             transactions: {
-                anyhow::ensure!(slice.len() % 8 == 0, "invalid size of transactions");
-                if decode_transactions {
-                    let mut transactions = Vec::with_capacity(slice.len() / 8);
-                    for i in 0..slice.len() / 8 {
+                if decode_indexes {
+                    let mut transactions = Vec::with_capacity(
+                        decode_varint(&mut slice)
+                            .context("failed to read transactions size")?
+                            .try_into()
+                            .context("failed to convert transactions size")?,
+                    );
+                    for i in 0..transactions.capacity() {
                         let hash = slice[i * 8..(i + 1) * 8].try_into().expect("valid slice");
                         transactions.push(hash);
                     }
                     transactions
+                } else {
+                    vec![]
+                }
+            },
+            sfa: {
+                if decode_indexes {
+                    let mut sfa = Vec::with_capacity(
+                        decode_varint(&mut slice)
+                            .context("failed to read sfa size")?
+                            .try_into()
+                            .context("failed to convert sfa size")?,
+                    );
+                    for i in 0..sfa.capacity() {
+                        let hash = slice[i * 8..(i + 1) * 8].try_into().expect("valid slice");
+                        sfa.push(hash);
+                    }
+                    sfa
                 } else {
                     vec![]
                 }
@@ -205,18 +233,51 @@ impl ColumnName for SfaIndex {
 }
 
 impl SfaIndex {
+    pub fn address_hash(address: &Pubkey) -> [u8; 8] {
+        HASHER.with(|hasher| hasher.hash_one(address)).to_be_bytes()
+    }
+
     pub fn encode(address: &Pubkey, slot: Slot) -> [u8; 16] {
-        let hash = HASHER.with(|hasher| hasher.hash_one(address));
         let mut key = [0; 16];
-        key[0..8].copy_from_slice(&hash.to_be_bytes());
+        key[0..8].copy_from_slice(&Self::address_hash(address));
         key[8..].copy_from_slice(&slot.to_be_bytes());
         key
     }
 }
 
 #[derive(Debug)]
-pub struct SfaIndexValue {
-    //
+pub struct SfaIndexValue<'a> {
+    signatures: Cow<'a, [SignatureStatus]>,
+}
+
+impl SfaIndexValue<'_> {
+    fn encode(&self, buf: &mut Vec<u8>) {
+        for sig in self.signatures.iter() {
+            let mut fields = SfaIndexValueFlags::empty();
+            if sig.err.is_some() {
+                fields |= SfaIndexValueFlags::ERR;
+            }
+            if sig.memo.is_some() {
+                fields |= SfaIndexValueFlags::MEMO;
+            }
+            buf.push(fields.bits());
+
+            buf.extend_from_slice(sig.signature.as_ref());
+            if let Some(err) = &sig.err {
+                buf.extend_from_slice(&bincode::serialize(err).expect("bincode never fail"));
+            }
+            if let Some(memo) = &sig.memo {
+                buf.extend_from_slice(memo.as_ref());
+            }
+        }
+    }
+}
+
+bitflags! {
+    struct SfaIndexValueFlags: u8 {
+        const ERR =  0b00000001;
+        const MEMO = 0b00000010;
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -323,6 +384,7 @@ impl Rocksdb {
         vec![
             Self::cf_descriptor::<SlotIndex>(),
             Self::cf_descriptor::<TransactionIndex>(),
+            Self::cf_descriptor::<SfaIndex>(),
         ]
     }
 
@@ -338,7 +400,7 @@ impl Rocksdb {
 
 #[derive(Debug)]
 enum WriteRequest {
-    Transactions {
+    TxSfaIndex {
         slot: Slot,
         block: Arc<BlockWithBinary>,
         tx: oneshot::Sender<anyhow::Result<()>>,
@@ -370,8 +432,9 @@ impl RocksdbWrite {
             };
 
             match request {
-                WriteRequest::Transactions { slot, block, tx } => {
-                    let mut batch = WriteBatch::with_capacity_bytes(256 * 1024); // 256KiB
+                WriteRequest::TxSfaIndex { slot, block, tx } => {
+                    let ts = std::time::Instant::now();
+                    let mut batch = WriteBatch::with_capacity_bytes(2 * 1024 * 1024); // 2MiB
                     for tx_offset in block.txs_offset.iter() {
                         buf.clear();
                         TransactionIndexValue {
@@ -386,13 +449,21 @@ impl RocksdbWrite {
                             &buf,
                         );
                     }
+                    for (key, sfa) in block.sfa.iter() {
+                        buf.clear();
+                        SfaIndexValue {
+                            signatures: Cow::Borrowed(sfa.signatures.as_slice()),
+                        }
+                        .encode(&mut buf);
+                        batch.put_cf(Rocksdb::cf_handle::<SfaIndex>(&db), key, &buf);
+                    }
+                    tracing::info!(len = batch.len(), size = batch.size_in_bytes(), elapsed = ?ts.elapsed(), "TxSfaIndex");
                     if tx.send(db.write(batch).map_err(Into::into)).is_err() {
                         break;
                     }
                 }
                 WriteRequest::SlotAdd { slot, data, tx } => {
-                    let mut batch = WriteBatch::with_capacity_bytes(32 * 1024); // 32KiB
-
+                    let ts = std::time::Instant::now();
                     buf.clear();
                     if let Some((block, storage_id, offset)) = data {
                         SlotIndexValue {
@@ -403,6 +474,7 @@ impl RocksdbWrite {
                             offset,
                             size: block.protobuf.len() as u64,
                             transactions: block.txs_offset.iter().map(|txo| txo.key).collect(),
+                            sfa: block.sfa.values().map(|sfa| sfa.address_hash).collect(),
                         }
                     } else {
                         SlotIndexValue {
@@ -411,13 +483,14 @@ impl RocksdbWrite {
                         }
                     }
                     .encode(&mut buf);
-                    batch.put_cf(
+                    tracing::info!(size = buf.len(), elapsed = ?ts.elapsed(), "SlotAdd");
+
+                    let result = db.put_cf(
                         Rocksdb::cf_handle::<SlotIndex>(&db),
                         SlotIndex::key(slot),
                         &buf,
                     );
-
-                    if tx.send(db.write(batch).map_err(Into::into)).is_err() {
+                    if tx.send(result.map_err(Into::into)).is_err() {
                         break;
                     }
                 }
@@ -437,7 +510,7 @@ impl RocksdbWrite {
             .ok_or_else(|| anyhow::anyhow!("existed slot {slot} not found"))?;
         let value = SlotIndexValue::decode(&value, true).context("failed to decode slot data")?;
 
-        let mut batch = WriteBatch::with_capacity_bytes(32 * 1024); // 32KiB
+        let mut batch = WriteBatch::with_capacity_bytes(128 * 1024); // 128KiB
         batch.delete_cf(Rocksdb::cf_handle::<SlotIndex>(db), SlotIndex::key(slot));
         for tx in value.transactions {
             batch.delete_cf(Rocksdb::cf_handle::<TransactionIndex>(db), tx);
@@ -478,7 +551,7 @@ impl RocksdbWrite {
         };
 
         // 1) store block in file
-        // 2) tx-index in db
+        // 2) tx and sfa index in db
         let mut buffer = block.protobuf.clone();
         let ((storage_id, offset, buffer, blocks), block) = tokio::try_join!(
             async move {
@@ -496,14 +569,14 @@ impl RocksdbWrite {
             async move {
                 let (tx, rx) = oneshot::channel();
                 self.req_tx
-                    .send(WriteRequest::Transactions {
+                    .send(WriteRequest::TxSfaIndex {
                         slot,
                         block: Arc::clone(&block),
                         tx,
                     })
-                    .context("failed to send WriteRequest::Transactions request")?;
+                    .context("failed to send WriteRequest::TxSfaIndex request")?;
                 rx.await
-                    .context("failed to get WriteRequest::Transactions request result")??;
+                    .context("failed to get WriteRequest::TxSfaIndex request result")??;
                 Ok::<_, anyhow::Error>(block)
             }
         )?;

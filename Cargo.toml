@@ -14,6 +14,7 @@ publish = false
 affinity = "0.1.2"
 anyhow = "1.0.96"
 base64 = "0.22.1"
+bincode = "1.3.3"
 bitflags = "2.9.0"
 bs58 = "0.5.1"
 clap = { version = "4.5.30", features = ["derive"] }

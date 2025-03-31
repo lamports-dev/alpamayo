@@ -119,6 +119,7 @@ dependencies = [
  "affinity",
  "anyhow",
  "base64 0.22.1",
+ "bincode",
  "bitflags 2.9.0",
  "bs58",
  "cargo-lock",
