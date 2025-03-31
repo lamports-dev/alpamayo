@@ -237,11 +237,15 @@ impl SfaIndex {
         HASHER.with(|hasher| hasher.hash_one(address)).to_be_bytes()
     }
 
-    pub fn encode(address: &Pubkey, slot: Slot) -> [u8; 16] {
+    pub fn concat(address_hash: [u8; 8], slot: Slot) -> [u8; 16] {
         let mut key = [0; 16];
-        key[0..8].copy_from_slice(&Self::address_hash(address));
+        key[0..8].copy_from_slice(&address_hash);
         key[8..].copy_from_slice(&slot.to_be_bytes());
         key
+    }
+
+    pub fn encode(address: &Pubkey, slot: Slot) -> [u8; 16] {
+        Self::concat(Self::address_hash(address), slot)
     }
 }
 
@@ -270,6 +274,51 @@ impl SfaIndexValue<'_> {
                 buf.extend_from_slice(memo.as_ref());
             }
         }
+    }
+
+    fn decode(mut slice: &[u8]) -> anyhow::Result<Self> {
+        let mut sigs = vec![];
+        while !slice.is_empty() {
+            let flags =
+                SfaIndexValueFlags::from_bits(slice.try_get_u8().context("failed to read flags")?)
+                    .context("invalid flags")?;
+
+            let mut signature = [0u8; 64];
+            slice
+                .try_copy_to_slice(&mut signature)
+                .context("failed to read signature")?;
+
+            let err = if flags.contains(SfaIndexValueFlags::ERR) {
+                let size = decode_varint(&mut slice).context("failed to decode err size")? as usize;
+                anyhow::ensure!(slice.remaining() >= size, "not enough bytes for memo");
+                let err = bincode::deserialize(&slice[0..size]).context("failed to decode err")?;
+                slice.advance(size);
+                Some(err)
+            } else {
+                None
+            };
+
+            let memo = if flags.contains(SfaIndexValueFlags::MEMO) {
+                let size =
+                    decode_varint(&mut slice).context("failed to decode memo size")? as usize;
+                anyhow::ensure!(slice.remaining() >= size, "not enough bytes for memo");
+                let memo =
+                    String::from_utf8(slice[0..size].to_vec()).context("expect utf8 memo")?;
+                slice.advance(size);
+                Some(memo)
+            } else {
+                None
+            };
+
+            sigs.push(SignatureStatus {
+                signature: signature.into(),
+                err,
+                memo,
+            });
+        }
+        Ok(Self {
+            signatures: Cow::Owned(sigs),
+        })
     }
 }
 
@@ -512,8 +561,14 @@ impl RocksdbWrite {
 
         let mut batch = WriteBatch::with_capacity_bytes(128 * 1024); // 128KiB
         batch.delete_cf(Rocksdb::cf_handle::<SlotIndex>(db), SlotIndex::key(slot));
-        for tx in value.transactions {
-            batch.delete_cf(Rocksdb::cf_handle::<TransactionIndex>(db), tx);
+        for hash in value.transactions {
+            batch.delete_cf(Rocksdb::cf_handle::<TransactionIndex>(db), hash);
+        }
+        for hash in value.sfa {
+            batch.delete_cf(
+                Rocksdb::cf_handle::<SfaIndex>(db),
+                SfaIndex::concat(hash, slot),
+            );
         }
         db.write(batch).map_err(Into::into)
     }
