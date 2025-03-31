@@ -241,6 +241,7 @@ enum RpcRequest {
     Block(RpcRequestBlock),
     BlockHeight(RpcRequestBlockHeight),
     Transaction(RpcRequestTransaction),
+    SignaturesForAddress(RpcRequestSignaturesForAddress),
 }
 
 impl RpcRequest {
@@ -359,7 +360,14 @@ impl RpcRequest {
                     }
                 }
 
-                todo!()
+                Ok(Self::SignaturesForAddress(RpcRequestSignaturesForAddress {
+                    id: id.into_owned(),
+                    commitment,
+                    address,
+                    before,
+                    until,
+                    limit,
+                }))
             }
             "getSlot" if state.supported_calls.get_slot => {
                 #[derive(Debug, Deserialize)]
@@ -533,6 +541,7 @@ impl RpcRequest {
             Self::Block(request) => request.process(state, upstream_disabled).await,
             Self::BlockHeight(request) => request.process(state).await,
             Self::Transaction(request) => request.process(state, upstream_disabled).await,
+            Self::SignaturesForAddress(request) => request.process(state, upstream_disabled).await,
         }
     }
 
@@ -945,5 +954,23 @@ impl RpcRequestTransactionWorkRequest {
         let data = serde_json::to_value(&tx).expect("json serialization never fail");
 
         Ok(RpcRequest::response_success(self.id, data))
+    }
+}
+
+#[derive(Debug)]
+struct RpcRequestSignaturesForAddress {
+    id: Id<'static>,
+    commitment: CommitmentConfig,
+    address: Pubkey,
+    before: Option<Signature>,
+    until: Option<Signature>,
+    limit: usize,
+}
+
+impl RpcRequestSignaturesForAddress {
+    async fn process(self, state: Arc<State>, upstream_disabled: bool) -> RpcRequestResult {
+        let deadline = Instant::now() + state.request_timeout;
+
+        todo!()
     }
 }
