@@ -16,7 +16,8 @@ use {
     },
     solana_sdk::{
         clock::{Slot, UnixTimestamp},
-        commitment_config::CommitmentLevel,
+        commitment_config::CommitmentConfig,
+        pubkey::Pubkey,
         signature::Signature,
     },
     std::{
@@ -300,8 +301,17 @@ pub enum ReadRequest {
     },
     BlockHeight {
         deadline: Instant,
-        commitment: CommitmentLevel,
+        commitment: CommitmentConfig,
         tx: oneshot::Sender<ReadResultBlockHeight>,
+    },
+    SignaturesForAddress {
+        deadline: Instant,
+        commitment: CommitmentConfig,
+        address: Pubkey,
+        before: Option<Signature>,
+        until: Option<Signature>,
+        limit: usize,
+        tx: oneshot::Sender<()>,
     },
     Transaction {
         deadline: Instant,
@@ -396,12 +406,12 @@ impl ReadRequest {
                 let mut block_height = None;
                 let mut commitment_slot = None;
 
-                if commitment == CommitmentLevel::Processed {
+                if commitment.is_processed() {
                     block_height = storage_processed.get_processed_block_height();
                 }
 
-                if (commitment == CommitmentLevel::Confirmed)
-                    || (commitment == CommitmentLevel::Processed && block_height.is_none())
+                if commitment.is_confirmed()
+                    || (commitment.is_processed() && block_height.is_none())
                 {
                     if let Some((_confirmed_in_process_slot, Some(confirmed_in_process_block))) =
                         confirmed_in_process
@@ -414,7 +424,7 @@ impl ReadRequest {
                     }
                 }
 
-                if commitment == CommitmentLevel::Finalized {
+                if commitment.is_finalized() {
                     commitment_slot = Some(storage_processed.finalized);
                 }
 
@@ -454,6 +464,22 @@ impl ReadRequest {
                         }),
                 );
                 None
+            }
+            Self::SignaturesForAddress {
+                deadline,
+                commitment,
+                address,
+                before,
+                until,
+                limit,
+                tx,
+            } => {
+                if deadline < Instant::now() {
+                    // let _ = tx.send(ReadResultTransaction::Timeout);
+                    return None;
+                }
+
+                todo!()
             }
             Self::Transaction {
                 deadline,

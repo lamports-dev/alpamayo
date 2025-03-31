@@ -240,8 +240,8 @@ impl<'a> RpcRequests<'a> {
 enum RpcRequest {
     Block(RpcRequestBlock),
     BlockHeight(RpcRequestBlockHeight),
-    Transaction(RpcRequestTransaction),
     SignaturesForAddress(RpcRequestSignaturesForAddress),
+    Transaction(RpcRequestTransaction),
 }
 
 impl RpcRequest {
@@ -295,8 +295,8 @@ impl RpcRequest {
                     min_context_slot,
                 } = config.unwrap_or_default();
 
-                let commitment = commitment.unwrap_or_default().commitment;
-                let slot = match commitment {
+                let commitment = commitment.unwrap_or_default();
+                let slot = match commitment.commitment {
                     CommitmentLevel::Processed => state.stored_slots.processed_load(),
                     CommitmentLevel::Confirmed => state.stored_slots.confirmed_load(),
                     CommitmentLevel::Finalized => state.stored_slots.finalized_load(),
@@ -749,7 +749,7 @@ impl RpcRequestBlockWorkRequest {
 
 struct RpcRequestBlockHeight {
     id: Id<'static>,
-    commitment: CommitmentLevel,
+    commitment: CommitmentConfig,
 }
 
 impl RpcRequestBlockHeight {
@@ -782,6 +782,46 @@ impl RpcRequestBlockHeight {
             self.id,
             serde_json::json!(block_height),
         ))
+    }
+}
+
+#[derive(Debug)]
+struct RpcRequestSignaturesForAddress {
+    id: Id<'static>,
+    commitment: CommitmentConfig,
+    address: Pubkey,
+    before: Option<Signature>,
+    until: Option<Signature>,
+    limit: usize,
+}
+
+impl RpcRequestSignaturesForAddress {
+    async fn process(self, state: Arc<State>, upstream_disabled: bool) -> RpcRequestResult {
+        let deadline = Instant::now() + state.request_timeout;
+
+        // request
+        let (tx, rx) = oneshot::channel();
+        anyhow::ensure!(
+            state
+                .requests_tx
+                .send(ReadRequest::SignaturesForAddress {
+                    deadline,
+                    commitment: self.commitment,
+                    address: self.address,
+                    before: self.before,
+                    until: self.until,
+                    limit: self.limit,
+                    tx,
+                })
+                .await
+                .is_ok(),
+            "request channel is closed"
+        );
+        let Ok(result) = rx.await else {
+            anyhow::bail!("rx channel is closed");
+        };
+
+        todo!()
     }
 }
 
@@ -954,23 +994,5 @@ impl RpcRequestTransactionWorkRequest {
         let data = serde_json::to_value(&tx).expect("json serialization never fail");
 
         Ok(RpcRequest::response_success(self.id, data))
-    }
-}
-
-#[derive(Debug)]
-struct RpcRequestSignaturesForAddress {
-    id: Id<'static>,
-    commitment: CommitmentConfig,
-    address: Pubkey,
-    before: Option<Signature>,
-    until: Option<Signature>,
-    limit: usize,
-}
-
-impl RpcRequestSignaturesForAddress {
-    async fn process(self, state: Arc<State>, upstream_disabled: bool) -> RpcRequestResult {
-        let deadline = Instant::now() + state.request_timeout;
-
-        todo!()
     }
 }
