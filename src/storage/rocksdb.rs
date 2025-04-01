@@ -143,39 +143,35 @@ impl SlotIndexValue {
                 .context("failed to convert storage id")?,
             offset: decode_varint(&mut slice).context("failed to read offset")?,
             size: decode_varint(&mut slice).context("failed to read size")?,
-            transactions: {
-                if decode_indexes {
-                    let mut transactions = Vec::with_capacity(
-                        decode_varint(&mut slice)
-                            .context("failed to read transactions size")?
-                            .try_into()
-                            .context("failed to convert transactions size")?,
-                    );
-                    for i in 0..transactions.capacity() {
-                        let hash = slice[i * 8..(i + 1) * 8].try_into().expect("valid slice");
-                        transactions.push(hash);
-                    }
-                    transactions
-                } else {
-                    vec![]
+            transactions: if decode_indexes {
+                let mut transactions = Vec::with_capacity(
+                    decode_varint(&mut slice)
+                        .context("failed to read transactions size")?
+                        .try_into()
+                        .context("failed to convert transactions size")?,
+                );
+                for i in 0..transactions.capacity() {
+                    let hash = slice[i * 8..(i + 1) * 8].try_into().expect("valid slice");
+                    transactions.push(hash);
                 }
+                transactions
+            } else {
+                vec![]
             },
-            sfa: {
-                if decode_indexes {
-                    let mut sfa = Vec::with_capacity(
-                        decode_varint(&mut slice)
-                            .context("failed to read sfa size")?
-                            .try_into()
-                            .context("failed to convert sfa size")?,
-                    );
-                    for i in 0..sfa.capacity() {
-                        let hash = slice[i * 8..(i + 1) * 8].try_into().expect("valid slice");
-                        sfa.push(hash);
-                    }
-                    sfa
-                } else {
-                    vec![]
+            sfa: if decode_indexes {
+                let mut sfa = Vec::with_capacity(
+                    decode_varint(&mut slice)
+                        .context("failed to read sfa size")?
+                        .try_into()
+                        .context("failed to convert sfa size")?,
+                );
+                for i in 0..sfa.capacity() {
+                    let hash = slice[i * 8..(i + 1) * 8].try_into().expect("valid slice");
+                    sfa.push(hash);
                 }
+                sfa
+            } else {
+                vec![]
             },
         })
     }
