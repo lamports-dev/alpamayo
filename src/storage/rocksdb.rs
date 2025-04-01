@@ -490,7 +490,6 @@ impl RocksdbWrite {
 
             match request {
                 WriteRequest::TxSfaIndex { slot, block, tx } => {
-                    let ts = std::time::Instant::now();
                     let mut batch = WriteBatch::with_capacity_bytes(2 * 1024 * 1024); // 2MiB
                     for tx_offset in block.txs_offset.iter() {
                         buf.clear();
@@ -514,13 +513,11 @@ impl RocksdbWrite {
                         .encode(&mut buf);
                         batch.put_cf(Rocksdb::cf_handle::<SfaIndex>(&db), key, &buf);
                     }
-                    tracing::info!(len = batch.len(), size = batch.size_in_bytes(), elapsed = ?ts.elapsed(), "TxSfaIndex");
                     if tx.send(db.write(batch).map_err(Into::into)).is_err() {
                         break;
                     }
                 }
                 WriteRequest::SlotAdd { slot, data, tx } => {
-                    let ts = std::time::Instant::now();
                     buf.clear();
                     if let Some((block, storage_id, offset)) = data {
                         SlotIndexValue {
@@ -540,7 +537,6 @@ impl RocksdbWrite {
                         }
                     }
                     .encode(&mut buf);
-                    tracing::info!(size = buf.len(), elapsed = ?ts.elapsed(), "SlotAdd");
 
                     let result = db.put_cf(
                         Rocksdb::cf_handle::<SlotIndex>(&db),

@@ -10,6 +10,7 @@ use {
             slots::StoredSlots,
         },
     },
+    anyhow::Context,
     crossbeam::channel::{Sender, TrySendError},
     futures::stream::{FuturesOrdered, StreamExt},
     http_body_util::{BodyExt, Full as BodyFull, Limited, combinators::BoxBody},
@@ -32,6 +33,7 @@ use {
         },
         custom_error::RpcCustomError,
         request::MAX_GET_CONFIRMED_SIGNATURES_FOR_ADDRESS2_LIMIT,
+        response::RpcConfirmedTransactionStatusWithSignature,
     },
     solana_sdk::{
         clock::{Slot, UnixTimestamp},
@@ -823,8 +825,81 @@ impl RpcRequestSignaturesForAddress {
         let Ok(result) = rx.await else {
             anyhow::bail!("rx channel is closed");
         };
+        let (mut signatures, finished, mut before) = match result {
+            ReadResultSignaturesForAddress::Timeout => anyhow::bail!("timeout"),
+            ReadResultSignaturesForAddress::Signatures {
+                signatures,
+                finished,
+                before,
+            } => (signatures, finished, before),
+            ReadResultSignaturesForAddress::ReadError(error) => {
+                anyhow::bail!("read error: {error}")
+            }
+        };
 
-        todo!()
+        if !finished && !upstream_disabled {
+            let limit = self.limit - signatures.len();
+            if !signatures.is_empty() {
+                before = signatures
+                    .last()
+                    .map(|sig| sig.signature.parse().expect("valid sig"));
+            }
+
+            match self
+                .fetch_upstream(state, upstream_disabled, deadline, before, limit)
+                .await?
+            {
+                Ok(mut sigs) => signatures.append(&mut sigs),
+                Err(error) => return Ok(error),
+            }
+        }
+
+        let data = serde_json::to_value(&signatures).expect("json serialization never fail");
+        Ok(RpcRequest::response_success(self.id, data))
+    }
+
+    async fn fetch_upstream(
+        &self,
+        state: Arc<State>,
+        upstream_disabled: bool,
+        deadline: Instant,
+        before: Option<Signature>,
+        limit: usize,
+    ) -> anyhow::Result<
+        Result<
+            Vec<RpcConfirmedTransactionStatusWithSignature>,
+            Response<'static, serde_json::Value>,
+        >,
+    > {
+        if let Some(upstream) = (!upstream_disabled)
+            .then_some(state.upstream.as_ref())
+            .flatten()
+        {
+            let response = upstream
+                .get_signatures_for_address(
+                    deadline,
+                    &self.id,
+                    self.address,
+                    before,
+                    self.until,
+                    limit,
+                    self.commitment,
+                )
+                .await?;
+
+            if let ResponsePayload::Error(_) = &response.payload {
+                return Ok(Err(response));
+            }
+
+            let ResponsePayload::Success(value) = response.payload else {
+                unreachable!();
+            };
+            serde_json::from_value(value.into_owned())
+                .context("failed to parse upstream response")
+                .map(Ok)
+        } else {
+            Ok(Ok(vec![]))
+        }
     }
 }
 

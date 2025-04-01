@@ -609,11 +609,13 @@ impl ReadRequest {
                                     lock,
                                 });
                             }
+                            // found but not satisfy commitment, return empty vec
                             Ok(Some(_index)) => ReadResultSignaturesForAddress::Signatures {
                                 signatures: vec![],
                                 finished: true,
                                 before: None,
                             },
+                            // not found, maybe upstream storage have an index
                             Ok(None) => ReadResultSignaturesForAddress::Signatures {
                                 signatures: vec![],
                                 finished: false,
@@ -682,7 +684,7 @@ impl ReadRequest {
             Self::SignaturesForAddress3 {
                 deadline,
                 signatures,
-                finished,
+                mut finished,
                 tx,
                 lock,
             } => {
@@ -719,7 +721,10 @@ impl ReadRequest {
                                 ),
                             }))
                         }
-                        _ => None,
+                        _ => {
+                            finished = false;
+                            None
+                        }
                     })
                     .collect::<Result<Vec<_>, _>>()
                     .map(|signatures| ReadResultSignaturesForAddress::Signatures {

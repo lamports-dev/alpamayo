@@ -3,8 +3,12 @@ use {
     jsonrpsee_types::{Id, Response},
     reqwest::{Client, StatusCode, Version, header::CONTENT_TYPE},
     serde_json::json,
-    solana_rpc_client_api::config::{RpcBlockConfig, RpcTransactionConfig},
-    solana_sdk::{clock::Slot, commitment_config::CommitmentConfig, signature::Signature},
+    solana_rpc_client_api::config::{
+        RpcBlockConfig, RpcSignaturesForAddressConfig, RpcTransactionConfig,
+    },
+    solana_sdk::{
+        clock::Slot, commitment_config::CommitmentConfig, pubkey::Pubkey, signature::Signature,
+    },
     solana_transaction_status::{BlockEncodingOptions, UiTransactionEncoding},
     std::time::{Duration, Instant},
     tokio::time::{sleep, timeout_at},
@@ -56,6 +60,36 @@ impl RpcClient {
                     commitment: Some(commitment),
                     max_supported_transaction_version: encoding_options
                         .max_supported_transaction_version,
+                }]
+            }))
+            .expect("json serialization never fail"),
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn get_signatures_for_address(
+        &self,
+        deadline: Instant,
+        id: &Id<'static>,
+        address: Pubkey,
+        before: Option<Signature>,
+        until: Option<Signature>,
+        limit: usize,
+        commitment: CommitmentConfig,
+    ) -> RpcClientResult {
+        self.call_with_timeout(
+            deadline,
+            serde_json::to_string(&json!({
+                "jsonrpc": "2.0",
+                "method": "getSignaturesForAddress",
+                "id": id,
+                "params": [address.to_string(), RpcSignaturesForAddressConfig {
+                    before: before.map(|s| s.to_string()),
+                    until: until.map(|s| s.to_string()),
+                    limit: Some(limit),
+                    commitment: Some(commitment),
+                    min_context_slot: None,
                 }]
             }))
             .expect("json serialization never fail"),
