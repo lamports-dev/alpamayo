@@ -545,8 +545,8 @@ impl RpcRequest {
         match self {
             Self::Block(request) => request.process(state, upstream_disabled).await,
             Self::BlockHeight(request) => request.process(state).await,
-            Self::Transaction(request) => request.process(state, upstream_disabled).await,
             Self::SignaturesForAddress(request) => request.process(state, upstream_disabled).await,
+            Self::Transaction(request) => request.process(state, upstream_disabled).await,
         }
     }
 
