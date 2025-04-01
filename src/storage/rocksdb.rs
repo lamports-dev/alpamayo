@@ -44,13 +44,13 @@ trait ColumnName {
 }
 
 #[derive(Debug)]
-pub struct SlotIndex;
+pub struct SlotBasicIndex;
 
-impl ColumnName for SlotIndex {
-    const NAME: &'static str = "slot_index";
+impl ColumnName for SlotBasicIndex {
+    const NAME: &'static str = "slot_basic_index";
 }
 
-impl SlotIndex {
+impl SlotBasicIndex {
     pub fn key(slot: Slot) -> [u8; 8] {
         slot.to_be_bytes()
     }
@@ -64,7 +64,7 @@ impl SlotIndex {
 }
 
 #[derive(Debug, Default, Clone)]
-pub struct SlotIndexValue {
+pub struct SlotBasicIndexValue {
     pub dead: bool,
     pub block_time: Option<UnixTimestamp>,
     pub block_height: Option<Slot>,
@@ -75,22 +75,22 @@ pub struct SlotIndexValue {
     pub sfa: Vec<[u8; 8]>,
 }
 
-impl SlotIndexValue {
+impl SlotBasicIndexValue {
     fn encode(&self, buf: &mut Vec<u8>) {
         if self.dead {
-            encode_varint(SlotIndexValueFlags::DEAD.bits() as u64, buf);
+            encode_varint(SlotBasicIndexValueFlags::DEAD.bits() as u64, buf);
             return;
         }
 
-        let mut flags = SlotIndexValueFlags::empty();
+        let mut flags = SlotBasicIndexValueFlags::empty();
         if self.dead {
-            flags |= SlotIndexValueFlags::DEAD;
+            flags |= SlotBasicIndexValueFlags::DEAD;
         }
         if self.block_time.is_some() {
-            flags |= SlotIndexValueFlags::BLOCK_TIME;
+            flags |= SlotBasicIndexValueFlags::BLOCK_TIME;
         }
         if self.block_height.is_some() {
-            flags |= SlotIndexValueFlags::BLOCK_HEIGHT;
+            flags |= SlotBasicIndexValueFlags::BLOCK_HEIGHT;
         }
 
         encode_varint(flags.bits() as u64, buf);
@@ -114,11 +114,12 @@ impl SlotIndexValue {
     }
 
     fn decode(mut slice: &[u8], decode_indexes: bool) -> anyhow::Result<Self> {
-        let flags =
-            SlotIndexValueFlags::from_bits(slice.try_get_u8().context("failed to read flags")?)
-                .context("invalid flags")?;
+        let flags = SlotBasicIndexValueFlags::from_bits(
+            slice.try_get_u8().context("failed to read flags")?,
+        )
+        .context("invalid flags")?;
 
-        if flags.contains(SlotIndexValueFlags::DEAD) {
+        if flags.contains(SlotBasicIndexValueFlags::DEAD) {
             return Ok(Self {
                 dead: true,
                 ..Default::default()
@@ -128,12 +129,12 @@ impl SlotIndexValue {
         Ok(Self {
             dead: false,
             block_time: flags
-                .contains(SlotIndexValueFlags::BLOCK_TIME)
+                .contains(SlotBasicIndexValueFlags::BLOCK_TIME)
                 .then(|| decode_varint(&mut slice).map(|bt| bt as i64))
                 .transpose()
                 .context("failed to read block time")?,
             block_height: flags
-                .contains(SlotIndexValueFlags::BLOCK_HEIGHT)
+                .contains(SlotBasicIndexValueFlags::BLOCK_HEIGHT)
                 .then(|| decode_varint(&mut slice))
                 .transpose()
                 .context("failed to read block_height")?,
@@ -178,7 +179,7 @@ impl SlotIndexValue {
 }
 
 bitflags! {
-    struct SlotIndexValueFlags: u8 {
+    struct SlotBasicIndexValueFlags: u8 {
         const DEAD =         0b00000001;
         const BLOCK_TIME =   0b00000010;
         const BLOCK_HEIGHT = 0b00000100;
@@ -440,7 +441,7 @@ impl Rocksdb {
 
     fn cf_descriptors() -> Vec<ColumnFamilyDescriptor> {
         vec![
-            Self::cf_descriptor::<SlotIndex>(),
+            Self::cf_descriptor::<SlotBasicIndex>(),
             Self::cf_descriptor::<TransactionIndex>(),
             Self::cf_descriptor::<SfaIndex>(),
         ]
@@ -521,7 +522,7 @@ impl RocksdbWrite {
                 WriteRequest::SlotAdd { slot, data, tx } => {
                     buf.clear();
                     if let Some((block, storage_id, offset)) = data {
-                        SlotIndexValue {
+                        SlotBasicIndexValue {
                             dead: false,
                             block_time: block.block_time,
                             block_height: block.block_height,
@@ -532,7 +533,7 @@ impl RocksdbWrite {
                             sfa: block.sfa.values().map(|sfa| sfa.address_hash).collect(),
                         }
                     } else {
-                        SlotIndexValue {
+                        SlotBasicIndexValue {
                             dead: true,
                             ..Default::default()
                         }
@@ -540,8 +541,8 @@ impl RocksdbWrite {
                     .encode(&mut buf);
 
                     let result = db.put_cf(
-                        Rocksdb::cf_handle::<SlotIndex>(&db),
-                        SlotIndex::key(slot),
+                        Rocksdb::cf_handle::<SlotBasicIndex>(&db),
+                        SlotBasicIndex::key(slot),
                         &buf,
                     );
                     if tx.send(result.map_err(Into::into)).is_err() {
@@ -559,13 +560,20 @@ impl RocksdbWrite {
 
     fn spawn_remove_slot(db: &DB, slot: Slot) -> anyhow::Result<()> {
         let value = db
-            .get_pinned_cf(Rocksdb::cf_handle::<SlotIndex>(db), SlotIndex::key(slot))
+            .get_pinned_cf(
+                Rocksdb::cf_handle::<SlotBasicIndex>(db),
+                SlotBasicIndex::key(slot),
+            )
             .context("failed to get existed slot")?
             .ok_or_else(|| anyhow::anyhow!("existed slot {slot} not found"))?;
-        let value = SlotIndexValue::decode(&value, true).context("failed to decode slot data")?;
+        let value =
+            SlotBasicIndexValue::decode(&value, true).context("failed to decode slot data")?;
 
         let mut batch = WriteBatch::with_capacity_bytes(128 * 1024); // 128KiB
-        batch.delete_cf(Rocksdb::cf_handle::<SlotIndex>(db), SlotIndex::key(slot));
+        batch.delete_cf(
+            Rocksdb::cf_handle::<SlotBasicIndex>(db),
+            SlotBasicIndex::key(slot),
+        );
         for hash in value.transactions {
             batch.delete_cf(Rocksdb::cf_handle::<TransactionIndex>(db), hash);
         }
@@ -772,14 +780,17 @@ impl RocksdbRead {
 
     fn spawn_slots(db: &DB) -> anyhow::Result<Vec<StoredBlock>> {
         let mut slots = vec![];
-        for item in db.iterator_cf(Rocksdb::cf_handle::<SlotIndex>(db), IteratorMode::Start) {
+        for item in db.iterator_cf(
+            Rocksdb::cf_handle::<SlotBasicIndex>(db),
+            IteratorMode::Start,
+        ) {
             let (key, value) = item.context("failed to get next item")?;
             let value =
-                SlotIndexValue::decode(&value, false).context("failed to decode slot data")?;
+                SlotBasicIndexValue::decode(&value, false).context("failed to decode slot data")?;
             slots.push(StoredBlock {
                 exists: true,
                 dead: value.dead,
-                slot: SlotIndex::decode(&key).context("failed to decode slot key")?,
+                slot: SlotBasicIndex::decode(&key).context("failed to decode slot key")?,
                 block_time: value.block_time,
                 block_height: value.block_height,
                 storage_id: value.storage_id,
