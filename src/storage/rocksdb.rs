@@ -249,10 +249,11 @@ impl SfaIndex {
         Self::concat(Self::address_hash(address), slot)
     }
 
-    pub fn get_slot(slice: &[u8]) -> anyhow::Result<Slot> {
-        anyhow::ensure!(slice.len() == 16, "invalid key length");
-        Ok(Slot::from_be_bytes(
-            slice[8..].try_into().expect("valid len"),
+    pub fn decode(slice: &[u8]) -> anyhow::Result<([u8; 8], Slot)> {
+        anyhow::ensure!(slice.len() == 16, "invalid key length: {}", slice.len());
+        Ok((
+            slice[0..8].try_into().expect("valid len"),
+            Slot::from_be_bytes(slice[8..].try_into().expect("valid len")),
         ))
     }
 }
@@ -276,9 +277,12 @@ impl SfaIndexValue<'_> {
 
             buf.extend_from_slice(sig.signature.as_ref());
             if let Some(err) = &sig.err {
-                buf.extend_from_slice(&bincode::serialize(err).expect("bincode never fail"));
+                let data = bincode::serialize(err).expect("bincode never fail");
+                encode_varint(data.len() as u64, buf);
+                buf.extend_from_slice(&data);
             }
             if let Some(memo) = &sig.memo {
+                encode_varint(memo.len() as u64, buf);
                 buf.extend_from_slice(memo.as_ref());
             }
         }
@@ -331,6 +335,7 @@ impl SfaIndexValue<'_> {
 }
 
 bitflags! {
+    #[derive(Debug)]
     struct SfaIndexValueFlags: u8 {
         const ERR =  0b00000001;
         const MEMO = 0b00000010;
@@ -505,13 +510,13 @@ impl RocksdbWrite {
                             &buf,
                         );
                     }
-                    for (key, sfa) in block.sfa.iter() {
+                    for sfa in block.sfa.values() {
                         buf.clear();
                         SfaIndexValue {
                             signatures: Cow::Borrowed(sfa.signatures.as_slice()),
                         }
                         .encode(&mut buf);
-                        batch.put_cf(Rocksdb::cf_handle::<SfaIndex>(&db), key, &buf);
+                        batch.put_cf(Rocksdb::cf_handle::<SfaIndex>(&db), sfa.key, &buf);
                     }
                     if tx.send(db.write(batch).map_err(Into::into)).is_err() {
                         break;
@@ -795,11 +800,19 @@ impl RocksdbRead {
         until: Signature,
         mut signatures: Vec<ReadResultSignaturesForAddressItem>,
     ) -> anyhow::Result<(Vec<ReadResultSignaturesForAddressItem>, bool)> {
-        let key = SfaIndex::encode(&address, slot);
+        let address_hash = SfaIndex::address_hash(&address);
+        let key = SfaIndex::concat(address_hash, slot);
         let mut finished = false;
-        'outer: for item in db.iterator(IteratorMode::From(&key, Direction::Reverse)) {
+        'outer: for item in db.iterator_cf(
+            Rocksdb::cf_handle::<SfaIndex>(db),
+            IteratorMode::From(&key, Direction::Reverse),
+        ) {
             let (key, value) = item.context("failed to read next row")?;
-            let slot = SfaIndex::get_slot(&key)?;
+            let (item_address_hash, slot) = SfaIndex::decode(&key)?;
+            if item_address_hash != address_hash {
+                break;
+            }
+
             #[allow(clippy::unnecessary_to_owned)] // looks like clippy bug
             for sigstatus in SfaIndexValue::decode(&value)?.signatures.into_owned() {
                 if let Some(sigbefore) = before {

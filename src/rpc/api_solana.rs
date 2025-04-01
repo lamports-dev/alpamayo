@@ -837,8 +837,8 @@ impl RpcRequestSignaturesForAddress {
             }
         };
 
-        if !finished && !upstream_disabled {
-            let limit = self.limit - signatures.len();
+        let limit = self.limit - signatures.len();
+        if !finished && !upstream_disabled && limit > 0 {
             if !signatures.is_empty() {
                 before = signatures
                     .last()
