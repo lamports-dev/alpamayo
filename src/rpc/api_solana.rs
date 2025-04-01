@@ -3,7 +3,10 @@ use {
         config::{ConfigRpc, ConfigRpcCall},
         rpc::{upstream::RpcClient, workers::WorkRequest},
         storage::{
-            read::{ReadRequest, ReadResultBlock, ReadResultBlockHeight, ReadResultTransaction},
+            read::{
+                ReadRequest, ReadResultBlock, ReadResultBlockHeight,
+                ReadResultSignaturesForAddress, ReadResultTransaction,
+            },
             slots::StoredSlots,
         },
     },

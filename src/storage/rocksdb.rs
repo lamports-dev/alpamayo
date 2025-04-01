@@ -5,6 +5,7 @@ use {
         storage::{
             blocks::{StoredBlock, StoredBlocksWrite},
             files::{StorageFilesWrite, StorageId},
+            read::ReadResultSignaturesForAddressItem,
             sync::ReadWriteSyncMessage,
         },
     },
@@ -17,8 +18,8 @@ use {
         encoding::{decode_varint, encode_varint},
     },
     rocksdb::{
-        ColumnFamily, ColumnFamilyDescriptor, DB, DBCompressionType, IteratorMode, Options,
-        WriteBatch,
+        ColumnFamily, ColumnFamilyDescriptor, DB, DBCompressionType, Direction, IteratorMode,
+        Options, WriteBatch,
     },
     solana_sdk::{
         clock::{Slot, UnixTimestamp},
@@ -246,6 +247,13 @@ impl SfaIndex {
 
     pub fn encode(address: &Pubkey, slot: Slot) -> [u8; 16] {
         Self::concat(Self::address_hash(address), slot)
+    }
+
+    pub fn get_slot(slice: &[u8]) -> anyhow::Result<Slot> {
+        anyhow::ensure!(slice.len() == 16, "invalid key length");
+        Ok(Slot::from_be_bytes(
+            slice[8..].try_into().expect("valid len"),
+        ))
     }
 }
 
@@ -698,6 +706,14 @@ enum ReadRequest {
         signature: Signature,
         tx: oneshot::Sender<anyhow::Result<Option<TransactionIndexValue>>>,
     },
+    SignaturesForAddress {
+        address: Pubkey,
+        slot: Slot,
+        before: Option<Signature>,
+        until: Signature,
+        signatures: Vec<ReadResultSignaturesForAddressItem>,
+        tx: oneshot::Sender<anyhow::Result<(Vec<ReadResultSignaturesForAddressItem>, bool)>>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -734,6 +750,23 @@ impl RocksdbRead {
                         break;
                     }
                 }
+                ReadRequest::SignaturesForAddress {
+                    address,
+                    slot,
+                    before,
+                    until,
+                    signatures,
+                    tx,
+                } => {
+                    if tx
+                        .send(Self::spawn_signatires_for_address(
+                            &db, address, slot, before, until, signatures,
+                        ))
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
             }
         }
     }
@@ -756,6 +789,49 @@ impl RocksdbRead {
             });
         }
         Ok(slots)
+    }
+
+    fn spawn_signatires_for_address(
+        db: &DB,
+        address: Pubkey,
+        slot: Slot,
+        mut before: Option<Signature>,
+        until: Signature,
+        mut signatures: Vec<ReadResultSignaturesForAddressItem>,
+    ) -> anyhow::Result<(Vec<ReadResultSignaturesForAddressItem>, bool)> {
+        let key = SfaIndex::encode(&address, slot);
+        let mut finished = false;
+        'outer: for item in db.iterator(IteratorMode::From(&key, Direction::Reverse)) {
+            let (key, value) = item.context("failed to read next row")?;
+            let slot = SfaIndex::get_slot(&key)?;
+            #[allow(clippy::unnecessary_to_owned)] // looks like clippy bug
+            for sigstatus in SfaIndexValue::decode(&value)?.signatures.into_owned() {
+                if let Some(sigbefore) = before {
+                    if sigstatus.signature == sigbefore {
+                        before = None;
+                    }
+                    continue;
+                }
+
+                if sigstatus.signature == until {
+                    finished = true;
+                    break 'outer;
+                }
+
+                signatures.push(ReadResultSignaturesForAddressItem {
+                    slot,
+                    signature: sigstatus.signature,
+                    err: sigstatus.err,
+                    memo: sigstatus.memo,
+                });
+
+                if signatures.len() == signatures.capacity() {
+                    finished = true;
+                    break 'outer;
+                }
+            }
+        }
+        Ok((signatures, finished))
     }
 
     pub fn read_slot_indexes(
@@ -782,6 +858,34 @@ impl RocksdbRead {
         Ok(Box::pin(async move {
             rx.await
                 .context("failed to get ReadRequest::Transaction request result")?
+        }))
+    }
+
+    #[allow(clippy::type_complexity)]
+    pub fn read_signatures_for_address(
+        &self,
+        address: Pubkey,
+        slot: Slot,
+        before: Option<Signature>,
+        until: Signature,
+        signatures: Vec<ReadResultSignaturesForAddressItem>,
+    ) -> anyhow::Result<
+        BoxFuture<'static, anyhow::Result<(Vec<ReadResultSignaturesForAddressItem>, bool)>>,
+    > {
+        let (tx, rx) = oneshot::channel();
+        self.req_tx
+            .send(ReadRequest::SignaturesForAddress {
+                address,
+                slot,
+                before,
+                until,
+                signatures,
+                tx,
+            })
+            .context("failed to send ReadRequest::SignaturesForAddress request")?;
+        Ok(Box::pin(async move {
+            rx.await
+                .context("failed to get ReadRequest::SignaturesForAddress request result")?
         }))
     }
 }

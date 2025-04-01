@@ -11,15 +11,18 @@ use {
     },
     anyhow::Context,
     futures::{
-        future::{FutureExt, LocalBoxFuture, pending},
+        future::{FutureExt, LocalBoxFuture, pending, ready},
         stream::{FuturesUnordered, StreamExt},
     },
+    solana_rpc_client_api::response::RpcConfirmedTransactionStatusWithSignature,
     solana_sdk::{
         clock::{Slot, UnixTimestamp},
         commitment_config::CommitmentConfig,
         pubkey::Pubkey,
         signature::Signature,
+        transaction::TransactionError,
     },
+    solana_transaction_status::TransactionConfirmationStatus,
     std::{
         collections::{BTreeMap, btree_map::Entry as BTreeMapEntry},
         io,
@@ -281,6 +284,25 @@ pub enum ReadResultBlockHeight {
 }
 
 #[derive(Debug)]
+pub struct ReadResultSignaturesForAddressItem {
+    pub signature: Signature,
+    pub slot: u64,
+    pub err: Option<TransactionError>,
+    pub memo: Option<String>,
+}
+
+#[derive(Debug)]
+pub enum ReadResultSignaturesForAddress {
+    Timeout,
+    Signatures {
+        signatures: Vec<RpcConfirmedTransactionStatusWithSignature>,
+        finished: bool,
+        before: Option<Signature>,
+    },
+    ReadError(anyhow::Error),
+}
+
+#[derive(Debug)]
 pub enum ReadResultTransaction {
     Timeout,
     NotFound,
@@ -311,7 +333,24 @@ pub enum ReadRequest {
         before: Option<Signature>,
         until: Option<Signature>,
         limit: usize,
-        tx: oneshot::Sender<()>,
+        tx: oneshot::Sender<ReadResultSignaturesForAddress>,
+    },
+    SignaturesForAddress2 {
+        deadline: Instant,
+        address: Pubkey,
+        slot: Slot,
+        before: Option<Signature>,
+        until: Signature,
+        signatures: Vec<ReadResultSignaturesForAddressItem>,
+        tx: oneshot::Sender<ReadResultSignaturesForAddress>,
+        lock: Option<OwnedSemaphorePermit>,
+    },
+    SignaturesForAddress3 {
+        deadline: Instant,
+        signatures: Vec<ReadResultSignaturesForAddressItem>,
+        finished: bool,
+        tx: oneshot::Sender<ReadResultSignaturesForAddress>,
+        lock: Option<OwnedSemaphorePermit>,
     },
     Transaction {
         deadline: Instant,
@@ -469,17 +508,232 @@ impl ReadRequest {
                 deadline,
                 commitment,
                 address,
-                before,
+                mut before,
                 until,
                 limit,
                 tx,
             } => {
                 if deadline < Instant::now() {
-                    // let _ = tx.send(ReadResultTransaction::Timeout);
+                    let _ = tx.send(ReadResultSignaturesForAddress::Timeout);
                     return None;
                 }
 
-                todo!()
+                let until = until.unwrap_or_default();
+                let mut signatures = Vec::with_capacity(limit);
+
+                // try to get from current processing confirmed block
+                let highest_slot = if commitment.is_confirmed() {
+                    if let Some((confirmed_in_process_slot, Some(block))) = confirmed_in_process {
+                        if let Some(sfa) = block.sfa.get(&address) {
+                            let skip_count = match before {
+                                Some(sig) => {
+                                    if let Some(index) =
+                                        sfa.signatures.iter().position(|sfa| sfa.signature == sig)
+                                    {
+                                        before = None; // reset before because we found it
+                                        index + 1
+                                    } else {
+                                        sfa.signatures.len() // skip signatures if before not found
+                                    }
+                                }
+                                None => 0, // add all signatures if no before arg
+                            };
+
+                            let mut finished = false;
+                            for item in sfa.signatures.iter().skip(skip_count) {
+                                if item.signature == until {
+                                    finished = true;
+                                    break;
+                                }
+
+                                signatures.push(ReadResultSignaturesForAddressItem {
+                                    slot: *confirmed_in_process_slot,
+                                    signature: item.signature,
+                                    err: item.err.clone(),
+                                    memo: item.memo.clone(),
+                                });
+
+                                if signatures.len() == signatures.capacity() {
+                                    finished = true;
+                                    break;
+                                }
+                            }
+                            if finished {
+                                let _ = tx.send(ReadResultSignaturesForAddress::Signatures {
+                                    signatures: signatures
+                                        .into_iter()
+                                        .map(|sig| RpcConfirmedTransactionStatusWithSignature {
+                                            signature: sig.signature.to_string(),
+                                            slot: sig.slot,
+                                            err: sig.err,
+                                            memo: sig.memo,
+                                            block_time: block.block_time,
+                                            confirmation_status: Some(
+                                                TransactionConfirmationStatus::Confirmed,
+                                            ),
+                                        })
+                                        .collect(),
+                                    finished: true,
+                                    before: None,
+                                });
+                                return None;
+                            }
+                        }
+                    }
+                    storage_processed.confirmed
+                } else {
+                    storage_processed.finalized
+                };
+
+                if let Some(before) = before {
+                    // read slot for before signature
+                    let read_tx_index = match db_read.read_tx_index(before) {
+                        Ok(fut) => fut,
+                        Err(error) => {
+                            let _ = tx.send(ReadResultSignaturesForAddress::ReadError(error));
+                            return None;
+                        }
+                    };
+
+                    Some(Box::pin(async move {
+                        let result = match read_tx_index.await {
+                            Ok(Some(index)) if index.slot <= highest_slot => {
+                                return Some(ReadRequest::SignaturesForAddress2 {
+                                    deadline,
+                                    address,
+                                    slot: index.slot,
+                                    before: Some(before),
+                                    until,
+                                    signatures,
+                                    tx,
+                                    lock,
+                                });
+                            }
+                            Ok(Some(_index)) => ReadResultSignaturesForAddress::Signatures {
+                                signatures: vec![],
+                                finished: true,
+                                before: None,
+                            },
+                            Ok(None) => ReadResultSignaturesForAddress::Signatures {
+                                signatures: vec![],
+                                finished: false,
+                                before: Some(before),
+                            },
+                            Err(error) => ReadResultSignaturesForAddress::ReadError(error),
+                        };
+
+                        let _ = tx.send(result);
+                        None
+                    }))
+                } else {
+                    Some(Box::pin(ready(Some(ReadRequest::SignaturesForAddress2 {
+                        deadline,
+                        address,
+                        slot: highest_slot,
+                        before: None,
+                        until,
+                        signatures,
+                        tx,
+                        lock,
+                    }))))
+                }
+            }
+            Self::SignaturesForAddress2 {
+                deadline,
+                address,
+                slot,
+                before,
+                until,
+                signatures,
+                tx,
+                lock,
+            } => {
+                if deadline < Instant::now() {
+                    let _ = tx.send(ReadResultSignaturesForAddress::Timeout);
+                    return None;
+                }
+
+                let read_sigs_index = match db_read
+                    .read_signatures_for_address(address, slot, before, until, signatures)
+                {
+                    Ok(fut) => fut,
+                    Err(error) => {
+                        let _ = tx.send(ReadResultSignaturesForAddress::ReadError(error));
+                        return None;
+                    }
+                };
+
+                Some(Box::pin(async move {
+                    match read_sigs_index.await {
+                        Ok((signatures, finished)) => Some(ReadRequest::SignaturesForAddress3 {
+                            deadline,
+                            signatures,
+                            finished,
+                            tx,
+                            lock,
+                        }),
+                        Err(error) => {
+                            let _ = tx.send(ReadResultSignaturesForAddress::ReadError(error));
+                            None
+                        }
+                    }
+                }))
+            }
+            Self::SignaturesForAddress3 {
+                deadline,
+                signatures,
+                finished,
+                tx,
+                lock,
+            } => {
+                if deadline < Instant::now() {
+                    let _ = tx.send(ReadResultSignaturesForAddress::Timeout);
+                    return None;
+                }
+
+                let result = match signatures
+                    .into_iter()
+                    .filter_map(|sig| match blocks.get_block_location(sig.slot) {
+                        StorageBlockLocationResult::SlotMismatch => {
+                            error!(slot = sig.slot, "item/slot mismatch");
+                            Some(Err(ReadResultSignaturesForAddress::ReadError(
+                                anyhow::anyhow!(io::Error::new(
+                                    io::ErrorKind::Other,
+                                    "item/slot mismatch",
+                                )),
+                            )))
+                        }
+                        StorageBlockLocationResult::Found(location) => {
+                            Some(Ok(RpcConfirmedTransactionStatusWithSignature {
+                                signature: sig.signature.to_string(),
+                                slot: sig.slot,
+                                err: sig.err,
+                                memo: sig.memo,
+                                block_time: location.block_time,
+                                confirmation_status: Some(
+                                    if sig.slot <= storage_processed.finalized {
+                                        TransactionConfirmationStatus::Finalized
+                                    } else {
+                                        TransactionConfirmationStatus::Confirmed
+                                    },
+                                ),
+                            }))
+                        }
+                        _ => None,
+                    })
+                    .collect::<Result<Vec<_>, _>>()
+                    .map(|signatures| ReadResultSignaturesForAddress::Signatures {
+                        signatures,
+                        finished,
+                        before: None,
+                    }) {
+                    Ok(value) => value,
+                    Err(value) => value,
+                };
+
+                let _ = tx.send(result);
+                drop(lock);
+                None
             }
             Self::Transaction {
                 deadline,

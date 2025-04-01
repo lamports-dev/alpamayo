@@ -9,6 +9,7 @@ use {
     },
     solana_sdk::{
         clock::{Slot, UnixTimestamp},
+        pubkey::Pubkey,
         signature::Signature,
     },
     solana_storage_proto::convert::generated,
@@ -34,7 +35,7 @@ pub struct BlockWithBinary {
     pub protobuf: Vec<u8>,
     pub txs_offset: Vec<BlockTransactionOffset>,
     pub transactions: HashMap<Signature, TransactionWithBinary>,
-    pub sfa: HashMap<[u8; 16], SignaturesForAddress>,
+    pub sfa: HashMap<Pubkey, SignaturesForAddress>,
 }
 
 impl BlockWithBinary {
@@ -62,10 +63,10 @@ impl BlockWithBinary {
         }
         .encode_with_tx_offsets();
 
-        let mut sfa = HashMap::<[u8; 16], SignaturesForAddress>::new();
+        let mut sfa = HashMap::<Pubkey, SignaturesForAddress>::new();
         for tx in transactions.iter_mut().rev() {
             for tx_sfa in tx.sfa.drain(..) {
-                match sfa.entry(tx_sfa.key) {
+                match sfa.entry(tx_sfa.address) {
                     HashMapEntry::Occupied(mut entry) => {
                         entry.get_mut().merge(tx_sfa);
                     }
