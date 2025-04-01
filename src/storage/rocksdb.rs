@@ -5,7 +5,6 @@ use {
         storage::{
             blocks::{StoredBlock, StoredBlocksWrite},
             files::{StorageFilesWrite, StorageId},
-            read::ReadResultSignaturesForAddressItem,
             sync::ReadWriteSyncMessage,
         },
     },
@@ -21,6 +20,7 @@ use {
         ColumnFamily, ColumnFamilyDescriptor, DB, DBCompressionType, Direction, IteratorMode,
         Options, WriteBatch,
     },
+    solana_rpc_client_api::response::RpcConfirmedTransactionStatusWithSignature,
     solana_sdk::{
         clock::{Slot, UnixTimestamp},
         pubkey::Pubkey,
@@ -708,8 +708,10 @@ enum ReadRequest {
         slot: Slot,
         before: Option<Signature>,
         until: Signature,
-        signatures: Vec<ReadResultSignaturesForAddressItem>,
-        tx: oneshot::Sender<anyhow::Result<(Vec<ReadResultSignaturesForAddressItem>, bool)>>,
+        signatures: Vec<RpcConfirmedTransactionStatusWithSignature>,
+        tx: oneshot::Sender<
+            anyhow::Result<(Vec<RpcConfirmedTransactionStatusWithSignature>, bool)>,
+        >,
     },
 }
 
@@ -794,8 +796,8 @@ impl RocksdbRead {
         slot: Slot,
         mut before: Option<Signature>,
         until: Signature,
-        mut signatures: Vec<ReadResultSignaturesForAddressItem>,
-    ) -> anyhow::Result<(Vec<ReadResultSignaturesForAddressItem>, bool)> {
+        mut signatures: Vec<RpcConfirmedTransactionStatusWithSignature>,
+    ) -> anyhow::Result<(Vec<RpcConfirmedTransactionStatusWithSignature>, bool)> {
         let address_hash = SfaIndex::address_hash(&address);
         let key = SfaIndex::concat(address_hash, slot);
         let mut finished = false;
@@ -823,11 +825,13 @@ impl RocksdbRead {
                     break 'outer;
                 }
 
-                signatures.push(ReadResultSignaturesForAddressItem {
+                signatures.push(RpcConfirmedTransactionStatusWithSignature {
+                    signature: sigstatus.signature.to_string(),
                     slot,
-                    signature: sigstatus.signature,
                     err: sigstatus.err,
                     memo: sigstatus.memo,
+                    block_time: None,
+                    confirmation_status: None,
                 });
 
                 if signatures.len() == signatures.capacity() {
@@ -873,9 +877,9 @@ impl RocksdbRead {
         slot: Slot,
         before: Option<Signature>,
         until: Signature,
-        signatures: Vec<ReadResultSignaturesForAddressItem>,
+        signatures: Vec<RpcConfirmedTransactionStatusWithSignature>,
     ) -> anyhow::Result<
-        BoxFuture<'static, anyhow::Result<(Vec<ReadResultSignaturesForAddressItem>, bool)>>,
+        BoxFuture<'static, anyhow::Result<(Vec<RpcConfirmedTransactionStatusWithSignature>, bool)>>,
     > {
         let (tx, rx) = oneshot::channel();
         self.req_tx

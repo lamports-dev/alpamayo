@@ -20,7 +20,6 @@ use {
         commitment_config::CommitmentConfig,
         pubkey::Pubkey,
         signature::Signature,
-        transaction::TransactionError,
     },
     solana_transaction_status::TransactionConfirmationStatus,
     std::{
@@ -284,14 +283,6 @@ pub enum ReadResultBlockHeight {
 }
 
 #[derive(Debug)]
-pub struct ReadResultSignaturesForAddressItem {
-    pub signature: Signature,
-    pub slot: u64,
-    pub err: Option<TransactionError>,
-    pub memo: Option<String>,
-}
-
-#[derive(Debug)]
 pub enum ReadResultSignaturesForAddress {
     Timeout,
     Signatures {
@@ -341,13 +332,13 @@ pub enum ReadRequest {
         slot: Slot,
         before: Option<Signature>,
         until: Signature,
-        signatures: Vec<ReadResultSignaturesForAddressItem>,
+        signatures: Vec<RpcConfirmedTransactionStatusWithSignature>,
         tx: oneshot::Sender<ReadResultSignaturesForAddress>,
         lock: Option<OwnedSemaphorePermit>,
     },
     SignaturesForAddress3 {
         deadline: Instant,
-        signatures: Vec<ReadResultSignaturesForAddressItem>,
+        signatures: Vec<RpcConfirmedTransactionStatusWithSignature>,
         finished: bool,
         tx: oneshot::Sender<ReadResultSignaturesForAddress>,
         lock: Option<OwnedSemaphorePermit>,
@@ -546,11 +537,15 @@ impl ReadRequest {
                                     break;
                                 }
 
-                                signatures.push(ReadResultSignaturesForAddressItem {
+                                signatures.push(RpcConfirmedTransactionStatusWithSignature {
+                                    signature: item.signature.to_string(),
                                     slot: *confirmed_in_process_slot,
-                                    signature: item.signature,
                                     err: item.err.clone(),
                                     memo: item.memo.clone(),
+                                    block_time: block.block_time,
+                                    confirmation_status: Some(
+                                        TransactionConfirmationStatus::Confirmed,
+                                    ),
                                 });
 
                                 if signatures.len() == signatures.capacity() {
@@ -560,19 +555,7 @@ impl ReadRequest {
                             }
                             if finished {
                                 let _ = tx.send(ReadResultSignaturesForAddress::Signatures {
-                                    signatures: signatures
-                                        .into_iter()
-                                        .map(|sig| RpcConfirmedTransactionStatusWithSignature {
-                                            signature: sig.signature.to_string(),
-                                            slot: sig.slot,
-                                            err: sig.err,
-                                            memo: sig.memo,
-                                            block_time: block.block_time,
-                                            confirmation_status: Some(
-                                                TransactionConfirmationStatus::Confirmed,
-                                            ),
-                                        })
-                                        .collect(),
+                                    signatures,
                                     finished: true,
                                     before: None,
                                 });
@@ -695,7 +678,7 @@ impl ReadRequest {
 
                 let result = match signatures
                     .into_iter()
-                    .filter_map(|sig| match blocks.get_block_location(sig.slot) {
+                    .filter_map(|mut sig| match blocks.get_block_location(sig.slot) {
                         StorageBlockLocationResult::SlotMismatch => {
                             error!(slot = sig.slot, "item/slot mismatch");
                             Some(Err(ReadResultSignaturesForAddress::ReadError(
@@ -706,20 +689,14 @@ impl ReadRequest {
                             )))
                         }
                         StorageBlockLocationResult::Found(location) => {
-                            Some(Ok(RpcConfirmedTransactionStatusWithSignature {
-                                signature: sig.signature.to_string(),
-                                slot: sig.slot,
-                                err: sig.err,
-                                memo: sig.memo,
-                                block_time: location.block_time,
-                                confirmation_status: Some(
-                                    if sig.slot <= storage_processed.finalized {
-                                        TransactionConfirmationStatus::Finalized
-                                    } else {
-                                        TransactionConfirmationStatus::Confirmed
-                                    },
-                                ),
-                            }))
+                            sig.block_time = location.block_time;
+                            sig.confirmation_status =
+                                Some(if sig.slot <= storage_processed.finalized {
+                                    TransactionConfirmationStatus::Finalized
+                                } else {
+                                    TransactionConfirmationStatus::Confirmed
+                                });
+                            Some(Ok(sig))
                         }
                         _ => {
                             finished = false;
