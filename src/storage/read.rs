@@ -350,7 +350,7 @@ pub enum ReadRequest {
     },
     Transaction2 {
         deadline: Instant,
-        index: TransactionIndexValue,
+        index: TransactionIndexValue<'static>,
         tx: oneshot::Sender<ReadResultTransaction>,
         lock: Option<OwnedSemaphorePermit>,
     },

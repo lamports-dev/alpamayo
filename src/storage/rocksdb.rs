@@ -25,6 +25,7 @@ use {
         clock::{Slot, UnixTimestamp},
         pubkey::Pubkey,
         signature::Signature,
+        transaction::TransactionError,
     },
     std::{
         borrow::Cow,
@@ -228,18 +229,24 @@ impl TransactionIndex {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct TransactionIndexValue {
+#[derive(Debug, Clone)]
+pub struct TransactionIndexValue<'a> {
     pub slot: Slot,
     pub offset: u64,
     pub size: u64,
+    pub err: Option<Cow<'a, TransactionError>>,
 }
 
-impl TransactionIndexValue {
+impl TransactionIndexValue<'_> {
     fn encode(&self, buf: &mut Vec<u8>) {
         encode_varint(self.slot, buf);
         encode_varint(self.offset, buf);
         encode_varint(self.size, buf);
+        if let Some(err) = &self.err {
+            let data = bincode::serialize(err).expect("bincode never fail");
+            encode_varint(data.len() as u64, buf);
+            buf.extend_from_slice(&data);
+        }
     }
 
     fn decode(mut slice: &[u8]) -> anyhow::Result<Self> {
@@ -247,6 +254,19 @@ impl TransactionIndexValue {
             slot: decode_varint(&mut slice).context("failed to decode slot")?,
             offset: decode_varint(&mut slice).context("failed to decode offset")?,
             size: decode_varint(&mut slice).context("failed to decode size")?,
+            err: if slice.is_empty() {
+                None
+            } else {
+                let size = decode_varint(&mut slice).context("failed to decode err size")? as usize;
+                anyhow::ensure!(
+                    slice.remaining() == size,
+                    "invalid slice len to decode err, expected {} left {}",
+                    size,
+                    slice.remaining()
+                );
+                let err = bincode::deserialize(&slice[0..size]).context("failed to decode err")?;
+                Some(Cow::Owned(err))
+            },
         })
     }
 }
@@ -545,6 +565,7 @@ impl RocksdbWrite {
                             slot,
                             offset: tx_offset.offset,
                             size: tx_offset.size,
+                            err: None, // TODO
                         }
                         .encode(&mut buf);
                         batch.put_cf(
@@ -756,7 +777,7 @@ enum ReadRequest {
     },
     Transaction {
         signature: Signature,
-        tx: oneshot::Sender<anyhow::Result<Option<TransactionIndexValue>>>,
+        tx: oneshot::Sender<anyhow::Result<Option<TransactionIndexValue<'static>>>>,
     },
     SignaturesForAddress {
         address: Pubkey,
@@ -917,7 +938,8 @@ impl RocksdbRead {
     pub fn read_tx_index(
         &self,
         signature: Signature,
-    ) -> anyhow::Result<BoxFuture<'static, anyhow::Result<Option<TransactionIndexValue>>>> {
+    ) -> anyhow::Result<BoxFuture<'static, anyhow::Result<Option<TransactionIndexValue<'static>>>>>
+    {
         let (tx, rx) = oneshot::channel();
         self.req_tx
             .send(ReadRequest::Transaction { signature, tx })
