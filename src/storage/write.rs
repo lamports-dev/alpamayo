@@ -328,7 +328,6 @@ async fn start2(
                 .push_block(next_confirmed_slot, block, storage_files, &mut blocks)
                 .await?;
             timer.observe_duration();
-            tracing::info!(slot = next_confirmed_slot, "add slot");
 
             next_confirmed_slot += 1;
         }
