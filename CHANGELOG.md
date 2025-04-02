@@ -24,5 +24,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 - storage: support getTransaction ([#7](https://github.com/lamports-dev/alpamayo/pull/7))
 - storage: support getBlockHeight ([#9](https://github.com/lamports-dev/alpamayo/pull/9))
 - storage: support getSignaturesForAddress ([#10](https://github.com/lamports-dev/alpamayo/pull/10))
+- storage: split slot index ([#11](https://github.com/lamports-dev/alpamayo/pull/11))
+- storage: support compression for indexes ([#12](https://github.com/lamports-dev/alpamayo/pull/12))
 
 ### Breaking

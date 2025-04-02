@@ -43,6 +43,8 @@ storage:
         size: 8gb
   rocksdb:
     path: ./db/alpamayo/rocksdb
+    index_slot_compression: none
+    index_sfa_compression: none
     read_channel_size: 40 # default: number of CPUs on the system * 5
     read_workers: 8 # default: number of CPUs on the system
   write:

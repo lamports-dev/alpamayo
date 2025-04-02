@@ -381,7 +381,10 @@ impl Rocksdb {
         Vec<(String, Option<JoinHandle<anyhow::Result<()>>>)>,
     )> {
         let db_options = Self::get_db_options();
-        let cf_descriptors = Self::cf_descriptors();
+        let cf_descriptors = Self::cf_descriptors(
+            config.index_slot_compression.into(),
+            config.index_sfa_compression.into(),
+        );
 
         let db = Arc::new(
             DB::open_cf_descriptors(&db_options, &config.path, cf_descriptors)
@@ -448,7 +451,7 @@ impl Rocksdb {
         options
     }
 
-    fn get_cf_options() -> Options {
+    fn get_cf_options(compression: DBCompressionType) -> Options {
         let mut options = Options::default();
 
         const MAX_WRITE_BUFFER_SIZE: u64 = 256 * 1024 * 1024;
@@ -462,22 +465,25 @@ impl Rocksdb {
         options.set_max_bytes_for_level_base(total_size_base);
         options.set_target_file_size_base(file_size_base);
 
-        options.set_compression_type(DBCompressionType::None);
+        options.set_compression_type(compression);
 
         options
     }
 
-    fn cf_descriptors() -> Vec<ColumnFamilyDescriptor> {
+    fn cf_descriptors(
+        index_slot_compression: DBCompressionType,
+        index_sfa_compression: DBCompressionType,
+    ) -> Vec<ColumnFamilyDescriptor> {
         vec![
-            Self::cf_descriptor::<SlotBasicIndex>(),
-            Self::cf_descriptor::<SlotExtraIndex>(),
-            Self::cf_descriptor::<TransactionIndex>(),
-            Self::cf_descriptor::<SfaIndex>(),
+            Self::cf_descriptor::<SlotBasicIndex>(DBCompressionType::None),
+            Self::cf_descriptor::<SlotExtraIndex>(index_slot_compression),
+            Self::cf_descriptor::<TransactionIndex>(DBCompressionType::None),
+            Self::cf_descriptor::<SfaIndex>(index_sfa_compression),
         ]
     }
 
-    fn cf_descriptor<C: ColumnName>() -> ColumnFamilyDescriptor {
-        ColumnFamilyDescriptor::new(C::NAME, Self::get_cf_options())
+    fn cf_descriptor<C: ColumnName>(compression: DBCompressionType) -> ColumnFamilyDescriptor {
+        ColumnFamilyDescriptor::new(C::NAME, Self::get_cf_options(compression))
     }
 
     fn cf_handle<C: ColumnName>(db: &DB) -> &ColumnFamily {

@@ -4,6 +4,7 @@ use {
     reqwest::Version,
     richat_client::grpc::ConfigGrpcClient,
     richat_shared::config::{ConfigTokio, deserialize_affinity, deserialize_num_str},
+    rocksdb::DBCompressionType,
     serde::{
         Deserialize,
         de::{self, Deserializer},
@@ -179,6 +180,10 @@ pub struct ConfigStorageFile {
 #[serde(deny_unknown_fields)]
 pub struct ConfigStorageRocksdb {
     pub path: PathBuf,
+    #[serde(default)]
+    pub index_slot_compression: ConfigStorageRocksdbCompression,
+    #[serde(default)]
+    pub index_sfa_compression: ConfigStorageRocksdbCompression,
     #[serde(
         default = "ConfigStorageRocksdb::default_read_channel_size",
         deserialize_with = "deserialize_num_str"
@@ -198,6 +203,33 @@ impl ConfigStorageRocksdb {
 
     fn default_read_workers() -> usize {
         num_cpus::get()
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "lowercase")]
+pub enum ConfigStorageRocksdbCompression {
+    #[default]
+    None,
+    Snappy,
+    Zlib,
+    Bz2,
+    Lz4,
+    Lz4hc,
+    Zstd,
+}
+
+impl From<ConfigStorageRocksdbCompression> for DBCompressionType {
+    fn from(value: ConfigStorageRocksdbCompression) -> Self {
+        match value {
+            ConfigStorageRocksdbCompression::None => Self::None,
+            ConfigStorageRocksdbCompression::Snappy => Self::Snappy,
+            ConfigStorageRocksdbCompression::Zlib => Self::Zlib,
+            ConfigStorageRocksdbCompression::Bz2 => Self::Bz2,
+            ConfigStorageRocksdbCompression::Lz4 => Self::Lz4,
+            ConfigStorageRocksdbCompression::Lz4hc => Self::Lz4hc,
+            ConfigStorageRocksdbCompression::Zstd => Self::Zstd,
+        }
     }
 }
 
