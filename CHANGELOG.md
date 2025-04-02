@@ -26,5 +26,6 @@ The minor version will be incremented upon a breaking change and the patch versi
 - storage: support getSignaturesForAddress ([#10](https://github.com/lamports-dev/alpamayo/pull/10))
 - storage: split slot index ([#11](https://github.com/lamports-dev/alpamayo/pull/11))
 - storage: support compression for indexes ([#12](https://github.com/lamports-dev/alpamayo/pull/12))
+- storage: store err in tx-index ([#13](https://github.com/lamports-dev/alpamayo/pull/13))
 
 ### Breaking
