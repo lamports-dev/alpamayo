@@ -565,7 +565,7 @@ impl RocksdbWrite {
                             slot,
                             offset: tx_offset.offset,
                             size: tx_offset.size,
-                            err: None, // TODO
+                            err: tx_offset.err.as_ref().map(Cow::Borrowed),
                         }
                         .encode(&mut buf);
                         batch.put_cf(
