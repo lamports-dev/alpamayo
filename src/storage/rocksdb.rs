@@ -467,6 +467,7 @@ impl Rocksdb {
     fn cf_descriptors() -> Vec<ColumnFamilyDescriptor> {
         vec![
             Self::cf_descriptor::<SlotBasicIndex>(),
+            Self::cf_descriptor::<SlotExtraIndex>(),
             Self::cf_descriptor::<TransactionIndex>(),
             Self::cf_descriptor::<SfaIndex>(),
         ]
