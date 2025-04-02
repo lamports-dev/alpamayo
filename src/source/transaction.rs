@@ -1,7 +1,7 @@
 use {
     crate::{source::sfa::SignatureForAddress, storage::rocksdb::TransactionIndex},
     prost::Message as _,
-    solana_sdk::{clock::Slot, signature::Signature},
+    solana_sdk::{clock::Slot, signature::Signature, transaction::TransactionError},
     solana_storage_proto::convert::generated,
     solana_transaction_status::{TransactionWithStatusMeta, extract_and_fmt_memos},
 };
@@ -10,6 +10,7 @@ use {
 pub struct TransactionWithBinary {
     pub key: [u8; 8],
     pub signature: Signature,
+    pub err: Option<TransactionError>,
     pub sfa: Vec<SignatureForAddress>,
     pub protobuf: Vec<u8>,
 }
@@ -19,10 +20,11 @@ impl TransactionWithBinary {
         let signature = *tx.transaction_signature();
         let key = TransactionIndex::encode(&signature);
 
-        let sfa = match &tx {
-            TransactionWithStatusMeta::MissingMetadata(_) => vec![],
+        let (err, sfa) = match &tx {
+            TransactionWithStatusMeta::MissingMetadata(_) => (None, vec![]),
             TransactionWithStatusMeta::Complete(tx) => {
                 let account_keys = tx.account_keys();
+                let err = tx.meta.status.clone().err();
                 let memo = extract_and_fmt_memos(tx);
                 let mut sfa = Vec::with_capacity(account_keys.len());
                 for pubkey in account_keys.iter() {
@@ -30,11 +32,11 @@ impl TransactionWithBinary {
                         slot,
                         *pubkey,
                         signature,
-                        tx.meta.status.clone().err(),
+                        err.clone(),
                         memo.clone(),
                     ))
                 }
-                sfa
+                (err, sfa)
             }
         };
 
@@ -43,6 +45,7 @@ impl TransactionWithBinary {
         Self {
             key,
             signature,
+            err,
             sfa,
             protobuf,
         }

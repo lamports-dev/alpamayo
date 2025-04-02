@@ -11,6 +11,7 @@ use {
         clock::{Slot, UnixTimestamp},
         pubkey::Pubkey,
         signature::Signature,
+        transaction::TransactionError,
     },
     solana_storage_proto::convert::generated,
     solana_transaction_status::{Reward, RewardType, Rewards},
@@ -20,11 +21,12 @@ use {
     },
 };
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct BlockTransactionOffset {
     pub key: [u8; 8],
     pub offset: u64,
     pub size: u64,
+    pub err: Option<TransactionError>,
 }
 
 #[derive(Debug)]
@@ -129,6 +131,7 @@ impl ConfirmedBlockProtoRef<'_> {
                 key: tx.key,
                 offset,
                 size: tx.protobuf.len() as u64,
+                err: tx.err.clone(),
             });
         }
         for reward in self.rewards {
