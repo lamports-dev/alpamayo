@@ -195,6 +195,7 @@ impl SlotExtraIndexValue {
             let hash = slice[i * 8..(i + 1) * 8].try_into().expect("valid slice");
             transactions.push(hash);
         }
+        slice.advance(transactions.len() * 8);
 
         let mut sfa = Vec::with_capacity(
             decode_varint(&mut slice)
@@ -206,6 +207,8 @@ impl SlotExtraIndexValue {
             let hash = slice[i * 8..(i + 1) * 8].try_into().expect("valid slice");
             sfa.push(hash);
         }
+        slice.advance(sfa.len() * 8);
+        anyhow::ensure!(slice.is_empty(), "invalid slice len, left: {}", slice.len());
 
         Ok(Self { transactions, sfa })
     }
