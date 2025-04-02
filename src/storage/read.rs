@@ -570,7 +570,7 @@ impl ReadRequest {
 
                 if let Some(before) = before {
                     // read slot for before signature
-                    let read_tx_index = match db_read.read_tx_index(before) {
+                    let read_tx_index = match db_read.read_tx_index(before, false) {
                         Ok(fut) => fut,
                         Err(error) => {
                             let _ = tx.send(ReadResultSignaturesForAddress::ReadError(error));
@@ -738,7 +738,7 @@ impl ReadRequest {
                     }
                 }
 
-                let read_tx_index = match db_read.read_tx_index(signature) {
+                let read_tx_index = match db_read.read_tx_index(signature, false) {
                     Ok(fut) => fut,
                     Err(error) => {
                         let _ = tx.send(ReadResultTransaction::ReadError(error));
