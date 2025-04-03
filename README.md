@@ -12,7 +12,8 @@ Please use issues only for reporting bugs or discussing feature-related topics. 
 
 - [x] `getBlock`
 - [x] `getBlockHeight`
-- [ ] `getBlocks`
+- [x] `getBlocks`
+- [x] `getBlocksWithLimit`
 - [x] `getBlockTime`
 - [ ] `getLatestBlockhash`
 - [ ] `getRecentPrioritizationFees`

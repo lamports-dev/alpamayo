@@ -5,7 +5,7 @@ use {
         storage::{
             read::{
                 ReadRequest, ReadResultBlock, ReadResultBlockHeight, ReadResultBlockTime,
-                ReadResultSignaturesForAddress, ReadResultTransaction,
+                ReadResultBlocks, ReadResultSignaturesForAddress, ReadResultTransaction,
             },
             slots::StoredSlots,
         },
@@ -25,14 +25,16 @@ use {
         error::{ErrorCode, ErrorObject, ErrorObjectOwned, INVALID_PARAMS_MSG},
     },
     prost::Message,
-    serde::{Deserialize, de},
+    serde::{Deserialize, Serialize, de},
     solana_rpc_client_api::{
         config::{
-            RpcBlockConfig, RpcContextConfig, RpcEncodingConfigWrapper,
+            RpcBlockConfig, RpcBlocksConfigWrapper, RpcContextConfig, RpcEncodingConfigWrapper,
             RpcSignaturesForAddressConfig, RpcTransactionConfig,
         },
         custom_error::RpcCustomError,
-        request::MAX_GET_CONFIRMED_SIGNATURES_FOR_ADDRESS2_LIMIT,
+        request::{
+            MAX_GET_CONFIRMED_BLOCKS_RANGE, MAX_GET_CONFIRMED_SIGNATURES_FOR_ADDRESS2_LIMIT,
+        },
         response::{RpcConfirmedTransactionStatusWithSignature, RpcVersionInfo},
     },
     solana_sdk::{
@@ -100,6 +102,8 @@ fn jsonrpc_response_error(
 struct SupportedCalls {
     get_block: bool,
     get_block_height: bool,
+    get_blocks: bool,
+    get_blocks_with_limit: bool,
     get_block_time: bool,
     get_signatures_for_address: bool,
     get_slot: bool,
@@ -112,6 +116,11 @@ impl SupportedCalls {
         Ok(Self {
             get_block: Self::check_call_support(calls, ConfigRpcCall::GetBlock)?,
             get_block_height: Self::check_call_support(calls, ConfigRpcCall::GetBlockHeight)?,
+            get_blocks: Self::check_call_support(calls, ConfigRpcCall::GetBlocks)?,
+            get_blocks_with_limit: Self::check_call_support(
+                calls,
+                ConfigRpcCall::GetBlocksWithLimit,
+            )?,
             get_block_time: Self::check_call_support(calls, ConfigRpcCall::GetBlockTime)?,
             get_signatures_for_address: Self::check_call_support(
                 calls,
@@ -249,6 +258,7 @@ impl<'a> RpcRequests<'a> {
 enum RpcRequest {
     Block(RpcRequestBlock),
     BlockHeight(RpcRequestBlockHeight),
+    Blocks(RpcRequestBlocks),
     BlockTime(RpcRequestBlockTime),
     SignaturesForAddress(RpcRequestSignaturesForAddress),
     Transaction(RpcRequestTransaction),
@@ -323,6 +333,135 @@ impl RpcRequest {
 
                 Ok(Self::BlockHeight(RpcRequestBlockHeight {
                     id: id.into_owned(),
+                    commitment,
+                }))
+            }
+            "getBlocks" if state.supported_calls.get_blocks => {
+                #[derive(Debug, Deserialize)]
+                struct ReqParams {
+                    start_slot: Slot,
+                    #[serde(default)]
+                    wrapper: Option<RpcBlocksConfigWrapper>,
+                    #[serde(default)]
+                    config: Option<RpcContextConfig>,
+                }
+
+                let (
+                    id,
+                    ReqParams {
+                        start_slot,
+                        wrapper,
+                        config,
+                    },
+                ) = Self::parse_params(request)?;
+                let (end_slot, maybe_config) =
+                    wrapper.map(|wrapper| wrapper.unzip()).unwrap_or_default();
+                let config = config.or(maybe_config).unwrap_or_default();
+
+                let commitment = config.commitment.unwrap_or_default();
+                if let Err(error) = Self::check_is_at_least_confirmed(commitment) {
+                    return Err(Self::response_error(id, error));
+                }
+
+                let min_context_slot = config.min_context_slot.unwrap_or_default();
+                let finalized_slot = state.stored_slots.finalized_load();
+                if commitment.is_finalized() && finalized_slot < min_context_slot {
+                    return Err(jsonrpc_response_error(
+                        id.into_owned(),
+                        RpcCustomError::MinContextSlotNotReached {
+                            context_slot: finalized_slot,
+                        },
+                    ));
+                }
+
+                let end_slot = std::cmp::min(
+                    end_slot.unwrap_or_else(|| {
+                        start_slot.saturating_add(MAX_GET_CONFIRMED_BLOCKS_RANGE)
+                    }),
+                    if commitment.is_finalized() {
+                        finalized_slot
+                    } else {
+                        state.stored_slots.confirmed_load()
+                    },
+                );
+                if end_slot < start_slot {
+                    return Err(Self::response_success(
+                        id.into_owned(),
+                        serde_json::json!([]),
+                    ));
+                }
+                if end_slot - start_slot > MAX_GET_CONFIRMED_BLOCKS_RANGE {
+                    return Err(Self::response_error(
+                        id,
+                        Self::error_invalid_params::<()>(
+                            format!("Slot range too large; max {MAX_GET_CONFIRMED_BLOCKS_RANGE}"),
+                            None,
+                        ),
+                    ));
+                }
+
+                Ok(Self::Blocks(RpcRequestBlocks {
+                    id: id.into_owned(),
+                    start_slot,
+                    until: RpcRequestBlocksUntil::EndSlot(end_slot),
+                    commitment,
+                }))
+            }
+            "getBlocksWithLimit" if state.supported_calls.get_blocks_with_limit => {
+                #[derive(Debug, Deserialize)]
+                struct ReqParams {
+                    start_slot: Slot,
+                    limit: usize,
+                    #[serde(default)]
+                    config: Option<RpcContextConfig>,
+                }
+
+                let (
+                    id,
+                    ReqParams {
+                        start_slot,
+                        limit,
+                        config,
+                    },
+                ) = Self::parse_params(request)?;
+                let config = config.unwrap_or_default();
+
+                let commitment = config.commitment.unwrap_or_default();
+                if let Err(error) = Self::check_is_at_least_confirmed(commitment) {
+                    return Err(Self::response_error(id, error));
+                }
+
+                let min_context_slot = config.min_context_slot.unwrap_or_default();
+                let finalized_slot = state.stored_slots.finalized_load();
+                if commitment.is_finalized() && finalized_slot < min_context_slot {
+                    return Err(jsonrpc_response_error(
+                        id.into_owned(),
+                        RpcCustomError::MinContextSlotNotReached {
+                            context_slot: finalized_slot,
+                        },
+                    ));
+                }
+
+                if limit == 0 {
+                    return Err(Self::response_success(
+                        id.into_owned(),
+                        serde_json::json!([]),
+                    ));
+                }
+                if limit > MAX_GET_CONFIRMED_BLOCKS_RANGE as usize {
+                    return Err(Self::response_error(
+                        id,
+                        Self::error_invalid_params::<()>(
+                            format!("Limit too large; max {MAX_GET_CONFIRMED_BLOCKS_RANGE}"),
+                            None,
+                        ),
+                    ));
+                }
+
+                Ok(Self::Blocks(RpcRequestBlocks {
+                    id: id.into_owned(),
+                    start_slot,
+                    until: RpcRequestBlocksUntil::Limit(limit),
                     commitment,
                 }))
             }
@@ -472,23 +611,17 @@ impl RpcRequest {
                     Ok(value) => match value {
                         serde_json::Value::Null => None,
                         serde_json::Value::Array(vec) if vec.is_empty() => None,
-                        value => Some(ErrorObject::owned(
-                            ErrorCode::InvalidParams.code(),
+                        value => Some(Self::error_invalid_params(
                             "No parameters were expected",
                             Some(value.to_string()),
                         )),
                     },
-                    Err(error) => Some(ErrorObject::owned(
-                        ErrorCode::InvalidParams.code(),
+                    Err(error) => Some(Self::error_invalid_params(
                         INVALID_PARAMS_MSG,
                         Some(error.to_string()),
                     )),
                 } {
-                    Err(Response {
-                        jsonrpc: Some(TwoPointZero),
-                        payload: ResponsePayload::error(error),
-                        id: request.id,
-                    })
+                    Err(Self::response_error(request.id, error))
                 } else {
                     let version = solana_version::Version::default();
                     Err(Self::response_success(
@@ -527,8 +660,7 @@ impl RpcRequest {
 
     fn check_is_at_least_confirmed(commitment: CommitmentConfig) -> Result<(), ErrorObjectOwned> {
         if !commitment.is_at_least_confirmed() {
-            return Err(ErrorObject::borrowed(
-                ErrorCode::InvalidParams.code(),
+            return Err(Self::error_invalid_params::<()>(
                 "Method does not support commitment below `confirmed`",
                 None,
             ));
@@ -538,21 +670,13 @@ impl RpcRequest {
 
     fn verify_signature(input: &str) -> Result<Signature, ErrorObjectOwned> {
         input.parse().map_err(|error| {
-            ErrorObject::owned::<()>(
-                ErrorCode::InvalidParams.code(),
-                format!("Invalid param: {error:?}"),
-                None,
-            )
+            Self::error_invalid_params::<()>(format!("Invalid param: {error:?}"), None)
         })
     }
 
     fn verify_pubkey(input: &str) -> Result<Pubkey, ErrorObjectOwned> {
         input.parse().map_err(|error| {
-            ErrorObject::owned::<()>(
-                ErrorCode::InvalidParams.code(),
-                format!("Invalid param: {error:?}"),
-                None,
-            )
+            Self::error_invalid_params::<()>(format!("Invalid param: {error:?}"), None)
         })
     }
 
@@ -572,8 +696,7 @@ impl RpcRequest {
         let limit = limit.unwrap_or(MAX_GET_CONFIRMED_SIGNATURES_FOR_ADDRESS2_LIMIT);
 
         if limit == 0 || limit > MAX_GET_CONFIRMED_SIGNATURES_FOR_ADDRESS2_LIMIT {
-            Err(ErrorObject::owned::<()>(
-                ErrorCode::InvalidParams.code(),
+            Err(Self::error_invalid_params::<()>(
                 format!("Invalid limit; max {MAX_GET_CONFIRMED_SIGNATURES_FOR_ADDRESS2_LIMIT}"),
                 None,
             ))
@@ -590,6 +713,13 @@ impl RpcRequest {
         }
     }
 
+    fn error_invalid_params<S: Serialize>(
+        message: impl Into<String>,
+        data: Option<S>,
+    ) -> ErrorObjectOwned {
+        ErrorObject::owned(ErrorCode::InvalidParams.code(), message, data)
+    }
+
     fn response_success(id: Id<'_>, payload: serde_json::Value) -> Response<'_, serde_json::Value> {
         Response {
             jsonrpc: Some(TwoPointZero),
@@ -602,6 +732,7 @@ impl RpcRequest {
         match self {
             Self::Block(request) => request.process(state, upstream_disabled).await,
             Self::BlockHeight(request) => request.process(state).await,
+            Self::Blocks(request) => request.process(state, upstream_disabled).await,
             Self::BlockTime(request) => request.process(state, upstream_disabled).await,
             Self::SignaturesForAddress(request) => request.process(state, upstream_disabled).await,
             Self::Transaction(request) => request.process(state, upstream_disabled).await,
@@ -810,6 +941,7 @@ impl RpcRequestBlockWorkRequest {
     }
 }
 
+#[derive(Debug)]
 struct RpcRequestBlockHeight {
     id: Id<'static>,
     commitment: CommitmentConfig,
@@ -848,6 +980,92 @@ impl RpcRequestBlockHeight {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum RpcRequestBlocksUntil {
+    EndSlot(Slot),
+    Limit(usize),
+}
+
+#[derive(Debug)]
+struct RpcRequestBlocks {
+    id: Id<'static>,
+    start_slot: Slot,
+    until: RpcRequestBlocksUntil,
+    commitment: CommitmentConfig,
+}
+
+impl RpcRequestBlocks {
+    async fn process(self, state: Arc<State>, upstream_disabled: bool) -> RpcRequestResult {
+        let deadline = Instant::now() + state.request_timeout;
+
+        // some slot will be removed while we request from upstream
+        let first_available_slot = state.stored_slots.first_available_load() + 32;
+        if self.start_slot < first_available_slot {
+            if let Some(value) = self
+                .fetch_upstream(&state, upstream_disabled, deadline)
+                .await
+            {
+                return value;
+            }
+        }
+
+        // request
+        let (tx, rx) = oneshot::channel();
+        anyhow::ensure!(
+            state
+                .requests_tx
+                .send(ReadRequest::Blocks {
+                    deadline,
+                    start_slot: self.start_slot,
+                    until: self.until,
+                    commitment: self.commitment,
+                    tx
+                })
+                .await
+                .is_ok(),
+            "request channel is closed"
+        );
+        let Ok(result) = rx.await else {
+            anyhow::bail!("rx channel is closed");
+        };
+
+        match result {
+            ReadResultBlocks::Timeout => anyhow::bail!("timeout"),
+            ReadResultBlocks::Blocks(blocks) => {
+                Ok(RpcRequest::response_success(self.id, blocks.into()))
+            }
+            ReadResultBlocks::ReadError(error) => anyhow::bail!("read error: {error}"),
+        }
+    }
+
+    async fn fetch_upstream(
+        &self,
+        state: &State,
+        upstream_disabled: bool,
+        deadline: Instant,
+    ) -> Option<RpcRequestResult> {
+        if let Some(upstream) = (!upstream_disabled)
+            .then_some(state.upstream.as_ref())
+            .flatten()
+        {
+            Some(
+                upstream
+                    .get_blocks(
+                        deadline,
+                        &self.id,
+                        self.start_slot,
+                        self.until,
+                        self.commitment,
+                    )
+                    .await,
+            )
+        } else {
+            None
+        }
+    }
+}
+
+#[derive(Debug)]
 struct RpcRequestBlockTime {
     id: Id<'static>,
     slot: Slot,
@@ -1124,6 +1342,7 @@ impl RpcRequestTransaction {
     }
 }
 
+#[derive(Debug)]
 pub struct RpcRequestTransactionWorkRequest {
     slot: Slot,
     block_time: Option<UnixTimestamp>,

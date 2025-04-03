@@ -63,6 +63,8 @@ rpc:
   calls:
     - getBlock
     - getBlockHeight
+    - getBlocks
+    - getBlocksWithLimit
     - getBlockTime
     - getSignaturesForAddress
     - getSlot

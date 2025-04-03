@@ -1,5 +1,5 @@
 use {
-    crate::config::ConfigRpcUpstream,
+    crate::{config::ConfigRpcUpstream, rpc::api_solana::RpcRequestBlocksUntil},
     jsonrpsee_types::{Id, Response},
     reqwest::{Client, StatusCode, Version, header::CONTENT_TYPE},
     serde_json::json,
@@ -61,6 +61,33 @@ impl RpcClient {
                     max_supported_transaction_version: encoding_options
                         .max_supported_transaction_version,
                 }]
+            }))
+            .expect("json serialization never fail"),
+        )
+        .await
+    }
+
+    pub async fn get_blocks(
+        &self,
+        deadline: Instant,
+        id: &Id<'static>,
+        start_slot: Slot,
+        until: RpcRequestBlocksUntil,
+        commitment: CommitmentConfig,
+    ) -> RpcClientResult {
+        self.call_with_timeout(
+            deadline,
+            serde_json::to_string(&json!({
+                "jsonrpc": "2.0",
+                "method": match until {
+                    RpcRequestBlocksUntil::EndSlot(_) => "getBlocks",
+                    RpcRequestBlocksUntil::Limit(_) => "getBlocksWithLimit",
+                },
+                "id": id,
+                "params": match until {
+                    RpcRequestBlocksUntil::EndSlot(end_slot) => json!([start_slot, end_slot, commitment]),
+                    RpcRequestBlocksUntil::Limit(limit) => json!([start_slot, limit, commitment]),
+                }
             }))
             .expect("json serialization never fail"),
         )

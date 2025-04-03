@@ -1,5 +1,6 @@
 use {
     crate::{
+        rpc::api_solana::RpcRequestBlocksUntil,
         source::block::BlockWithBinary,
         storage::{
             blocks::{StorageBlockLocationResult, StoredBlocksRead},
@@ -283,6 +284,13 @@ pub enum ReadResultBlockHeight {
 }
 
 #[derive(Debug)]
+pub enum ReadResultBlocks {
+    Timeout,
+    Blocks(Vec<Slot>),
+    ReadError(anyhow::Error),
+}
+
+#[derive(Debug)]
 pub enum ReadResultBlockTime {
     Timeout,
     Removed,
@@ -326,6 +334,13 @@ pub enum ReadRequest {
         deadline: Instant,
         commitment: CommitmentConfig,
         tx: oneshot::Sender<ReadResultBlockHeight>,
+    },
+    Blocks {
+        deadline: Instant,
+        start_slot: Slot,
+        until: RpcRequestBlocksUntil,
+        commitment: CommitmentConfig,
+        tx: oneshot::Sender<ReadResultBlocks>,
     },
     BlockTime {
         deadline: Instant,
@@ -509,6 +524,34 @@ impl ReadRequest {
                             ))
                         }),
                 );
+                None
+            }
+            Self::Blocks {
+                deadline,
+                start_slot,
+                until,
+                commitment,
+                tx,
+            } => {
+                if deadline < Instant::now() {
+                    let _ = tx.send(ReadResultBlocks::Timeout);
+                    return None;
+                }
+
+                let result = match blocks.get_blocks(
+                    start_slot,
+                    if commitment.is_confirmed() {
+                        storage_processed.confirmed
+                    } else {
+                        storage_processed.finalized
+                    },
+                    until,
+                ) {
+                    Ok(blocks) => ReadResultBlocks::Blocks(blocks),
+                    Err(error) => ReadResultBlocks::ReadError(error),
+                };
+
+                let _ = tx.send(result);
                 None
             }
             Self::BlockTime { deadline, slot, tx } => {

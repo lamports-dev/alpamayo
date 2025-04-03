@@ -1,5 +1,8 @@
 use {
-    crate::storage::{files::StorageId, slots::StoredSlots, sync::ReadWriteSyncMessage},
+    crate::{
+        rpc::api_solana::RpcRequestBlocksUntil,
+        storage::{files::StorageId, slots::StoredSlots, sync::ReadWriteSyncMessage},
+    },
     solana_sdk::clock::{Slot, UnixTimestamp},
     std::collections::HashMap,
     tokio::sync::broadcast,
@@ -190,6 +193,58 @@ impl StoredBlocksRead {
         } else {
             StorageBlockLocationResult::SlotMismatch
         }
+    }
+
+    pub fn get_blocks(
+        &self,
+        start_slot: Slot,
+        end_slot: Slot,
+        until: RpcRequestBlocksUntil,
+    ) -> anyhow::Result<Vec<Slot>> {
+        let tail = self.blocks[self.tail];
+        anyhow::ensure!(
+            tail.exists && tail.slot <= start_slot,
+            "requested start slot removed"
+        );
+
+        let head = self.blocks[self.head];
+        anyhow::ensure!(
+            head.exists && head.slot >= end_slot,
+            "end slot out of limit"
+        );
+
+        let mut blocks = Vec::with_capacity(match until {
+            RpcRequestBlocksUntil::EndSlot(end_slot) => (end_slot - start_slot) as usize,
+            RpcRequestBlocksUntil::Limit(limit) => limit,
+        });
+
+        let mut index = (self.tail + (start_slot - tail.slot) as usize) % self.blocks.len();
+        loop {
+            let block = self.blocks[index];
+            if !block.exists {
+                break;
+            }
+            if block.dead {
+                continue;
+            }
+
+            if let RpcRequestBlocksUntil::Limit(limit) = until {
+                if blocks.len() == limit {
+                    break;
+                }
+            }
+
+            blocks.push(block.slot);
+            index = (index + 1) % self.blocks.len();
+
+            if let RpcRequestBlocksUntil::EndSlot(end_slot) = until {
+                if end_slot == block.slot {
+                    break;
+                }
+            }
+        }
+
+        Ok(blocks)
     }
 }
 
