@@ -4,7 +4,7 @@ use {
         rpc::{upstream::RpcClient, workers::WorkRequest},
         storage::{
             read::{
-                ReadRequest, ReadResultBlock, ReadResultBlockHeight,
+                ReadRequest, ReadResultBlock, ReadResultBlockHeight, ReadResultBlockTime,
                 ReadResultSignaturesForAddress, ReadResultTransaction,
             },
             slots::StoredSlots,
@@ -100,6 +100,7 @@ fn jsonrpc_response_error(
 struct SupportedCalls {
     get_block: bool,
     get_block_height: bool,
+    get_block_time: bool,
     get_signatures_for_address: bool,
     get_slot: bool,
     get_transaction: bool,
@@ -111,6 +112,7 @@ impl SupportedCalls {
         Ok(Self {
             get_block: Self::check_call_support(calls, ConfigRpcCall::GetBlock)?,
             get_block_height: Self::check_call_support(calls, ConfigRpcCall::GetBlockHeight)?,
+            get_block_time: Self::check_call_support(calls, ConfigRpcCall::GetBlockTime)?,
             get_signatures_for_address: Self::check_call_support(
                 calls,
                 ConfigRpcCall::GetSignaturesForAddress,
@@ -247,6 +249,7 @@ impl<'a> RpcRequests<'a> {
 enum RpcRequest {
     Block(RpcRequestBlock),
     BlockHeight(RpcRequestBlockHeight),
+    BlockTime(RpcRequestBlockTime),
     SignaturesForAddress(RpcRequestSignaturesForAddress),
     Transaction(RpcRequestTransaction),
 }
@@ -322,6 +325,23 @@ impl RpcRequest {
                     id: id.into_owned(),
                     commitment,
                 }))
+            }
+            "getBlockTime" if state.supported_calls.get_block_time => {
+                #[derive(Debug, Deserialize)]
+                struct ReqParams {
+                    slot: Slot,
+                }
+
+                let (id, ReqParams { slot }) = Self::parse_params(request)?;
+
+                if slot == 0 {
+                    Err(Self::response_success(id.into_owned(), 1584368940.into()))
+                } else {
+                    Ok(Self::BlockTime(RpcRequestBlockTime {
+                        id: id.into_owned(),
+                        slot,
+                    }))
+                }
             }
             "getSignaturesForAddress" if state.supported_calls.get_signatures_for_address => {
                 #[derive(Debug, Deserialize)]
@@ -582,6 +602,7 @@ impl RpcRequest {
         match self {
             Self::Block(request) => request.process(state, upstream_disabled).await,
             Self::BlockHeight(request) => request.process(state).await,
+            Self::BlockTime(request) => request.process(state, upstream_disabled).await,
             Self::SignaturesForAddress(request) => request.process(state, upstream_disabled).await,
             Self::Transaction(request) => request.process(state, upstream_disabled).await,
         }
@@ -695,7 +716,7 @@ impl RpcRequestBlock {
             upstream
                 .get_block(
                     deadline,
-                    self.id,
+                    &self.id,
                     self.slot,
                     self.commitment,
                     self.encoding,
@@ -824,6 +845,73 @@ impl RpcRequestBlockHeight {
             self.id,
             serde_json::json!(block_height),
         ))
+    }
+}
+
+struct RpcRequestBlockTime {
+    id: Id<'static>,
+    slot: Slot,
+}
+
+impl RpcRequestBlockTime {
+    async fn process(self, state: Arc<State>, upstream_disabled: bool) -> RpcRequestResult {
+        let deadline = Instant::now() + state.request_timeout;
+
+        // request
+        let (tx, rx) = oneshot::channel();
+        anyhow::ensure!(
+            state
+                .requests_tx
+                .send(ReadRequest::BlockTime {
+                    deadline,
+                    slot: self.slot,
+                    tx
+                })
+                .await
+                .is_ok(),
+            "request channel is closed"
+        );
+        let Ok(result) = rx.await else {
+            anyhow::bail!("rx channel is closed");
+        };
+        let response = match result {
+            ReadResultBlockTime::Timeout => anyhow::bail!("timeout"),
+            ReadResultBlockTime::Removed => {
+                return self
+                    .fetch_upstream(state, upstream_disabled, deadline)
+                    .await;
+            }
+            ReadResultBlockTime::Dead => Err(RpcCustomError::SlotSkipped { slot: self.slot }),
+            ReadResultBlockTime::NotAvailable => {
+                Err(RpcCustomError::BlockNotAvailable { slot: self.slot })
+            }
+            ReadResultBlockTime::BlockTime(block_time) => Ok(block_time.into()),
+            ReadResultBlockTime::ReadError(error) => anyhow::bail!("read error: {error}"),
+        };
+
+        Ok(match response {
+            Ok(payload) => RpcRequest::response_success(self.id, payload),
+            Err(error) => jsonrpc_response_error(self.id, error),
+        })
+    }
+
+    async fn fetch_upstream(
+        self,
+        state: Arc<State>,
+        upstream_disabled: bool,
+        deadline: Instant,
+    ) -> RpcRequestResult {
+        if let Some(upstream) = (!upstream_disabled)
+            .then_some(state.upstream.as_ref())
+            .flatten()
+        {
+            upstream.get_block_time(deadline, &self.id, self.slot).await
+        } else {
+            Ok(RpcRequest::response_success(
+                self.id,
+                serde_json::json!(None::<()>),
+            ))
+        }
     }
 }
 
@@ -1020,7 +1108,7 @@ impl RpcRequestTransaction {
             upstream
                 .get_transaction(
                     deadline,
-                    self.id,
+                    &self.id,
                     self.signature,
                     self.commitment,
                     self.encoding,

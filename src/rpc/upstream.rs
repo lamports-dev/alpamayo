@@ -41,7 +41,7 @@ impl RpcClient {
     pub async fn get_block(
         &self,
         deadline: Instant,
-        id: Id<'static>,
+        id: &Id<'static>,
         slot: Slot,
         commitment: CommitmentConfig,
         encoding: UiTransactionEncoding,
@@ -61,6 +61,25 @@ impl RpcClient {
                     max_supported_transaction_version: encoding_options
                         .max_supported_transaction_version,
                 }]
+            }))
+            .expect("json serialization never fail"),
+        )
+        .await
+    }
+
+    pub async fn get_block_time(
+        &self,
+        deadline: Instant,
+        id: &Id<'static>,
+        slot: Slot,
+    ) -> RpcClientResult {
+        self.call_with_timeout(
+            deadline,
+            serde_json::to_string(&json!({
+                "jsonrpc": "2.0",
+                "method": "getBlockTime",
+                "id": id,
+                "params": [slot]
             }))
             .expect("json serialization never fail"),
         )
@@ -100,7 +119,7 @@ impl RpcClient {
     pub async fn get_transaction(
         &self,
         deadline: Instant,
-        id: Id<'static>,
+        id: &Id<'static>,
         signature: Signature,
         commitment: CommitmentConfig,
         encoding: UiTransactionEncoding,

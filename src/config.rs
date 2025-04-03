@@ -318,6 +318,7 @@ impl ConfigRpc {
 pub enum ConfigRpcCall {
     GetBlock,
     GetBlockHeight,
+    GetBlockTime,
     GetSignaturesForAddress,
     GetSlot,
     GetTransaction,

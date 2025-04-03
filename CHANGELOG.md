@@ -28,5 +28,6 @@ The minor version will be incremented upon a breaking change and the patch versi
 - storage: support compression for indexes ([#12](https://github.com/lamports-dev/alpamayo/pull/12))
 - storage: store err in tx-index ([#13](https://github.com/lamports-dev/alpamayo/pull/13))
 - rpc: support getVersion ([#14](https://github.com/lamports-dev/alpamayo/pull/14))
+- rpc: support getBlockTime ([#15](https://github.com/lamports-dev/alpamayo/pull/15))
 
 ### Breaking

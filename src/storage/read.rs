@@ -283,6 +283,16 @@ pub enum ReadResultBlockHeight {
 }
 
 #[derive(Debug)]
+pub enum ReadResultBlockTime {
+    Timeout,
+    Removed,
+    Dead,
+    NotAvailable,
+    BlockTime(Option<UnixTimestamp>),
+    ReadError(anyhow::Error),
+}
+
+#[derive(Debug)]
 pub enum ReadResultSignaturesForAddress {
     Timeout,
     Signatures {
@@ -316,6 +326,11 @@ pub enum ReadRequest {
         deadline: Instant,
         commitment: CommitmentConfig,
         tx: oneshot::Sender<ReadResultBlockHeight>,
+    },
+    BlockTime {
+        deadline: Instant,
+        slot: Slot,
+        tx: oneshot::Sender<ReadResultBlockTime>,
     },
     SignaturesForAddress {
         deadline: Instant,
@@ -474,7 +489,8 @@ impl ReadRequest {
                             StorageBlockLocationResult::Found(location) => {
                                 block_height = location.block_height;
                             }
-                            _ => {
+                            StorageBlockLocationResult::Removed
+                            | StorageBlockLocationResult::NotAvailable => {
                                 let _ = tx.send(ReadResultBlockHeight::ReadError(anyhow::anyhow!(
                                     "failed to find commitment slot"
                                 )));
@@ -493,6 +509,40 @@ impl ReadRequest {
                             ))
                         }),
                 );
+                None
+            }
+            Self::BlockTime { deadline, slot, tx } => {
+                if deadline < Instant::now() {
+                    let _ = tx.send(ReadResultBlockTime::Timeout);
+                    return None;
+                }
+
+                let result = if slot <= storage_processed.confirmed {
+                    match blocks.get_block_location(slot) {
+                        StorageBlockLocationResult::Removed => ReadResultBlockTime::Removed,
+                        StorageBlockLocationResult::Dead => ReadResultBlockTime::Dead,
+                        StorageBlockLocationResult::SlotMismatch => {
+                            error!(slot = slot, "item/slot mismatch");
+                            ReadResultBlockTime::ReadError(anyhow::anyhow!(io::Error::new(
+                                io::ErrorKind::Other,
+                                "item/slot mismatch",
+                            )))
+                        }
+                        StorageBlockLocationResult::Found(location) => {
+                            ReadResultBlockTime::BlockTime(location.block_time)
+                        }
+                        StorageBlockLocationResult::NotAvailable => {
+                            ReadResultBlockTime::ReadError(anyhow::anyhow!("failed to find slot"))
+                        }
+                    }
+                } else {
+                    match storage_processed.blocks.get(&slot) {
+                        Some(Some(block)) => ReadResultBlockTime::BlockTime(block.block_time),
+                        _ => ReadResultBlockTime::NotAvailable,
+                    }
+                };
+
+                let _ = tx.send(result);
                 None
             }
             Self::SignaturesForAddress {
@@ -784,7 +834,9 @@ impl ReadRequest {
                         return None;
                     }
                     StorageBlockLocationResult::Found(location) => location,
-                    _ => {
+                    StorageBlockLocationResult::Removed
+                    | StorageBlockLocationResult::Dead
+                    | StorageBlockLocationResult::NotAvailable => {
                         let _ = tx.send(ReadResultTransaction::NotFound);
                         return None;
                     }
