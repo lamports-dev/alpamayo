@@ -998,7 +998,7 @@ impl RpcRequestBlocks {
     async fn process(self, state: Arc<State>, upstream_disabled: bool) -> RpcRequestResult {
         let deadline = Instant::now() + state.request_timeout;
 
-        // some slot will be removed while we request from upstream
+        // some slot will be removed while we pass request, send to upstream
         let first_available_slot = state.stored_slots.first_available_load() + 32;
         if self.start_slot < first_available_slot {
             if let Some(value) = self
