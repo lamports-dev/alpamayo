@@ -321,6 +321,7 @@ pub enum ConfigRpcCall {
     GetSignaturesForAddress,
     GetSlot,
     GetTransaction,
+    GetVersion,
 }
 
 #[derive(Debug, Clone, Deserialize)]

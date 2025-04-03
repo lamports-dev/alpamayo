@@ -20,7 +20,7 @@ Please use issues only for reporting bugs or discussing feature-related topics. 
 - [ ] `getSignatureStatuses`
 - [x] `getSlot`
 - [x] `getTransaction`
-- [ ] `getVersion`
+- [x] `getVersion`
 - [ ] `isBlockhashValid`
 
 ### Extra methods:

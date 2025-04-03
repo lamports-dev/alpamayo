@@ -21,8 +21,8 @@ use {
         http::Result as HttpResult,
     },
     jsonrpsee_types::{
-        ErrorCode, ErrorObject, ErrorObjectOwned, Id, Params, Request, Response, ResponsePayload,
-        TwoPointZero,
+        Id, Params, Request, Response, ResponsePayload, TwoPointZero,
+        error::{ErrorCode, ErrorObject, ErrorObjectOwned, INVALID_PARAMS_MSG},
     },
     prost::Message,
     serde::{Deserialize, de},
@@ -33,7 +33,7 @@ use {
         },
         custom_error::RpcCustomError,
         request::MAX_GET_CONFIRMED_SIGNATURES_FOR_ADDRESS2_LIMIT,
-        response::RpcConfirmedTransactionStatusWithSignature,
+        response::{RpcConfirmedTransactionStatusWithSignature, RpcVersionInfo},
     },
     solana_sdk::{
         clock::{Slot, UnixTimestamp},
@@ -103,6 +103,7 @@ struct SupportedCalls {
     get_signatures_for_address: bool,
     get_slot: bool,
     get_transaction: bool,
+    get_version: bool,
 }
 
 impl SupportedCalls {
@@ -116,6 +117,7 @@ impl SupportedCalls {
             )?,
             get_slot: Self::check_call_support(calls, ConfigRpcCall::GetSlot)?,
             get_transaction: Self::check_call_support(calls, ConfigRpcCall::GetTransaction)?,
+            get_version: Self::check_call_support(calls, ConfigRpcCall::GetVersion)?,
         })
     }
 
@@ -442,6 +444,41 @@ impl RpcRequest {
                     encoding,
                     max_supported_transaction_version,
                 }))
+            }
+            "getVersion" if state.supported_calls.get_version => {
+                if let Some(error) = match serde_json::from_str::<serde_json::Value>(
+                    request.params.as_ref().map(|p| p.get()).unwrap_or("null"),
+                ) {
+                    Ok(value) => match value {
+                        serde_json::Value::Null => None,
+                        serde_json::Value::Array(vec) if vec.is_empty() => None,
+                        value => Some(ErrorObject::owned(
+                            ErrorCode::InvalidParams.code(),
+                            "No parameters were expected",
+                            Some(value.to_string()),
+                        )),
+                    },
+                    Err(error) => Some(ErrorObject::owned(
+                        ErrorCode::InvalidParams.code(),
+                        INVALID_PARAMS_MSG,
+                        Some(error.to_string()),
+                    )),
+                } {
+                    Err(Response {
+                        jsonrpc: Some(TwoPointZero),
+                        payload: ResponsePayload::error(error),
+                        id: request.id,
+                    })
+                } else {
+                    let version = solana_version::Version::default();
+                    Err(Self::response_success(
+                        request.id.into_owned(),
+                        serde_json::json!(RpcVersionInfo {
+                            solana_core: version.to_string(),
+                            feature_set: Some(version.feature_set),
+                        }),
+                    ))
+                }
             }
             _ => Err(Response {
                 jsonrpc: Some(TwoPointZero),

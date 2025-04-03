@@ -157,6 +157,7 @@ dependencies = [
  "solana-sdk",
  "solana-storage-proto",
  "solana-transaction-status",
+ "solana-version",
  "thiserror 2.0.11",
  "tokio",
  "tokio-uring",
