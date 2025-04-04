@@ -131,6 +131,7 @@ impl StoredBlocksWrite {
         if self.blocks[self.tail].exists {
             let block = std::mem::replace(&mut self.blocks[self.tail], StoredBlock::new_noexists());
             self.tail = (self.tail + 1) % self.blocks.len();
+            self.stored_slots.first_available_store(self.front_slot());
             Some(block)
         } else {
             None
@@ -148,10 +149,10 @@ impl StoredBlocksWrite {
             if block.exists {
                 return Some(block.slot);
             }
-            index = (index + 1) % self.blocks.len();
             if index == self.head {
                 break;
             }
+            index = (index + 1) % self.blocks.len();
         }
         None
     }
