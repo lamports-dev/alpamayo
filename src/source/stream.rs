@@ -73,6 +73,10 @@ pub enum StreamSourceMessage {
         parent: Slot,
         status: StreamSourceSlotStatus,
     },
+    SlotStatusInit {
+        slot: Slot,
+        status: StreamSourceSlotStatus,
+    },
 }
 
 #[derive(Debug)]
@@ -264,12 +268,30 @@ impl Stream for StreamSource {
                         }
 
                         // drop message if less or eq to first processed
-                        let Some(first_processed) = this.first_processed else {
-                            continue;
+                        let first_processed = match this.first_processed {
+                            Some(first_processed) if slot > first_processed => first_processed,
+                            _ if matches!(
+                                status,
+                                SlotStatusProto::SlotConfirmed | SlotStatusProto::SlotFinalized
+                            ) =>
+                            {
+                                return Poll::Ready(Some(Ok(
+                                    StreamSourceMessage::SlotStatusInit {
+                                        slot,
+                                        status: match status {
+                                            SlotStatusProto::SlotConfirmed => {
+                                                StreamSourceSlotStatus::Confirmed
+                                            }
+                                            SlotStatusProto::SlotFinalized => {
+                                                StreamSourceSlotStatus::Finalized
+                                            }
+                                            _ => unreachable!(),
+                                        },
+                                    },
+                                )));
+                            }
+                            _ => continue,
                         };
-                        if slot <= first_processed {
-                            continue;
-                        }
 
                         // drop outdated slots
                         if status == SlotStatusProto::SlotFinalized {

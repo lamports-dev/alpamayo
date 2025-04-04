@@ -273,6 +273,18 @@ async fn start2(
                                 },
                             }
                         }
+                        StreamSourceMessage::SlotStatusInit { slot, status } => {
+                            if slot >= stored_slots.first_available_load() {
+                                match status {
+                                    StreamSourceSlotStatus::Confirmed => stored_slots.confirmed_store(slot),
+                                    StreamSourceSlotStatus::Finalized => {
+                                        stored_slots.finalized_store(slot);
+                                        let _ = sync_tx.send(ReadWriteSyncMessage::SlotFinalized { slot });
+                                    }
+                                    _ => unreachable!(),
+                                }
+                            }
+                        }
                     }
 
                     // get confirmed and push to the queue
