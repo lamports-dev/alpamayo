@@ -32,9 +32,7 @@ use {
             RpcSignaturesForAddressConfig, RpcTransactionConfig,
         },
         custom_error::RpcCustomError,
-        request::{
-            MAX_GET_CONFIRMED_BLOCKS_RANGE, MAX_GET_CONFIRMED_SIGNATURES_FOR_ADDRESS2_LIMIT,
-        },
+        request::MAX_GET_CONFIRMED_BLOCKS_RANGE,
         response::{RpcConfirmedTransactionStatusWithSignature, RpcVersionInfo},
     },
     solana_sdk::{
@@ -145,6 +143,7 @@ pub struct State {
     body_limit: usize,
     request_timeout: Duration,
     supported_calls: SupportedCalls,
+    gsfa_limit: usize,
     requests_tx: mpsc::Sender<ReadRequest>,
     upstream: Option<RpcClient>,
     workers: Sender<WorkRequest>,
@@ -162,6 +161,7 @@ impl State {
             body_limit: config.body_limit,
             request_timeout: config.request_timeout,
             supported_calls: SupportedCalls::new(&config.calls)?,
+            gsfa_limit: config.gsfa_limit,
             requests_tx,
             upstream: config.upstream.map(RpcClient::new).transpose()?,
             workers,
@@ -501,7 +501,11 @@ impl RpcRequest {
 
                 let (address, before, until, limit) =
                     match Self::verify_and_parse_signatures_for_address_params(
-                        address, before, until, limit,
+                        address,
+                        before,
+                        until,
+                        limit,
+                        state.gsfa_limit,
                     ) {
                         Ok(value) => value,
                         Err(error) => return Err(Self::response_error(id, error)),
@@ -685,6 +689,7 @@ impl RpcRequest {
         before: Option<String>,
         until: Option<String>,
         limit: Option<usize>,
+        default_limit: usize, // default is MAX_GET_CONFIRMED_SIGNATURES_FOR_ADDRESS2_LIMIT / 1000
     ) -> Result<(Pubkey, Option<Signature>, Option<Signature>, usize), ErrorObjectOwned> {
         let address = Self::verify_pubkey(&address)?;
         let before = before
@@ -693,11 +698,11 @@ impl RpcRequest {
         let until = until
             .map(|ref until| Self::verify_signature(until))
             .transpose()?;
-        let limit = limit.unwrap_or(MAX_GET_CONFIRMED_SIGNATURES_FOR_ADDRESS2_LIMIT);
+        let limit = limit.unwrap_or(default_limit);
 
-        if limit == 0 || limit > MAX_GET_CONFIRMED_SIGNATURES_FOR_ADDRESS2_LIMIT {
+        if limit == 0 || limit > default_limit {
             Err(Self::error_invalid_params::<()>(
-                format!("Invalid limit; max {MAX_GET_CONFIRMED_SIGNATURES_FOR_ADDRESS2_LIMIT}"),
+                format!("Invalid limit; max {default_limit}"),
                 None,
             ))
         } else {

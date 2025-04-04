@@ -9,6 +9,7 @@ use {
         Deserialize,
         de::{self, Deserializer},
     },
+    solana_rpc_client_api::request::MAX_GET_CONFIRMED_SIGNATURES_FOR_ADDRESS2_LIMIT,
     std::{
         fs::read_to_string as read_to_string_sync,
         net::{IpAddr, Ipv4Addr, SocketAddr},
@@ -285,6 +286,12 @@ pub struct ConfigRpc {
     pub request_timeout: Duration,
     /// Supported RPC calls
     pub calls: Vec<ConfigRpcCall>,
+    /// Maximum number of Signatures in getSignaturesForAddress
+    #[serde(
+        default = "ConfigRpc::default_gsfa_limit",
+        deserialize_with = "deserialize_humansize_usize"
+    )]
+    pub gsfa_limit: usize,
     /// Max number of requests in the queue
     #[serde(
         default = "ConfigRpc::default_request_channel_capacity",
@@ -306,6 +313,10 @@ impl ConfigRpc {
 
     const fn default_request_timeout() -> Duration {
         Duration::from_secs(60)
+    }
+
+    const fn default_gsfa_limit() -> usize {
+        MAX_GET_CONFIRMED_SIGNATURES_FOR_ADDRESS2_LIMIT
     }
 
     const fn default_request_channel_capacity() -> usize {
