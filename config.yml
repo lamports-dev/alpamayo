@@ -67,6 +67,7 @@ rpc:
     - getBlocksWithLimit
     - getBlockTime
     - getSignaturesForAddress
+    - getSignatureStatuses
     - getSlot
     - getTransaction
     - getVersion

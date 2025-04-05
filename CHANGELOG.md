@@ -32,5 +32,6 @@ The minor version will be incremented upon a breaking change and the patch versi
 - rpc: support getBlockTime ([#15](https://github.com/lamports-dev/alpamayo/pull/15))
 - rpc: support getBlocks / getBlocksWithLimit ([#16](https://github.com/lamports-dev/alpamayo/pull/16))
 - rpc: custom gSFA limit ([#18](https://github.com/lamports-dev/alpamayo/pull/18))
+- rpc: support gSS ([#19](https://github.com/lamports-dev/alpamayo/pull/19))
 
 ### Breaking

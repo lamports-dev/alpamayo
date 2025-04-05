@@ -289,7 +289,7 @@ pub struct ConfigRpc {
     /// Maximum number of Signatures in getSignaturesForAddress
     #[serde(
         default = "ConfigRpc::default_gsfa_limit",
-        deserialize_with = "deserialize_humansize_usize"
+        deserialize_with = "deserialize_num_str"
     )]
     pub gsfa_limit: usize,
     /// Max number of requests in the queue
@@ -333,6 +333,7 @@ pub enum ConfigRpcCall {
     GetBlocksWithLimit,
     GetBlockTime,
     GetSignaturesForAddress,
+    GetSignatureStatuses,
     GetSlot,
     GetTransaction,
     GetVersion,
