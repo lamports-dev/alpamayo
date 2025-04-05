@@ -170,6 +170,7 @@ pub struct State {
     request_timeout: Duration,
     supported_calls: SupportedCalls,
     gsfa_limit: usize,
+    gss_transaction_history: bool,
     requests_tx: mpsc::Sender<ReadRequest>,
     upstream: Option<RpcClient>,
     workers: Sender<WorkRequest>,
@@ -188,6 +189,7 @@ impl State {
             request_timeout: config.request_timeout,
             supported_calls: SupportedCalls::new(&config.calls)?,
             gsfa_limit: config.gsfa_limit,
+            gss_transaction_history: config.gss_transaction_history,
             requests_tx,
             upstream: config.upstream.map(RpcClient::new).transpose()?,
             workers,
@@ -287,6 +289,7 @@ enum RpcRequest {
     Blocks(RpcRequestBlocks),
     BlockTime(RpcRequestBlockTime),
     SignaturesForAddress(RpcRequestSignaturesForAddress),
+    SignatureStatuses(RpcRequestsSignatureStatuses),
     Transaction(RpcRequestTransaction),
 }
 
@@ -351,7 +354,7 @@ impl RpcRequest {
                 if let Some(min_context_slot) = min_context_slot {
                     if slot < min_context_slot {
                         return Err(jsonrpc_response_error_custom(
-                            id.into_owned(),
+                            id,
                             RpcCustomError::MinContextSlotNotReached { context_slot: slot },
                         ));
                     }
@@ -393,7 +396,7 @@ impl RpcRequest {
                 let finalized_slot = state.stored_slots.finalized_load();
                 if commitment.is_finalized() && finalized_slot < min_context_slot {
                     return Err(jsonrpc_response_error_custom(
-                        id.into_owned(),
+                        id,
                         RpcCustomError::MinContextSlotNotReached {
                             context_slot: finalized_slot,
                         },
@@ -411,10 +414,7 @@ impl RpcRequest {
                     },
                 );
                 if end_slot < start_slot {
-                    return Err(jsonrpc_response_success(
-                        id.into_owned(),
-                        serde_json::json!([]),
-                    ));
+                    return Err(jsonrpc_response_success(id, serde_json::json!([])));
                 }
                 if end_slot - start_slot > MAX_GET_CONFIRMED_BLOCKS_RANGE {
                     return Err(jsonrpc_response_error(
@@ -461,7 +461,7 @@ impl RpcRequest {
                 let finalized_slot = state.stored_slots.finalized_load();
                 if commitment.is_finalized() && finalized_slot < min_context_slot {
                     return Err(jsonrpc_response_error_custom(
-                        id.into_owned(),
+                        id,
                         RpcCustomError::MinContextSlotNotReached {
                             context_slot: finalized_slot,
                         },
@@ -469,10 +469,7 @@ impl RpcRequest {
                 }
 
                 if limit == 0 {
-                    return Err(jsonrpc_response_success(
-                        id.into_owned(),
-                        serde_json::json!([]),
-                    ));
+                    return Err(jsonrpc_response_success(id, serde_json::json!([])));
                 }
                 if limit > MAX_GET_CONFIRMED_BLOCKS_RANGE as usize {
                     return Err(jsonrpc_response_error(
@@ -500,7 +497,7 @@ impl RpcRequest {
                 let (id, ReqParams { slot }) = Self::parse_params(request)?;
 
                 if slot == 0 {
-                    Err(jsonrpc_response_success(id.into_owned(), 1584368940.into()))
+                    Err(jsonrpc_response_success(id, 1584368940.into()))
                 } else {
                     Ok(Self::BlockTime(RpcRequestBlockTime {
                         id: id.into_owned(),
@@ -550,7 +547,7 @@ impl RpcRequest {
                     };
                     if slot < min_context_slot {
                         return Err(jsonrpc_response_error_custom(
-                            id.into_owned(),
+                            id,
                             RpcCustomError::MinContextSlotNotReached { context_slot: slot },
                         ));
                     }
@@ -604,7 +601,18 @@ impl RpcRequest {
                     .map(|x| x.search_transaction_history)
                     .unwrap_or(false);
 
-                todo!()
+                if search_transaction_history && !state.gss_transaction_history {
+                    return Err(jsonrpc_response_error_custom(
+                        id,
+                        RpcCustomError::TransactionHistoryNotAvailable,
+                    ));
+                }
+
+                Ok(Self::SignatureStatuses(RpcRequestsSignatureStatuses {
+                    id: id.into_owned(),
+                    signatures,
+                    search_transaction_history,
+                }))
             }
             "getSlot" if state.supported_calls.get_slot => {
                 #[derive(Debug, Deserialize)]
@@ -628,13 +636,13 @@ impl RpcRequest {
                 if let Some(min_context_slot) = min_context_slot {
                     if slot < min_context_slot {
                         return Err(jsonrpc_response_error_custom(
-                            id.into_owned(),
+                            id,
                             RpcCustomError::MinContextSlotNotReached { context_slot: slot },
                         ));
                     }
                 }
 
-                Err(jsonrpc_response_success(id.into_owned(), slot.into()))
+                Err(jsonrpc_response_success(id, slot.into()))
             }
             "getTransaction" if state.supported_calls.get_transaction => {
                 #[derive(Debug, Deserialize)]
@@ -696,7 +704,7 @@ impl RpcRequest {
                 } else {
                     let version = solana_version::Version::default();
                     Err(jsonrpc_response_success(
-                        request.id.into_owned(),
+                        request.id,
                         serde_json::json!(RpcVersionInfo {
                             solana_core: version.to_string(),
                             feature_set: Some(version.feature_set),
@@ -784,6 +792,7 @@ impl RpcRequest {
             Self::Blocks(request) => request.process(state, upstream_disabled).await,
             Self::BlockTime(request) => request.process(state, upstream_disabled).await,
             Self::SignaturesForAddress(request) => request.process(state, upstream_disabled).await,
+            Self::SignatureStatuses(request) => request.process(state, upstream_disabled).await,
             Self::Transaction(request) => request.process(state, upstream_disabled).await,
         }
     }
@@ -1295,6 +1304,21 @@ impl RpcRequestSignaturesForAddress {
         } else {
             Ok(Ok(vec![]))
         }
+    }
+}
+
+#[derive(Debug)]
+struct RpcRequestsSignatureStatuses {
+    id: Id<'static>,
+    signatures: Vec<Signature>,
+    search_transaction_history: bool,
+}
+
+impl RpcRequestsSignatureStatuses {
+    async fn process(self, state: Arc<State>, upstream_disabled: bool) -> RpcRequestResult {
+        let deadline = Instant::now() + state.request_timeout;
+
+        todo!()
     }
 }
 

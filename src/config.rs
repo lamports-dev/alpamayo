@@ -292,6 +292,9 @@ pub struct ConfigRpc {
         deserialize_with = "deserialize_num_str"
     )]
     pub gsfa_limit: usize,
+    /// Enable transaction history for getSignatureStatuses
+    #[serde(default = "ConfigRpc::default_gss_transaction_history")]
+    pub gss_transaction_history: bool,
     /// Max number of requests in the queue
     #[serde(
         default = "ConfigRpc::default_request_channel_capacity",
@@ -317,6 +320,10 @@ impl ConfigRpc {
 
     const fn default_gsfa_limit() -> usize {
         MAX_GET_CONFIRMED_SIGNATURES_FOR_ADDRESS2_LIMIT
+    }
+
+    const fn default_gss_transaction_history() -> bool {
+        true
     }
 
     const fn default_request_channel_capacity() -> usize {
