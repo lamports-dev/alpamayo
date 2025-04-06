@@ -4,7 +4,8 @@ use {
     reqwest::{Client, StatusCode, Version, header::CONTENT_TYPE},
     serde_json::json,
     solana_rpc_client_api::config::{
-        RpcBlockConfig, RpcSignaturesForAddressConfig, RpcTransactionConfig,
+        RpcBlockConfig, RpcSignatureStatusConfig, RpcSignaturesForAddressConfig,
+        RpcTransactionConfig,
     },
     solana_sdk::{
         clock::Slot, commitment_config::CommitmentConfig, pubkey::Pubkey, signature::Signature,
@@ -136,6 +137,29 @@ impl RpcClient {
                     limit: Some(limit),
                     commitment: Some(commitment),
                     min_context_slot: None,
+                }]
+            }))
+            .expect("json serialization never fail"),
+        )
+        .await
+    }
+
+    pub async fn get_signature_statuses(
+        &self,
+        deadline: Instant,
+        id: &Id<'static>,
+        signatures: Vec<&Signature>,
+    ) -> RpcClientResult {
+        let signatures = signatures.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+
+        self.call_with_timeout(
+            deadline,
+            serde_json::to_string(&json!({
+                "jsonrpc": "2.0",
+                "method": "getSignatureStatuses",
+                "id": id,
+                "params": [signatures, RpcSignatureStatusConfig {
+                    search_transaction_history: true
                 }]
             }))
             .expect("json serialization never fail"),

@@ -5,7 +5,8 @@ use {
         storage::{
             read::{
                 ReadRequest, ReadResultBlock, ReadResultBlockHeight, ReadResultBlockTime,
-                ReadResultBlocks, ReadResultSignaturesForAddress, ReadResultTransaction,
+                ReadResultBlocks, ReadResultSignatureStatuses, ReadResultSignaturesForAddress,
+                ReadResultTransaction,
             },
             slots::StoredSlots,
         },
@@ -33,7 +34,9 @@ use {
         },
         custom_error::RpcCustomError,
         request::{MAX_GET_CONFIRMED_BLOCKS_RANGE, MAX_GET_SIGNATURE_STATUSES_QUERY_ITEMS},
-        response::{RpcConfirmedTransactionStatusWithSignature, RpcVersionInfo},
+        response::{
+            RpcConfirmedTransactionStatusWithSignature, RpcResponseContext, RpcVersionInfo,
+        },
     },
     solana_sdk::{
         clock::{Slot, UnixTimestamp},
@@ -44,7 +47,7 @@ use {
     solana_storage_proto::convert::generated,
     solana_transaction_status::{
         BlockEncodingOptions, ConfirmedBlock, ConfirmedTransactionWithStatusMeta,
-        TransactionWithStatusMeta, UiTransactionEncoding,
+        TransactionStatus, TransactionWithStatusMeta, UiTransactionEncoding,
     },
     std::{
         fmt,
@@ -1249,10 +1252,7 @@ impl RpcRequestSignaturesForAddress {
                     .map(|sig| sig.signature.parse().expect("valid sig"));
             }
 
-            match self
-                .fetch_upstream(state, upstream_disabled, deadline, before, limit)
-                .await?
-            {
+            match self.fetch_upstream(state, deadline, before, limit).await? {
                 Ok(mut sigs) => signatures.append(&mut sigs),
                 Err(error) => return Ok(error),
             }
@@ -1265,7 +1265,6 @@ impl RpcRequestSignaturesForAddress {
     async fn fetch_upstream(
         &self,
         state: Arc<State>,
-        upstream_disabled: bool,
         deadline: Instant,
         before: Option<Signature>,
         limit: usize,
@@ -1275,10 +1274,7 @@ impl RpcRequestSignaturesForAddress {
             Response<'static, serde_json::Value>,
         >,
     > {
-        if let Some(upstream) = (!upstream_disabled)
-            .then_some(state.upstream.as_ref())
-            .flatten()
-        {
+        if let Some(upstream) = state.upstream.as_ref() {
             let response = upstream
                 .get_signatures_for_address(
                     deadline,
@@ -1318,7 +1314,93 @@ impl RpcRequestsSignatureStatuses {
     async fn process(self, state: Arc<State>, upstream_disabled: bool) -> RpcRequestResult {
         let deadline = Instant::now() + state.request_timeout;
 
-        todo!()
+        // request
+        let (tx, rx) = oneshot::channel();
+        anyhow::ensure!(
+            state
+                .requests_tx
+                .send(ReadRequest::SignatureStatuses {
+                    deadline,
+                    signatures: self.signatures.clone(),
+                    search_transaction_history: self.search_transaction_history,
+                    tx
+                })
+                .await
+                .is_ok(),
+            "request channel is closed"
+        );
+        let Ok(result) = rx.await else {
+            anyhow::bail!("rx channel is closed");
+        };
+        let mut statuses = match result {
+            ReadResultSignatureStatuses::Timeout => anyhow::bail!("timeout"),
+            ReadResultSignatureStatuses::Signatures(signatures) => signatures,
+            ReadResultSignatureStatuses::ReadError(error) => {
+                anyhow::bail!("read error: {error}")
+            }
+        };
+
+        if self.search_transaction_history
+            && !upstream_disabled
+            && !statuses.iter().any(|status| status.is_none())
+        {
+            let mut signatures_history = Vec::new();
+            for (signature, status) in self.signatures.iter().zip(statuses.iter()) {
+                if status.is_none() {
+                    signatures_history.push(signature);
+                }
+            }
+
+            let mut signatures_upstream = match self
+                .fetch_upstream(&state, deadline, signatures_history)
+                .await?
+            {
+                Ok(sigs) => sigs,
+                Err(error) => return Ok(error),
+            };
+
+            let mut index = 0;
+            for status in statuses.iter_mut() {
+                if status.is_none() {
+                    *status = signatures_upstream[index].take();
+                    index += 1;
+                }
+            }
+        }
+
+        let data = serde_json::to_value(&solana_rpc_client_api::response::Response {
+            context: RpcResponseContext::new(state.stored_slots.processed_load()),
+            value: statuses,
+        })
+        .expect("json serialization never fail");
+        Ok(jsonrpc_response_success(self.id, data))
+    }
+
+    async fn fetch_upstream(
+        &self,
+        state: &State,
+        deadline: Instant,
+        signatures: Vec<&Signature>,
+    ) -> anyhow::Result<Result<Vec<Option<TransactionStatus>>, Response<'static, serde_json::Value>>>
+    {
+        if let Some(upstream) = state.upstream.as_ref() {
+            let response = upstream
+                .get_signature_statuses(deadline, &self.id, signatures)
+                .await?;
+
+            if let ResponsePayload::Error(_) = &response.payload {
+                return Ok(Err(response));
+            }
+
+            let ResponsePayload::Success(value) = response.payload else {
+                unreachable!();
+            };
+            serde_json::from_value(value.into_owned())
+                .context("failed to parse upstream response")
+                .map(Ok)
+        } else {
+            Ok(Ok(vec![]))
+        }
     }
 }
 

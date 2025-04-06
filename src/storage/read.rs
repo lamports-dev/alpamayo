@@ -17,14 +17,15 @@ use {
     },
     solana_rpc_client_api::response::RpcConfirmedTransactionStatusWithSignature,
     solana_sdk::{
-        clock::{Slot, UnixTimestamp},
+        clock::{MAX_RECENT_BLOCKHASHES, Slot, UnixTimestamp},
         commitment_config::CommitmentConfig,
         pubkey::Pubkey,
         signature::Signature,
+        transaction::TransactionError,
     },
-    solana_transaction_status::TransactionConfirmationStatus,
+    solana_transaction_status::{TransactionConfirmationStatus, TransactionStatus},
     std::{
-        collections::{BTreeMap, btree_map::Entry as BTreeMapEntry},
+        collections::{BTreeMap, HashMap, btree_map::Entry as BTreeMapEntry},
         io,
         sync::Arc,
         thread,
@@ -227,16 +228,53 @@ async fn read_request_get_next(
     (read_requests_rx, lock, request)
 }
 
+#[derive(Debug)]
+struct SignatureStatus {
+    slot: Slot,
+    block_height: Slot,
+    err: Option<TransactionError>,
+}
+
+#[derive(Debug)]
+struct RecentBlock {
+    block_height: Slot,
+    signatures: Vec<Signature>,
+}
+
 #[derive(Debug, Default)]
 struct StorageProcessed {
-    confirmed: Slot,
-    finalized: Slot,
+    confirmed_slot: Slot,
+    confirmed_height: Slot,
+    finalized_slot: Slot,
+    finalized_height: Slot,
     blocks: BTreeMap<Slot, Option<Arc<BlockWithBinary>>>,
+    signature_statuses: HashMap<Signature, SignatureStatus, foldhash::quality::RandomState>,
+    recent_blocks: BTreeMap<Slot, RecentBlock>,
 }
 
 impl StorageProcessed {
     fn add(&mut self, slot: Slot, block: Arc<BlockWithBinary>) {
         if let BTreeMapEntry::Vacant(entry) = self.blocks.entry(slot) {
+            if let Some(block_height) = block.block_height {
+                for tx in block.transactions.values() {
+                    self.signature_statuses.insert(
+                        tx.signature,
+                        SignatureStatus {
+                            slot,
+                            block_height,
+                            err: tx.err.clone(),
+                        },
+                    );
+                }
+                self.recent_blocks.insert(
+                    slot,
+                    RecentBlock {
+                        block_height,
+                        signatures: block.transactions.keys().copied().collect(),
+                    },
+                );
+            }
+
             entry.insert(Some(block));
         }
     }
@@ -246,23 +284,81 @@ impl StorageProcessed {
     }
 
     fn set_confirmed(&mut self, slot: Slot) {
-        self.confirmed = slot;
+        self.confirmed_slot = slot;
+        self.confirmed_height = self
+            .recent_blocks
+            .get(&slot)
+            .map(|rb| rb.block_height)
+            .unwrap_or(self.confirmed_height);
+
         loop {
             match self.blocks.first_key_value() {
                 Some((first_slot, _block)) if *first_slot <= slot => self.blocks.pop_first(),
                 _ => break,
             };
         }
+
+        loop {
+            match self.recent_blocks.first_key_value() {
+                Some((_slot, block))
+                    if (self.confirmed_height - block.block_height) as usize
+                        >= MAX_RECENT_BLOCKHASHES =>
+                {
+                    if let Some((_slot, block)) = self.recent_blocks.pop_first() {
+                        for signature in block.signatures {
+                            self.signature_statuses.remove(&signature);
+                        }
+                    }
+                }
+                _ => break,
+            }
+        }
     }
 
     fn set_finalized(&mut self, slot: Slot) {
-        self.finalized = slot;
+        self.finalized_slot = slot;
+        self.finalized_height = self
+            .recent_blocks
+            .get(&slot)
+            .map(|rb| rb.block_height)
+            .unwrap_or(self.finalized_height);
     }
 
     fn get_processed_block_height(&self) -> Option<Slot> {
         self.blocks
             .last_key_value()
             .and_then(|(_key, block)| block.as_ref().and_then(|block| block.block_height))
+    }
+
+    fn get_processed_block(&self, slot: Slot) -> Option<&Arc<BlockWithBinary>> {
+        self.blocks.get(&slot).and_then(|block| block.as_ref())
+    }
+
+    fn get_signature_status(&self, signature: &Signature) -> Option<TransactionStatus> {
+        self.signature_statuses.get(signature).map(|status| {
+            let confirmations = if status.block_height > self.finalized_height {
+                self.confirmed_height
+                    .checked_sub(status.block_height)
+                    .map(|x| (x + 1) as usize)
+            } else {
+                None
+            };
+
+            TransactionStatus {
+                slot: status.slot,
+                confirmations,
+                status: match status.err.clone() {
+                    Some(error) => Err(error),
+                    None => Ok(()),
+                },
+                err: status.err.clone(),
+                confirmation_status: Some(match confirmations {
+                    Some(0) => TransactionConfirmationStatus::Processed,
+                    Some(_) => TransactionConfirmationStatus::Confirmed,
+                    None => TransactionConfirmationStatus::Finalized,
+                }),
+            }
+        })
     }
 }
 
@@ -308,6 +404,13 @@ pub enum ReadResultSignaturesForAddress {
         finished: bool,
         before: Option<Signature>,
     },
+    ReadError(anyhow::Error),
+}
+
+#[derive(Debug)]
+pub enum ReadResultSignatureStatuses {
+    Timeout,
+    Signatures(Vec<Option<TransactionStatus>>),
     ReadError(anyhow::Error),
 }
 
@@ -372,6 +475,12 @@ pub enum ReadRequest {
         finished: bool,
         tx: oneshot::Sender<ReadResultSignaturesForAddress>,
         lock: Option<OwnedSemaphorePermit>,
+    },
+    SignatureStatuses {
+        deadline: Instant,
+        signatures: Vec<Signature>,
+        search_transaction_history: bool,
+        tx: oneshot::Sender<ReadResultSignatureStatuses>,
     },
     Transaction {
         deadline: Instant,
@@ -442,6 +551,7 @@ impl ReadRequest {
 
                 let read_fut =
                     storage_files.read(location.storage_id, location.offset, location.size);
+
                 Some(Box::pin(async move {
                     let result = match timeout_at(deadline.into(), read_fut).await {
                         Ok(Ok(bytes)) => ReadResultBlock::Block(bytes),
@@ -480,12 +590,12 @@ impl ReadRequest {
                     }
 
                     if block_height.is_none() {
-                        commitment_slot = Some(storage_processed.confirmed);
+                        commitment_slot = Some(storage_processed.confirmed_slot);
                     }
                 }
 
                 if commitment.is_finalized() {
-                    commitment_slot = Some(storage_processed.finalized);
+                    commitment_slot = Some(storage_processed.finalized_slot);
                 }
 
                 if let Some(mut slot) = commitment_slot {
@@ -541,9 +651,9 @@ impl ReadRequest {
                 let result = match blocks.get_blocks(
                     start_slot,
                     if commitment.is_confirmed() {
-                        storage_processed.confirmed
+                        storage_processed.confirmed_slot
                     } else {
-                        storage_processed.finalized
+                        storage_processed.finalized_slot
                     },
                     until,
                 ) {
@@ -560,7 +670,7 @@ impl ReadRequest {
                     return None;
                 }
 
-                let result = if slot <= storage_processed.confirmed {
+                let result = if slot <= storage_processed.confirmed_slot {
                     match blocks.get_block_location(slot) {
                         StorageBlockLocationResult::Removed => ReadResultBlockTime::Removed,
                         StorageBlockLocationResult::Dead => ReadResultBlockTime::Dead,
@@ -579,8 +689,8 @@ impl ReadRequest {
                         }
                     }
                 } else {
-                    match storage_processed.blocks.get(&slot) {
-                        Some(Some(block)) => ReadResultBlockTime::BlockTime(block.block_time),
+                    match storage_processed.get_processed_block(slot) {
+                        Some(block) => ReadResultBlockTime::BlockTime(block.block_time),
                         _ => ReadResultBlockTime::NotAvailable,
                     }
                 };
@@ -656,14 +766,14 @@ impl ReadRequest {
                             }
                         }
                     }
-                    storage_processed.confirmed
+                    storage_processed.confirmed_slot
                 } else {
-                    storage_processed.finalized
+                    storage_processed.finalized_slot
                 };
 
                 if let Some(before) = before {
                     // read slot for before signature
-                    let read_tx_index = match db_read.read_tx_index(before, false) {
+                    let read_tx_index = match db_read.read_tx_index(before) {
                         Ok(fut) => fut,
                         Err(error) => {
                             let _ = tx.send(ReadResultSignaturesForAddress::ReadError(error));
@@ -784,7 +894,7 @@ impl ReadRequest {
                         StorageBlockLocationResult::Found(location) => {
                             sig.block_time = location.block_time;
                             sig.confirmation_status =
-                                Some(if sig.slot <= storage_processed.finalized {
+                                Some(if sig.slot <= storage_processed.finalized_slot {
                                     TransactionConfirmationStatus::Finalized
                                 } else {
                                     TransactionConfirmationStatus::Confirmed
@@ -810,6 +920,91 @@ impl ReadRequest {
                 drop(lock);
                 None
             }
+            Self::SignatureStatuses {
+                deadline,
+                signatures,
+                search_transaction_history,
+                tx,
+            } => {
+                if deadline < Instant::now() {
+                    let _ = tx.send(ReadResultSignatureStatuses::Timeout);
+                    return None;
+                }
+
+                let mut signatures_found = HashMap::with_capacity(signatures.len());
+                let mut signatures_history = Vec::with_capacity(if search_transaction_history {
+                    signatures.len()
+                } else {
+                    0
+                });
+                for signature in signatures.iter().copied() {
+                    if let Some(status) = storage_processed.get_signature_status(&signature) {
+                        signatures_found.insert(signature, status.clone());
+                    }
+
+                    if search_transaction_history {
+                        signatures_history.push(signature);
+                    }
+                }
+
+                fn create_result(
+                    signatures: &[Signature],
+                    mut found: HashMap<Signature, TransactionStatus>,
+                ) -> ReadResultSignatureStatuses {
+                    ReadResultSignatureStatuses::Signatures(
+                        signatures
+                            .iter()
+                            .map(|signature| found.remove(signature))
+                            .collect(),
+                    )
+                }
+
+                if signatures_history.is_empty() {
+                    let _ = tx.send(create_result(&signatures, signatures_found));
+                    return None;
+                }
+
+                let read_fut = match db_read.read_signature_statuses(signatures_history) {
+                    Ok(fut) => fut,
+                    Err(error) => {
+                        let _ = tx.send(ReadResultSignatureStatuses::ReadError(error));
+                        return None;
+                    }
+                };
+
+                let finalized_slot = storage_processed.finalized_slot;
+                Some(Box::pin(async move {
+                    let result = match read_fut.await {
+                        Ok(signatures_history) => {
+                            for (signature, value) in signatures_history {
+                                if value.slot <= finalized_slot {
+                                    signatures_found.insert(
+                                        signature,
+                                        TransactionStatus {
+                                            slot: value.slot,
+                                            confirmations: None,
+                                            status: match value.err.clone() {
+                                                Some(error) => Err(error.into_owned()),
+                                                None => Ok(()),
+                                            },
+                                            err: value.err.map(|x| x.into_owned()),
+                                            confirmation_status: Some(
+                                                TransactionConfirmationStatus::Finalized,
+                                            ),
+                                        },
+                                    );
+                                }
+                            }
+                            create_result(&signatures, signatures_found)
+                        }
+                        Err(error) => ReadResultSignatureStatuses::ReadError(error),
+                    };
+
+                    let _ = tx.send(result);
+                    drop(lock);
+                    None
+                }))
+            }
             Self::Transaction {
                 deadline,
                 signature,
@@ -831,7 +1026,7 @@ impl ReadRequest {
                     }
                 }
 
-                let read_tx_index = match db_read.read_tx_index(signature, false) {
+                let read_fut = match db_read.read_tx_index(signature) {
                     Ok(fut) => fut,
                     Err(error) => {
                         let _ = tx.send(ReadResultTransaction::ReadError(error));
@@ -840,7 +1035,7 @@ impl ReadRequest {
                 };
 
                 Some(Box::pin(async move {
-                    let result = match read_tx_index.await {
+                    let result = match read_fut.await {
                         Ok(Some(index)) => {
                             return Some(ReadRequest::Transaction2 {
                                 deadline,
@@ -890,6 +1085,7 @@ impl ReadRequest {
                     location.offset + index.offset,
                     index.size,
                 );
+
                 Some(Box::pin(async move {
                     let result = match timeout_at(deadline.into(), read_fut).await {
                         Ok(Ok(bytes)) => ReadResultTransaction::Transaction {

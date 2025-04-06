@@ -777,7 +777,6 @@ enum ReadRequest {
     },
     Transaction {
         signature: Signature,
-        decode_error: bool,
         tx: oneshot::Sender<anyhow::Result<Option<TransactionIndexValue<'static>>>>,
     },
     SignaturesForAddress {
@@ -789,6 +788,10 @@ enum ReadRequest {
         tx: oneshot::Sender<
             anyhow::Result<(Vec<RpcConfirmedTransactionStatusWithSignature>, bool)>,
         >,
+    },
+    SignatureStatuses {
+        signatures: Vec<Signature>,
+        tx: oneshot::Sender<anyhow::Result<Vec<(Signature, TransactionIndexValue<'static>)>>>,
     },
 }
 
@@ -812,17 +815,13 @@ impl RocksdbRead {
                         break;
                     }
                 }
-                ReadRequest::Transaction {
-                    signature,
-                    decode_error,
-                    tx,
-                } => {
+                ReadRequest::Transaction { signature, tx } => {
                     let result = match db.get_pinned_cf(
                         Rocksdb::cf_handle::<TransactionIndex>(&db),
                         TransactionIndex::encode(&signature),
                     ) {
                         Ok(Some(slice)) => {
-                            TransactionIndexValue::decode(slice.as_ref(), decode_error).map(Some)
+                            TransactionIndexValue::decode(slice.as_ref(), false).map(Some)
                         }
                         Ok(None) => Ok(None),
                         Err(error) => Err(anyhow::anyhow!("failed to get tx location: {error:?}")),
@@ -844,6 +843,14 @@ impl RocksdbRead {
                         .send(Self::spawn_signatires_for_address(
                             &db, address, slot, before, until, signatures,
                         ))
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+                ReadRequest::SignatureStatuses { signatures, tx } => {
+                    if tx
+                        .send(Self::spawn_signatire_statuses(&db, signatures))
                         .is_err()
                     {
                         break;
@@ -929,6 +936,25 @@ impl RocksdbRead {
         Ok((signatures, finished))
     }
 
+    fn spawn_signatire_statuses(
+        db: &DB,
+        signatures: Vec<Signature>,
+    ) -> anyhow::Result<Vec<(Signature, TransactionIndexValue<'static>)>> {
+        let mut values = Vec::with_capacity(signatures.len());
+        for signature in signatures {
+            if let Some(slice) = db.get_pinned_cf(
+                Rocksdb::cf_handle::<TransactionIndex>(db),
+                TransactionIndex::encode(&signature),
+            )? {
+                values.push((
+                    signature,
+                    TransactionIndexValue::decode(slice.as_ref(), true)?,
+                ));
+            }
+        }
+        Ok(values)
+    }
+
     pub fn read_slot_indexes(
         &self,
     ) -> anyhow::Result<BoxFuture<'static, anyhow::Result<Vec<StoredBlock>>>> {
@@ -945,16 +971,11 @@ impl RocksdbRead {
     pub fn read_tx_index(
         &self,
         signature: Signature,
-        decode_error: bool,
     ) -> anyhow::Result<BoxFuture<'static, anyhow::Result<Option<TransactionIndexValue<'static>>>>>
     {
         let (tx, rx) = oneshot::channel();
         self.req_tx
-            .send(ReadRequest::Transaction {
-                signature,
-                decode_error,
-                tx,
-            })
+            .send(ReadRequest::Transaction { signature, tx })
             .context("failed to send ReadRequest::Transaction request")?;
         Ok(Box::pin(async move {
             rx.await
@@ -987,6 +1008,23 @@ impl RocksdbRead {
         Ok(Box::pin(async move {
             rx.await
                 .context("failed to get ReadRequest::SignaturesForAddress request result")?
+        }))
+    }
+
+    #[allow(clippy::type_complexity)]
+    pub fn read_signature_statuses(
+        &self,
+        signatures: Vec<Signature>,
+    ) -> anyhow::Result<
+        BoxFuture<'static, anyhow::Result<Vec<(Signature, TransactionIndexValue<'static>)>>>,
+    > {
+        let (tx, rx) = oneshot::channel();
+        self.req_tx
+            .send(ReadRequest::SignatureStatuses { signatures, tx })
+            .context("failed to send ReadRequest::SignatureStatuses request")?;
+        Ok(Box::pin(async move {
+            rx.await
+                .context("failed to get ReadRequest::SignatureStatuses request result")?
         }))
     }
 }
