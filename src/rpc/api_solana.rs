@@ -1342,6 +1342,7 @@ impl RpcRequestsSignatureStatuses {
 
         if self.search_transaction_history
             && !upstream_disabled
+            && state.upstream.is_some()
             && !statuses.iter().any(|status| status.is_none())
         {
             let mut signatures_history = Vec::new();

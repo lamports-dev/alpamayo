@@ -273,6 +273,8 @@ impl StorageProcessed {
                         signatures: block.transactions.keys().copied().collect(),
                     },
                 );
+            } else {
+                error!(slot, "no block height for slot");
             }
 
             entry.insert(Some(block));
@@ -940,6 +942,7 @@ impl ReadRequest {
                 for signature in signatures.iter().copied() {
                     if let Some(status) = storage_processed.get_signature_status(&signature) {
                         signatures_found.insert(signature, status.clone());
+                        continue;
                     }
 
                     if search_transaction_history {
