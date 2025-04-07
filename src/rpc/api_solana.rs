@@ -531,7 +531,7 @@ impl RpcRequest {
 
                 if let Some(min_context_slot) = min_context_slot {
                     let slot = match commitment.commitment {
-                        CommitmentLevel::Processed => unreachable!(),
+                        CommitmentLevel::Processed => state.stored_slots.processed_load(),
                         CommitmentLevel::Confirmed => state.stored_slots.confirmed_load(),
                         CommitmentLevel::Finalized => state.stored_slots.finalized_load(),
                     };
@@ -1266,26 +1266,27 @@ impl RpcRequestLatestBlockhash {
             anyhow::bail!("rx channel is closed");
         };
 
-        let value = match result {
+        match result {
             ReadResultLatestBlockhash::Timeout => anyhow::bail!("timeout"),
             ReadResultLatestBlockhash::LatestBlockhash {
                 slot,
                 blockhash,
                 last_valid_block_height,
-            } => solana_rpc_client_api::response::Response {
-                context: RpcResponseContext::new(slot),
-                value: RpcBlockhash {
-                    blockhash,
-                    last_valid_block_height,
-                },
-            },
+            } => {
+                let data = serde_json::to_value(&solana_rpc_client_api::response::Response {
+                    context: RpcResponseContext::new(slot),
+                    value: RpcBlockhash {
+                        blockhash,
+                        last_valid_block_height,
+                    },
+                })
+                .expect("json serialization never fail");
+                Ok(jsonrpc_response_success(self.id, data))
+            }
             ReadResultLatestBlockhash::ReadError(error) => {
                 anyhow::bail!("read error: {error}")
             }
-        };
-
-        let data = serde_json::to_value(&value).expect("json serialization never fail");
-        Ok(jsonrpc_response_success(self.id, data))
+        }
     }
 }
 
