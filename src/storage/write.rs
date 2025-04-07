@@ -16,6 +16,7 @@ use {
             source::{RpcRequest, RpcSourceConnected, RpcSourceConnectedError},
             sync::ReadWriteSyncMessage,
         },
+        util::HashMap,
     },
     anyhow::Context,
     futures::{
@@ -25,7 +26,6 @@ use {
     richat_shared::shutdown::Shutdown,
     solana_sdk::clock::Slot,
     std::{
-        collections::HashMap,
         sync::Arc,
         thread,
         time::{Duration, Instant},
@@ -158,7 +158,7 @@ async fn start2(
     };
 
     // queue of confirmed blocks
-    let mut queued_slots = HashMap::<Slot, Option<Arc<BlockWithBinary>>>::new();
+    let mut queued_slots = HashMap::<Slot, Option<Arc<BlockWithBinary>>>::default();
     let mut queued_slots_backfilled = false;
 
     // fill the gap between stored and new

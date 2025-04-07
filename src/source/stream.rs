@@ -19,7 +19,7 @@ use {
     solana_sdk::clock::Slot,
     solana_transaction_status::TransactionWithStatusMeta,
     std::{
-        collections::{BTreeMap, HashMap},
+        collections::BTreeMap,
         pin::Pin,
         task::{Context, Poll},
     },
@@ -210,16 +210,16 @@ impl StreamSource {
 
     fn create_dragons_mouth_filter() -> SubscribeRequest {
         SubscribeRequest {
-            accounts: HashMap::new(),
+            accounts: hashmap! {},
             slots: hashmap! { "".to_owned() => SubscribeRequestFilterSlots {
                 filter_by_commitment: Some(false),
                 interslot_updates: Some(true),
             } },
             transactions: hashmap! { "".to_owned() => SubscribeRequestFilterTransactions::default() },
-            transactions_status: HashMap::new(),
-            blocks: HashMap::new(),
+            transactions_status: hashmap! {},
+            blocks: hashmap! {},
             blocks_meta: hashmap! { "".to_owned() => SubscribeRequestFilterBlocksMeta::default() },
-            entry: HashMap::new(),
+            entry: hashmap! {},
             commitment: Some(CommitmentLevelProto::Processed as i32),
             accounts_data_slice: vec![],
             ping: None,

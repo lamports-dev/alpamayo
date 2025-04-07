@@ -2,9 +2,9 @@ use {
     crate::{
         rpc::api_solana::RpcRequestBlocksUntil,
         storage::{files::StorageId, slots::StoredSlots, sync::ReadWriteSyncMessage},
+        util::HashMap,
     },
     solana_sdk::clock::{Slot, UnixTimestamp},
-    std::collections::HashMap,
     tokio::sync::broadcast,
 };
 
@@ -72,7 +72,7 @@ impl StoredBlocksWrite {
     }
 
     pub fn get_stored_boundaries(&self) -> HashMap<StorageId, StorageBlocksBoundaries> {
-        let mut map = HashMap::<StorageId, StorageBlocksBoundaries>::new();
+        let mut map = HashMap::<StorageId, StorageBlocksBoundaries>::default();
         for block in self.blocks.iter() {
             if block.exists && !block.dead {
                 map.entry(block.storage_id).or_default().update(block);

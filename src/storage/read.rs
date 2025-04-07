@@ -9,6 +9,7 @@ use {
             slots::StoredConfirmedSlot,
             sync::ReadWriteSyncMessage,
         },
+        util::HashMap,
     },
     anyhow::Context,
     futures::{
@@ -25,7 +26,7 @@ use {
     },
     solana_transaction_status::{TransactionConfirmationStatus, TransactionStatus},
     std::{
-        collections::{BTreeMap, HashMap, btree_map::Entry as BTreeMapEntry},
+        collections::{BTreeMap, btree_map::Entry as BTreeMapEntry},
         io,
         sync::Arc,
         thread,
@@ -249,7 +250,7 @@ struct StorageProcessed {
     finalized_slot: Slot,
     finalized_height: Slot,
     blocks: BTreeMap<Slot, Option<Arc<BlockWithBinary>>>,
-    signature_statuses: HashMap<Signature, SignatureStatus, foldhash::quality::RandomState>,
+    signature_statuses: HashMap<Signature, SignatureStatus>,
     recent_blocks: BTreeMap<Slot, RecentBlock>,
 }
 
@@ -1015,7 +1016,8 @@ impl ReadRequest {
                     return None;
                 }
 
-                let mut signatures_found = HashMap::with_capacity(signatures.len());
+                let mut signatures_found =
+                    HashMap::with_capacity_and_hasher(signatures.len(), Default::default());
                 let mut signatures_history = Vec::with_capacity(if search_transaction_history {
                     signatures.len()
                 } else {

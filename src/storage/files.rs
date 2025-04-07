@@ -5,10 +5,11 @@ use {
             blocks::{StoredBlock, StoredBlocksWrite},
             util,
         },
+        util::HashMap,
     },
     anyhow::Context,
     futures::future::{FutureExt, LocalBoxFuture, TryFutureExt, join_all, try_join_all},
-    std::{collections::HashMap, io, path::PathBuf, rc::Rc},
+    std::{io, path::PathBuf, rc::Rc},
     tokio_uring::fs::File,
 };
 
@@ -83,7 +84,7 @@ impl StorageFilesWrite {
         files.sort_unstable_by_key(|file| file.id);
 
         // storage id map
-        let mut id2file = HashMap::new();
+        let mut id2file = HashMap::default();
         for (index, file) in files.iter().enumerate() {
             id2file.insert(file.id, index);
         }
