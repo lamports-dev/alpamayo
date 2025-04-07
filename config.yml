@@ -72,6 +72,7 @@ rpc:
     - getSlot
     - getTransaction
     - getVersion
+    - isBlockhashValid
   gsfa_limit: 1000
   gss_transaction_history: true
   request_channel_capacity: 4096

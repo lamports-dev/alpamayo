@@ -22,7 +22,7 @@ Please use issues only for reporting bugs or discussing feature-related topics. 
 - [x] `getSlot`
 - [x] `getTransaction`
 - [x] `getVersion`
-- [ ] `isBlockhashValid`
+- [x] `isBlockhashValid`
 
 ### Extra methods:
 

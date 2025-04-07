@@ -252,6 +252,7 @@ struct StorageProcessed {
     blocks: BTreeMap<Slot, Option<Arc<BlockWithBinary>>>,
     signature_statuses: HashMap<Signature, SignatureStatus>,
     recent_blocks: BTreeMap<Slot, RecentBlock>,
+    block_heights: HashMap<String, Slot>,
 }
 
 impl StorageProcessed {
@@ -276,10 +277,19 @@ impl StorageProcessed {
                         signatures: block.transactions.keys().copied().collect(),
                     },
                 );
+                self.block_heights
+                    .insert(block.blockhash.clone(), block_height);
             } else {
                 error!(slot, "no block height for slot");
             }
         }
+    }
+
+    fn remove_signatures(&mut self, block: RecentBlock) {
+        for signature in block.signatures {
+            self.signature_statuses.remove(&signature);
+        }
+        self.block_heights.remove(&block.blockhash);
     }
 
     fn add(&mut self, slot: Slot, block: Arc<BlockWithBinary>) {
@@ -292,9 +302,7 @@ impl StorageProcessed {
     fn mark_dead(&mut self, slot: Slot) {
         if self.blocks.insert(slot, None).is_some() {
             if let Some(block) = self.recent_blocks.remove(&slot) {
-                for signature in block.signatures {
-                    self.signature_statuses.remove(&signature);
-                }
+                self.remove_signatures(block);
             }
         }
     }
@@ -325,9 +333,7 @@ impl StorageProcessed {
                         >= MAX_RECENT_BLOCKHASHES =>
                 {
                     if let Some((_slot, block)) = self.recent_blocks.pop_first() {
-                        for signature in block.signatures {
-                            self.signature_statuses.remove(&signature);
-                        }
+                        self.remove_signatures(block);
                     }
                 }
                 _ => break,
@@ -395,6 +401,10 @@ impl StorageProcessed {
                 }),
             }
         })
+    }
+
+    fn get_block_height_by_blockhash(&self, blockhash: &String) -> Option<Slot> {
+        self.block_heights.get(blockhash).copied()
     }
 }
 
@@ -474,6 +484,13 @@ pub enum ReadResultTransaction {
 }
 
 #[derive(Debug)]
+pub enum ReadResultBlockhashValid {
+    Timeout,
+    Blockhash { slot: Slot, is_valid: bool },
+    ReadError(anyhow::Error),
+}
+
+#[derive(Debug)]
 pub enum ReadRequest {
     Block {
         deadline: Instant,
@@ -544,6 +561,12 @@ pub enum ReadRequest {
         index: TransactionIndexValue<'static>,
         tx: oneshot::Sender<ReadResultTransaction>,
         lock: Option<OwnedSemaphorePermit>,
+    },
+    BlockhashValid {
+        deadline: Instant,
+        blockhash: String,
+        commitment: CommitmentConfig,
+        tx: oneshot::Sender<ReadResultBlockhashValid>,
     },
 }
 
@@ -760,25 +783,26 @@ impl ReadRequest {
                     return None;
                 }
 
-                let result = match commitment.commitment {
+                let commitment_slot = match commitment.commitment {
                     CommitmentLevel::Processed => storage_processed.get_processed_slot(),
                     CommitmentLevel::Confirmed => Some(storage_processed.confirmed_slot),
                     CommitmentLevel::Finalized => Some(storage_processed.finalized_slot),
-                }
-                .and_then(|slot| {
-                    storage_processed.get_recent_block(slot).map(|block| {
-                        ReadResultLatestBlockhash::LatestBlockhash {
+                };
+                let result = match commitment_slot {
+                    Some(slot) => match storage_processed.get_recent_block(slot) {
+                        Some(block) => ReadResultLatestBlockhash::LatestBlockhash {
                             slot,
                             blockhash: block.blockhash.clone(),
                             last_valid_block_height: block.block_height + MAX_PROCESSING_AGE as u64,
-                        }
-                    })
-                })
-                .unwrap_or_else(|| {
-                    ReadResultLatestBlockhash::ReadError(anyhow::anyhow!(
-                        "failed to get latest blockhash"
-                    ))
-                });
+                        },
+                        None => ReadResultLatestBlockhash::ReadError(anyhow::anyhow!(
+                            "failed to get block"
+                        )),
+                    },
+                    None => {
+                        ReadResultLatestBlockhash::ReadError(anyhow::anyhow!("failed to get slot"))
+                    }
+                };
 
                 let _ = tx.send(result);
                 None
@@ -1189,6 +1213,54 @@ impl ReadRequest {
                     drop(lock);
                     None
                 }))
+            }
+            Self::BlockhashValid {
+                deadline,
+                blockhash,
+                commitment,
+                tx,
+            } => {
+                if deadline < Instant::now() {
+                    let _ = tx.send(ReadResultBlockhashValid::Timeout);
+                    return None;
+                }
+
+                let Some(commitment_slot) = (match commitment.commitment {
+                    CommitmentLevel::Processed => storage_processed.get_processed_slot(),
+                    CommitmentLevel::Confirmed => Some(storage_processed.confirmed_slot),
+                    CommitmentLevel::Finalized => Some(storage_processed.finalized_slot),
+                }) else {
+                    let _ = tx.send(ReadResultBlockhashValid::ReadError(anyhow::anyhow!(
+                        "failed to get commitment slot"
+                    )));
+                    return None;
+                };
+
+                let Some(commitment_height) = (match commitment.commitment {
+                    CommitmentLevel::Processed => storage_processed.get_processed_block_height(),
+                    CommitmentLevel::Confirmed => Some(storage_processed.confirmed_height),
+                    CommitmentLevel::Finalized => Some(storage_processed.finalized_height),
+                }) else {
+                    let _ = tx.send(ReadResultBlockhashValid::ReadError(anyhow::anyhow!(
+                        "failed to get commitment height"
+                    )));
+                    return None;
+                };
+
+                let Some(block_height) =
+                    storage_processed.get_block_height_by_blockhash(&blockhash)
+                else {
+                    let _ = tx.send(ReadResultBlockhashValid::ReadError(anyhow::anyhow!(
+                        "failed to get block height"
+                    )));
+                    return None;
+                };
+
+                let _ = tx.send(ReadResultBlockhashValid::Blockhash {
+                    slot: commitment_slot,
+                    is_valid: block_height + (MAX_PROCESSING_AGE as u64) > commitment_height,
+                });
+                None
             }
         }
     }

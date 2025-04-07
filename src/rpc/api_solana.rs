@@ -5,8 +5,8 @@ use {
         storage::{
             read::{
                 ReadRequest, ReadResultBlock, ReadResultBlockHeight, ReadResultBlockTime,
-                ReadResultBlocks, ReadResultLatestBlockhash, ReadResultSignatureStatuses,
-                ReadResultSignaturesForAddress, ReadResultTransaction,
+                ReadResultBlockhashValid, ReadResultBlocks, ReadResultLatestBlockhash,
+                ReadResultSignatureStatuses, ReadResultSignaturesForAddress, ReadResultTransaction,
             },
             slots::StoredSlots,
         },
@@ -42,6 +42,7 @@ use {
     solana_sdk::{
         clock::{Slot, UnixTimestamp},
         commitment_config::{CommitmentConfig, CommitmentLevel},
+        hash::Hash,
         pubkey::Pubkey,
         signature::Signature,
     },
@@ -52,6 +53,7 @@ use {
     },
     std::{
         fmt,
+        str::FromStr,
         sync::Arc,
         time::{Duration, Instant},
     },
@@ -134,6 +136,7 @@ struct SupportedCalls {
     get_slot: bool,
     get_transaction: bool,
     get_version: bool,
+    is_blockhash_valid: bool,
 }
 
 impl SupportedCalls {
@@ -162,6 +165,7 @@ impl SupportedCalls {
             get_slot: Self::check_call_support(calls, ConfigRpcCall::GetSlot)?,
             get_transaction: Self::check_call_support(calls, ConfigRpcCall::GetTransaction)?,
             get_version: Self::check_call_support(calls, ConfigRpcCall::GetVersion)?,
+            is_blockhash_valid: Self::check_call_support(calls, ConfigRpcCall::IsBlockhashValid)?,
         })
     }
 
@@ -301,6 +305,7 @@ enum RpcRequest {
     SignaturesForAddress(RpcRequestSignaturesForAddress),
     SignatureStatuses(RpcRequestsSignatureStatuses),
     Transaction(RpcRequestTransaction),
+    IsBlockhashValid(RpcRequestIsBlockhashValid),
 }
 
 impl RpcRequest {
@@ -353,19 +358,19 @@ impl RpcRequest {
                     commitment,
                     min_context_slot,
                 } = config.unwrap_or_default();
-
                 let commitment = commitment.unwrap_or_default();
-                let slot = match commitment.commitment {
-                    CommitmentLevel::Processed => state.stored_slots.processed_load(),
-                    CommitmentLevel::Confirmed => state.stored_slots.confirmed_load(),
-                    CommitmentLevel::Finalized => state.stored_slots.finalized_load(),
-                };
 
                 if let Some(min_context_slot) = min_context_slot {
-                    if slot < min_context_slot {
+                    let context_slot = match commitment.commitment {
+                        CommitmentLevel::Processed => state.stored_slots.processed_load(),
+                        CommitmentLevel::Confirmed => state.stored_slots.confirmed_load(),
+                        CommitmentLevel::Finalized => state.stored_slots.finalized_load(),
+                    };
+
+                    if context_slot < min_context_slot {
                         return Err(jsonrpc_response_error_custom(
                             id,
-                            RpcCustomError::MinContextSlotNotReached { context_slot: slot },
+                            RpcCustomError::MinContextSlotNotReached { context_slot },
                         ));
                     }
                 }
@@ -530,15 +535,16 @@ impl RpcRequest {
                 let commitment = commitment.unwrap_or_default();
 
                 if let Some(min_context_slot) = min_context_slot {
-                    let slot = match commitment.commitment {
+                    let context_slot = match commitment.commitment {
                         CommitmentLevel::Processed => state.stored_slots.processed_load(),
                         CommitmentLevel::Confirmed => state.stored_slots.confirmed_load(),
                         CommitmentLevel::Finalized => state.stored_slots.finalized_load(),
                     };
-                    if slot < min_context_slot {
+
+                    if context_slot < min_context_slot {
                         return Err(jsonrpc_response_error_custom(
                             id,
-                            RpcCustomError::MinContextSlotNotReached { context_slot: slot },
+                            RpcCustomError::MinContextSlotNotReached { context_slot },
                         ));
                     }
                 }
@@ -583,15 +589,16 @@ impl RpcRequest {
                 }
 
                 if let Some(min_context_slot) = min_context_slot {
-                    let slot = match commitment.commitment {
+                    let context_slot = match commitment.commitment {
                         CommitmentLevel::Processed => unreachable!(),
                         CommitmentLevel::Confirmed => state.stored_slots.confirmed_load(),
                         CommitmentLevel::Finalized => state.stored_slots.finalized_load(),
                     };
-                    if slot < min_context_slot {
+
+                    if context_slot < min_context_slot {
                         return Err(jsonrpc_response_error_custom(
                             id,
-                            RpcCustomError::MinContextSlotNotReached { context_slot: slot },
+                            RpcCustomError::MinContextSlotNotReached { context_slot },
                         ));
                     }
                 }
@@ -669,23 +676,24 @@ impl RpcRequest {
                     commitment,
                     min_context_slot,
                 } = config.unwrap_or_default();
+                let commitment = commitment.unwrap_or_default();
 
-                let slot = match commitment.unwrap_or_default().commitment {
+                let context_slot = match commitment.commitment {
                     CommitmentLevel::Processed => state.stored_slots.processed_load(),
                     CommitmentLevel::Confirmed => state.stored_slots.confirmed_load(),
                     CommitmentLevel::Finalized => state.stored_slots.finalized_load(),
                 };
 
                 if let Some(min_context_slot) = min_context_slot {
-                    if slot < min_context_slot {
+                    if context_slot < min_context_slot {
                         return Err(jsonrpc_response_error_custom(
                             id,
-                            RpcCustomError::MinContextSlotNotReached { context_slot: slot },
+                            RpcCustomError::MinContextSlotNotReached { context_slot },
                         ));
                     }
                 }
 
-                Err(jsonrpc_response_success(id, slot.into()))
+                Err(jsonrpc_response_success(id, context_slot.into()))
             }
             "getTransaction" if state.supported_calls.get_transaction => {
                 #[derive(Debug, Deserialize)]
@@ -754,6 +762,49 @@ impl RpcRequest {
                         }),
                     ))
                 }
+            }
+            "isBlockhashValid" if state.supported_calls.is_blockhash_valid => {
+                #[derive(Debug, Deserialize)]
+                struct ReqParams {
+                    blockhash: String,
+                    #[serde(default)]
+                    config: Option<RpcContextConfig>,
+                }
+
+                let (id, ReqParams { blockhash, config }) = Self::parse_params(request)?;
+                let RpcContextConfig {
+                    commitment,
+                    min_context_slot,
+                } = config.unwrap_or_default();
+                let commitment = commitment.unwrap_or_default();
+
+                if let Some(min_context_slot) = min_context_slot {
+                    let context_slot = match commitment.commitment {
+                        CommitmentLevel::Processed => state.stored_slots.processed_load(),
+                        CommitmentLevel::Confirmed => state.stored_slots.confirmed_load(),
+                        CommitmentLevel::Finalized => state.stored_slots.finalized_load(),
+                    };
+
+                    if context_slot < min_context_slot {
+                        return Err(jsonrpc_response_error_custom(
+                            id,
+                            RpcCustomError::MinContextSlotNotReached { context_slot },
+                        ));
+                    }
+                }
+
+                if let Err(error) = Hash::from_str(&blockhash) {
+                    return Err(jsonrpc_response_error(
+                        id,
+                        jsonrpc_error_invalid_params::<()>(format!("{error:?}"), None),
+                    ));
+                }
+
+                Ok(Self::IsBlockhashValid(RpcRequestIsBlockhashValid {
+                    id: id.into_owned(),
+                    blockhash,
+                    commitment,
+                }))
             }
             _ => Err(Response {
                 jsonrpc: Some(TwoPointZero),
@@ -838,6 +889,7 @@ impl RpcRequest {
             Self::SignaturesForAddress(request) => request.process(state, upstream_disabled).await,
             Self::SignatureStatuses(request) => request.process(state, upstream_disabled).await,
             Self::Transaction(request) => request.process(state, upstream_disabled).await,
+            Self::IsBlockhashValid(request) => request.process(state).await,
         }
     }
 
@@ -1671,5 +1723,52 @@ impl RpcRequestTransactionWorkRequest {
         let data = serde_json::to_value(&tx).expect("json serialization never fail");
 
         Ok(jsonrpc_response_success(self.id, data))
+    }
+}
+
+#[derive(Debug)]
+pub struct RpcRequestIsBlockhashValid {
+    id: Id<'static>,
+    blockhash: String,
+    commitment: CommitmentConfig,
+}
+
+impl RpcRequestIsBlockhashValid {
+    async fn process(self, state: Arc<State>) -> RpcRequestResult {
+        let deadline = Instant::now() + state.request_timeout;
+
+        // request
+        let (tx, rx) = oneshot::channel();
+        anyhow::ensure!(
+            state
+                .requests_tx
+                .send(ReadRequest::BlockhashValid {
+                    deadline,
+                    blockhash: self.blockhash,
+                    commitment: self.commitment,
+                    tx
+                })
+                .await
+                .is_ok(),
+            "request channel is closed"
+        );
+        let Ok(result) = rx.await else {
+            anyhow::bail!("rx channel is closed");
+        };
+
+        match result {
+            ReadResultBlockhashValid::Timeout => anyhow::bail!("timeout"),
+            ReadResultBlockhashValid::Blockhash { slot, is_valid } => {
+                let data = serde_json::to_value(&solana_rpc_client_api::response::Response {
+                    context: RpcResponseContext::new(slot),
+                    value: is_valid,
+                })
+                .expect("json serialization never fail");
+                Ok(jsonrpc_response_success(self.id, data))
+            }
+            ReadResultBlockhashValid::ReadError(error) => {
+                anyhow::bail!("read error: {error}")
+            }
+        }
     }
 }

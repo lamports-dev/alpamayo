@@ -345,6 +345,7 @@ pub enum ConfigRpcCall {
     GetSlot,
     GetTransaction,
     GetVersion,
+    IsBlockhashValid,
 }
 
 #[derive(Debug, Clone, Deserialize)]
