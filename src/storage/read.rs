@@ -245,6 +245,8 @@ struct RecentBlock {
 
 #[derive(Debug, Default)]
 struct StorageProcessed {
+    processed_slot: Slot,
+    processed_height: Slot,
     confirmed_slot: Slot,
     confirmed_height: Slot,
     finalized_slot: Slot,
@@ -292,11 +294,29 @@ impl StorageProcessed {
         self.block_heights.remove(&block.blockhash);
     }
 
+    fn update_processed(&mut self) {
+        let mut processed = None;
+        for (slot, block) in self.blocks.iter().rev() {
+            if let Some(block) = block {
+                processed = Some((*slot, block.block_height));
+                break;
+            }
+        }
+        if let Some((slot, block_height)) = processed {
+            self.processed_slot = self.processed_slot.max(slot);
+            self.processed_height = self.processed_height.max(block_height.unwrap_or_default())
+        } else {
+            self.processed_slot = self.processed_slot.max(self.confirmed_slot);
+            self.processed_height = self.processed_height.max(self.confirmed_height);
+        }
+    }
+
     fn add(&mut self, slot: Slot, block: Arc<BlockWithBinary>) {
         self.add_signatures(slot, &block);
         if let BTreeMapEntry::Vacant(entry) = self.blocks.entry(slot) {
             entry.insert(Some(block));
         }
+        self.update_processed();
     }
 
     fn mark_dead(&mut self, slot: Slot) {
@@ -305,6 +325,7 @@ impl StorageProcessed {
                 self.remove_signatures(block);
             }
         }
+        self.update_processed();
     }
 
     fn set_confirmed(&mut self, slot: Slot, block: Option<Arc<BlockWithBinary>>) {
@@ -325,6 +346,7 @@ impl StorageProcessed {
                 _ => break,
             };
         }
+        self.update_processed();
 
         loop {
             match self.recent_blocks.first_key_value() {
@@ -348,24 +370,6 @@ impl StorageProcessed {
             .get(&slot)
             .map(|rb| rb.block_height)
             .unwrap_or(self.finalized_height);
-    }
-
-    fn get_processed_slot(&self) -> Option<Slot> {
-        for (slot, block) in self.blocks.iter().rev() {
-            if block.is_some() {
-                return Some(*slot);
-            }
-        }
-        None
-    }
-
-    fn get_processed_block_height(&self) -> Option<Slot> {
-        self.get_processed_slot().and_then(|slot| {
-            self.blocks
-                .get(&slot)
-                .and_then(|value| value.as_ref().map(|block| block.block_height))
-                .flatten()
-        })
     }
 
     fn get_processed_block(&self, slot: Slot) -> Option<&Arc<BlockWithBinary>> {
@@ -652,12 +656,10 @@ impl ReadRequest {
                 let mut commitment_slot = None;
 
                 if commitment.is_processed() {
-                    block_height = storage_processed.get_processed_block_height();
+                    block_height = Some(storage_processed.processed_height);
                 }
 
-                if commitment.is_confirmed()
-                    || (commitment.is_processed() && block_height.is_none())
-                {
+                if commitment.is_confirmed() {
                     if let Some((_confirmed_in_process_slot, Some(confirmed_in_process_block))) =
                         confirmed_in_process
                     {
@@ -783,24 +785,19 @@ impl ReadRequest {
                     return None;
                 }
 
-                let commitment_slot = match commitment.commitment {
-                    CommitmentLevel::Processed => storage_processed.get_processed_slot(),
-                    CommitmentLevel::Confirmed => Some(storage_processed.confirmed_slot),
-                    CommitmentLevel::Finalized => Some(storage_processed.finalized_slot),
+                let slot = match commitment.commitment {
+                    CommitmentLevel::Processed => storage_processed.processed_slot,
+                    CommitmentLevel::Confirmed => storage_processed.confirmed_slot,
+                    CommitmentLevel::Finalized => storage_processed.finalized_slot,
                 };
-                let result = match commitment_slot {
-                    Some(slot) => match storage_processed.get_recent_block(slot) {
-                        Some(block) => ReadResultLatestBlockhash::LatestBlockhash {
-                            slot,
-                            blockhash: block.blockhash.clone(),
-                            last_valid_block_height: block.block_height + MAX_PROCESSING_AGE as u64,
-                        },
-                        None => ReadResultLatestBlockhash::ReadError(anyhow::anyhow!(
-                            "failed to get block"
-                        )),
+                let result = match storage_processed.get_recent_block(slot) {
+                    Some(block) => ReadResultLatestBlockhash::LatestBlockhash {
+                        slot,
+                        blockhash: block.blockhash.clone(),
+                        last_valid_block_height: block.block_height + MAX_PROCESSING_AGE as u64,
                     },
                     None => {
-                        ReadResultLatestBlockhash::ReadError(anyhow::anyhow!("failed to get slot"))
+                        ReadResultLatestBlockhash::ReadError(anyhow::anyhow!("failed to get block"))
                     }
                 };
 
@@ -1225,26 +1222,16 @@ impl ReadRequest {
                     return None;
                 }
 
-                let Some(commitment_slot) = (match commitment.commitment {
-                    CommitmentLevel::Processed => storage_processed.get_processed_slot(),
-                    CommitmentLevel::Confirmed => Some(storage_processed.confirmed_slot),
-                    CommitmentLevel::Finalized => Some(storage_processed.finalized_slot),
-                }) else {
-                    let _ = tx.send(ReadResultBlockhashValid::ReadError(anyhow::anyhow!(
-                        "failed to get commitment slot"
-                    )));
-                    return None;
+                let commitment_slot = match commitment.commitment {
+                    CommitmentLevel::Processed => storage_processed.processed_slot,
+                    CommitmentLevel::Confirmed => storage_processed.confirmed_slot,
+                    CommitmentLevel::Finalized => storage_processed.finalized_slot,
                 };
 
-                let Some(commitment_height) = (match commitment.commitment {
-                    CommitmentLevel::Processed => storage_processed.get_processed_block_height(),
-                    CommitmentLevel::Confirmed => Some(storage_processed.confirmed_height),
-                    CommitmentLevel::Finalized => Some(storage_processed.finalized_height),
-                }) else {
-                    let _ = tx.send(ReadResultBlockhashValid::ReadError(anyhow::anyhow!(
-                        "failed to get commitment height"
-                    )));
-                    return None;
+                let commitment_height = match commitment.commitment {
+                    CommitmentLevel::Processed => storage_processed.processed_height,
+                    CommitmentLevel::Confirmed => storage_processed.confirmed_height,
+                    CommitmentLevel::Finalized => storage_processed.finalized_height,
                 };
 
                 let Some(block_height) =
