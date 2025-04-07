@@ -360,20 +360,7 @@ impl RpcRequest {
                 } = config.unwrap_or_default();
                 let commitment = commitment.unwrap_or_default();
 
-                if let Some(min_context_slot) = min_context_slot {
-                    let context_slot = match commitment.commitment {
-                        CommitmentLevel::Processed => state.stored_slots.processed_load(),
-                        CommitmentLevel::Confirmed => state.stored_slots.confirmed_load(),
-                        CommitmentLevel::Finalized => state.stored_slots.finalized_load(),
-                    };
-
-                    if context_slot < min_context_slot {
-                        return Err(jsonrpc_response_error_custom(
-                            id,
-                            RpcCustomError::MinContextSlotNotReached { context_slot },
-                        ));
-                    }
-                }
+                let id = Self::min_context_check(id, min_context_slot, commitment, state)?;
 
                 Ok(Self::BlockHeight(RpcRequestBlockHeight {
                     id: id.into_owned(),
@@ -534,20 +521,7 @@ impl RpcRequest {
                 } = config.unwrap_or_default();
                 let commitment = commitment.unwrap_or_default();
 
-                if let Some(min_context_slot) = min_context_slot {
-                    let context_slot = match commitment.commitment {
-                        CommitmentLevel::Processed => state.stored_slots.processed_load(),
-                        CommitmentLevel::Confirmed => state.stored_slots.confirmed_load(),
-                        CommitmentLevel::Finalized => state.stored_slots.finalized_load(),
-                    };
-
-                    if context_slot < min_context_slot {
-                        return Err(jsonrpc_response_error_custom(
-                            id,
-                            RpcCustomError::MinContextSlotNotReached { context_slot },
-                        ));
-                    }
-                }
+                let id = Self::min_context_check(id, min_context_slot, commitment, state)?;
 
                 Ok(Self::LatestBlockhash(RpcRequestLatestBlockhash {
                     id: id.into_owned(),
@@ -588,20 +562,7 @@ impl RpcRequest {
                     return Err(jsonrpc_response_error(id, error));
                 }
 
-                if let Some(min_context_slot) = min_context_slot {
-                    let context_slot = match commitment.commitment {
-                        CommitmentLevel::Processed => unreachable!(),
-                        CommitmentLevel::Confirmed => state.stored_slots.confirmed_load(),
-                        CommitmentLevel::Finalized => state.stored_slots.finalized_load(),
-                    };
-
-                    if context_slot < min_context_slot {
-                        return Err(jsonrpc_response_error_custom(
-                            id,
-                            RpcCustomError::MinContextSlotNotReached { context_slot },
-                        ));
-                    }
-                }
+                let id = Self::min_context_check(id, min_context_slot, commitment, state)?;
 
                 Ok(Self::SignaturesForAddress(RpcRequestSignaturesForAddress {
                     id: id.into_owned(),
@@ -778,20 +739,7 @@ impl RpcRequest {
                 } = config.unwrap_or_default();
                 let commitment = commitment.unwrap_or_default();
 
-                if let Some(min_context_slot) = min_context_slot {
-                    let context_slot = match commitment.commitment {
-                        CommitmentLevel::Processed => state.stored_slots.processed_load(),
-                        CommitmentLevel::Confirmed => state.stored_slots.confirmed_load(),
-                        CommitmentLevel::Finalized => state.stored_slots.finalized_load(),
-                    };
-
-                    if context_slot < min_context_slot {
-                        return Err(jsonrpc_response_error_custom(
-                            id,
-                            RpcCustomError::MinContextSlotNotReached { context_slot },
-                        ));
-                    }
-                }
+                let id = Self::min_context_check(id, min_context_slot, commitment, state)?;
 
                 if let Err(error) = Hash::from_str(&blockhash) {
                     return Err(jsonrpc_response_error(
@@ -839,6 +787,29 @@ impl RpcRequest {
             ));
         }
         Ok(())
+    }
+
+    fn min_context_check<'a>(
+        id: Id<'a>,
+        min_context_slot: Option<Slot>,
+        commitment: CommitmentConfig,
+        state: &State,
+    ) -> Result<Id<'a>, Response<'a, serde_json::Value>> {
+        if let Some(min_context_slot) = min_context_slot {
+            let context_slot = match commitment.commitment {
+                CommitmentLevel::Processed => state.stored_slots.processed_load(),
+                CommitmentLevel::Confirmed => state.stored_slots.confirmed_load(),
+                CommitmentLevel::Finalized => state.stored_slots.finalized_load(),
+            };
+
+            if context_slot < min_context_slot {
+                return Err(jsonrpc_response_error_custom(
+                    id,
+                    RpcCustomError::MinContextSlotNotReached { context_slot },
+                ));
+            }
+        }
+        Ok(id)
     }
 
     fn verify_signature(input: &str) -> Result<Signature, ErrorObjectOwned> {
