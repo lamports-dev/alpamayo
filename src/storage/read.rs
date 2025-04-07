@@ -17,8 +17,8 @@ use {
     },
     solana_rpc_client_api::response::RpcConfirmedTransactionStatusWithSignature,
     solana_sdk::{
-        clock::{MAX_RECENT_BLOCKHASHES, Slot, UnixTimestamp},
-        commitment_config::CommitmentConfig,
+        clock::{MAX_PROCESSING_AGE, MAX_RECENT_BLOCKHASHES, Slot, UnixTimestamp},
+        commitment_config::{CommitmentConfig, CommitmentLevel},
         pubkey::Pubkey,
         signature::Signature,
         transaction::TransactionError,
@@ -237,6 +237,7 @@ struct SignatureStatus {
 
 #[derive(Debug)]
 struct RecentBlock {
+    blockhash: String,
     block_height: Slot,
     signatures: Vec<Signature>,
 }
@@ -269,6 +270,7 @@ impl StorageProcessed {
                 self.recent_blocks.insert(
                     slot,
                     RecentBlock {
+                        blockhash: block.blockhash.clone(),
                         block_height,
                         signatures: block.transactions.keys().copied().collect(),
                     },
@@ -283,6 +285,8 @@ impl StorageProcessed {
 
     fn mark_dead(&mut self, slot: Slot) {
         self.blocks.insert(slot, None);
+
+        // TODO: remove signatures if exists
     }
 
     fn set_confirmed(&mut self, slot: Slot) {
@@ -326,14 +330,30 @@ impl StorageProcessed {
             .unwrap_or(self.finalized_height);
     }
 
+    fn get_processed_slot(&self) -> Option<Slot> {
+        for (slot, block) in self.blocks.iter().rev() {
+            if block.is_some() {
+                return Some(*slot);
+            }
+        }
+        None
+    }
+
     fn get_processed_block_height(&self) -> Option<Slot> {
-        self.blocks
-            .last_key_value()
-            .and_then(|(_key, block)| block.as_ref().and_then(|block| block.block_height))
+        self.get_processed_slot().and_then(|slot| {
+            self.blocks
+                .get(&slot)
+                .and_then(|value| value.as_ref().map(|block| block.block_height))
+                .flatten()
+        })
     }
 
     fn get_processed_block(&self, slot: Slot) -> Option<&Arc<BlockWithBinary>> {
         self.blocks.get(&slot).and_then(|block| block.as_ref())
+    }
+
+    fn get_recent_block(&self, slot: Slot) -> Option<&RecentBlock> {
+        self.recent_blocks.get(&slot)
     }
 
     fn get_signature_status(&self, signature: &Signature) -> Option<TransactionStatus> {
@@ -399,6 +419,17 @@ pub enum ReadResultBlockTime {
 }
 
 #[derive(Debug)]
+pub enum ReadResultLatestBlockhash {
+    Timeout,
+    LatestBlockhash {
+        slot: Slot,
+        blockhash: String,
+        last_valid_block_height: Slot,
+    },
+    ReadError(anyhow::Error),
+}
+
+#[derive(Debug)]
 pub enum ReadResultSignaturesForAddress {
     Timeout,
     Signatures {
@@ -451,6 +482,11 @@ pub enum ReadRequest {
         deadline: Instant,
         slot: Slot,
         tx: oneshot::Sender<ReadResultBlockTime>,
+    },
+    LatestBlockhash {
+        deadline: Instant,
+        commitment: CommitmentConfig,
+        tx: oneshot::Sender<ReadResultLatestBlockhash>,
     },
     SignaturesForAddress {
         deadline: Instant,
@@ -696,6 +732,39 @@ impl ReadRequest {
                         _ => ReadResultBlockTime::NotAvailable,
                     }
                 };
+
+                let _ = tx.send(result);
+                None
+            }
+            Self::LatestBlockhash {
+                deadline,
+                commitment,
+                tx,
+            } => {
+                if deadline < Instant::now() {
+                    let _ = tx.send(ReadResultLatestBlockhash::Timeout);
+                    return None;
+                }
+
+                let result = match commitment.commitment {
+                    CommitmentLevel::Processed => storage_processed.get_processed_slot(),
+                    CommitmentLevel::Confirmed => Some(storage_processed.confirmed_slot),
+                    CommitmentLevel::Finalized => Some(storage_processed.finalized_slot),
+                }
+                .and_then(|slot| {
+                    storage_processed.get_recent_block(slot).map(|block| {
+                        ReadResultLatestBlockhash::LatestBlockhash {
+                            slot,
+                            blockhash: block.blockhash.clone(),
+                            last_valid_block_height: block.block_height + MAX_PROCESSING_AGE as u64,
+                        }
+                    })
+                })
+                .unwrap_or_else(|| {
+                    ReadResultLatestBlockhash::ReadError(anyhow::anyhow!(
+                        "failed to get latest blockhash"
+                    ))
+                });
 
                 let _ = tx.send(result);
                 None

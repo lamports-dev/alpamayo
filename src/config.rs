@@ -339,6 +339,7 @@ pub enum ConfigRpcCall {
     GetBlocks,
     GetBlocksWithLimit,
     GetBlockTime,
+    GetLatestBlockhash,
     GetSignaturesForAddress,
     GetSignatureStatuses,
     GetSlot,

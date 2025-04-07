@@ -5,8 +5,8 @@ use {
         storage::{
             read::{
                 ReadRequest, ReadResultBlock, ReadResultBlockHeight, ReadResultBlockTime,
-                ReadResultBlocks, ReadResultSignatureStatuses, ReadResultSignaturesForAddress,
-                ReadResultTransaction,
+                ReadResultBlocks, ReadResultLatestBlockhash, ReadResultSignatureStatuses,
+                ReadResultSignaturesForAddress, ReadResultTransaction,
             },
             slots::StoredSlots,
         },
@@ -35,7 +35,8 @@ use {
         custom_error::RpcCustomError,
         request::{MAX_GET_CONFIRMED_BLOCKS_RANGE, MAX_GET_SIGNATURE_STATUSES_QUERY_ITEMS},
         response::{
-            RpcConfirmedTransactionStatusWithSignature, RpcResponseContext, RpcVersionInfo,
+            RpcBlockhash, RpcConfirmedTransactionStatusWithSignature, RpcResponseContext,
+            RpcVersionInfo,
         },
     },
     solana_sdk::{
@@ -127,6 +128,7 @@ struct SupportedCalls {
     get_blocks: bool,
     get_blocks_with_limit: bool,
     get_block_time: bool,
+    get_latest_blockhash: bool,
     get_signatures_for_address: bool,
     get_signature_statuses: bool,
     get_slot: bool,
@@ -145,6 +147,10 @@ impl SupportedCalls {
                 ConfigRpcCall::GetBlocksWithLimit,
             )?,
             get_block_time: Self::check_call_support(calls, ConfigRpcCall::GetBlockTime)?,
+            get_latest_blockhash: Self::check_call_support(
+                calls,
+                ConfigRpcCall::GetLatestBlockhash,
+            )?,
             get_signatures_for_address: Self::check_call_support(
                 calls,
                 ConfigRpcCall::GetSignaturesForAddress,
@@ -291,6 +297,7 @@ enum RpcRequest {
     BlockHeight(RpcRequestBlockHeight),
     Blocks(RpcRequestBlocks),
     BlockTime(RpcRequestBlockTime),
+    LatestBlockhash(RpcRequestLatestBlockhash),
     SignaturesForAddress(RpcRequestSignaturesForAddress),
     SignatureStatuses(RpcRequestsSignatureStatuses),
     Transaction(RpcRequestTransaction),
@@ -507,6 +514,39 @@ impl RpcRequest {
                         slot,
                     }))
                 }
+            }
+            "getLatestBlockhash" if state.supported_calls.get_latest_blockhash => {
+                #[derive(Debug, Deserialize)]
+                struct ReqParams {
+                    #[serde(default)]
+                    config: Option<RpcContextConfig>,
+                }
+
+                let (id, ReqParams { config }) = Self::parse_params(request)?;
+                let RpcContextConfig {
+                    commitment,
+                    min_context_slot,
+                } = config.unwrap_or_default();
+                let commitment = commitment.unwrap_or_default();
+
+                if let Some(min_context_slot) = min_context_slot {
+                    let slot = match commitment.commitment {
+                        CommitmentLevel::Processed => unreachable!(),
+                        CommitmentLevel::Confirmed => state.stored_slots.confirmed_load(),
+                        CommitmentLevel::Finalized => state.stored_slots.finalized_load(),
+                    };
+                    if slot < min_context_slot {
+                        return Err(jsonrpc_response_error_custom(
+                            id,
+                            RpcCustomError::MinContextSlotNotReached { context_slot: slot },
+                        ));
+                    }
+                }
+
+                Ok(Self::LatestBlockhash(RpcRequestLatestBlockhash {
+                    id: id.into_owned(),
+                    commitment,
+                }))
             }
             "getSignaturesForAddress" if state.supported_calls.get_signatures_for_address => {
                 #[derive(Debug, Deserialize)]
@@ -794,6 +834,7 @@ impl RpcRequest {
             Self::BlockHeight(request) => request.process(state).await,
             Self::Blocks(request) => request.process(state, upstream_disabled).await,
             Self::BlockTime(request) => request.process(state, upstream_disabled).await,
+            Self::LatestBlockhash(request) => request.process(state).await,
             Self::SignaturesForAddress(request) => request.process(state, upstream_disabled).await,
             Self::SignatureStatuses(request) => request.process(state, upstream_disabled).await,
             Self::Transaction(request) => request.process(state, upstream_disabled).await,
@@ -1194,6 +1235,57 @@ impl RpcRequestBlockTime {
                 serde_json::json!(None::<()>),
             ))
         }
+    }
+}
+
+#[derive(Debug)]
+struct RpcRequestLatestBlockhash {
+    id: Id<'static>,
+    commitment: CommitmentConfig,
+}
+
+impl RpcRequestLatestBlockhash {
+    async fn process(self, state: Arc<State>) -> RpcRequestResult {
+        let deadline = Instant::now() + state.request_timeout;
+
+        // request
+        let (tx, rx) = oneshot::channel();
+        anyhow::ensure!(
+            state
+                .requests_tx
+                .send(ReadRequest::LatestBlockhash {
+                    deadline,
+                    commitment: self.commitment,
+                    tx
+                })
+                .await
+                .is_ok(),
+            "request channel is closed"
+        );
+        let Ok(result) = rx.await else {
+            anyhow::bail!("rx channel is closed");
+        };
+
+        let value = match result {
+            ReadResultLatestBlockhash::Timeout => anyhow::bail!("timeout"),
+            ReadResultLatestBlockhash::LatestBlockhash {
+                slot,
+                blockhash,
+                last_valid_block_height,
+            } => solana_rpc_client_api::response::Response {
+                context: RpcResponseContext::new(slot),
+                value: RpcBlockhash {
+                    blockhash,
+                    last_valid_block_height,
+                },
+            },
+            ReadResultLatestBlockhash::ReadError(error) => {
+                anyhow::bail!("read error: {error}")
+            }
+        };
+
+        let data = serde_json::to_value(&value).expect("json serialization never fail");
+        Ok(jsonrpc_response_success(self.id, data))
     }
 }
 

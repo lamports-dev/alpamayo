@@ -15,7 +15,7 @@ Please use issues only for reporting bugs or discussing feature-related topics. 
 - [x] `getBlocks`
 - [x] `getBlocksWithLimit`
 - [x] `getBlockTime`
-- [ ] `getLatestBlockhash`
+- [x] `getLatestBlockhash`
 - [ ] `getRecentPrioritizationFees`
 - [x] `getSignaturesForAddress`
 - [x] `getSignatureStatuses`

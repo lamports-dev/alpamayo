@@ -31,6 +31,7 @@ pub struct BlockTransactionOffset {
 
 #[derive(Debug)]
 pub struct BlockWithBinary {
+    pub blockhash: String,
     pub parent_slot: Slot,
     pub block_time: Option<UnixTimestamp>,
     pub block_height: Option<Slot>,
@@ -85,6 +86,7 @@ impl BlockWithBinary {
             .collect();
 
         Self {
+            blockhash,
             parent_slot,
             block_time,
             block_height,
