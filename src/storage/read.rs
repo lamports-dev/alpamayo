@@ -149,7 +149,7 @@ async fn start2(
                 Ok(ReadWriteSyncMessage::BlockDead { slot }) => storage_processed.mark_dead(slot),
                 Ok(ReadWriteSyncMessage::BlockConfirmed { slot, block }) => {
                     stored_confirmed_slot.set_confirmed(index, slot);
-                    storage_processed.set_confirmed(slot);
+                    storage_processed.set_confirmed(slot, block.clone());
                     *confirmed_in_process = Some((slot, block));
                 },
                 Ok(ReadWriteSyncMessage::SlotFinalized { slot }) => {
@@ -254,8 +254,8 @@ struct StorageProcessed {
 }
 
 impl StorageProcessed {
-    fn add(&mut self, slot: Slot, block: Arc<BlockWithBinary>) {
-        if let BTreeMapEntry::Vacant(entry) = self.blocks.entry(slot) {
+    fn add_signatures(&mut self, slot: Slot, block: &BlockWithBinary) {
+        if !self.blocks.contains_key(&slot) {
             if let Some(block_height) = block.block_height {
                 for tx in block.transactions.values() {
                     self.signature_statuses.insert(
@@ -278,24 +278,37 @@ impl StorageProcessed {
             } else {
                 error!(slot, "no block height for slot");
             }
+        }
+    }
 
+    fn add(&mut self, slot: Slot, block: Arc<BlockWithBinary>) {
+        self.add_signatures(slot, &block);
+        if let BTreeMapEntry::Vacant(entry) = self.blocks.entry(slot) {
             entry.insert(Some(block));
         }
     }
 
     fn mark_dead(&mut self, slot: Slot) {
-        self.blocks.insert(slot, None);
-
-        // TODO: remove signatures if exists
+        if self.blocks.insert(slot, None).is_some() {
+            if let Some(block) = self.recent_blocks.remove(&slot) {
+                for signature in block.signatures {
+                    self.signature_statuses.remove(&signature);
+                }
+            }
+        }
     }
 
-    fn set_confirmed(&mut self, slot: Slot) {
+    fn set_confirmed(&mut self, slot: Slot, block: Option<Arc<BlockWithBinary>>) {
         self.confirmed_slot = slot;
         self.confirmed_height = self
             .recent_blocks
             .get(&slot)
             .map(|rb| rb.block_height)
             .unwrap_or(self.confirmed_height);
+
+        if let Some(block) = &block {
+            self.add_signatures(slot, block);
+        }
 
         loop {
             match self.blocks.first_key_value() {
