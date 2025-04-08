@@ -268,7 +268,6 @@ async fn start2(
                                 },
                                 StreamSourceSlotStatus::Confirmed => storage_memory.set_confirmed(slot),
                                 StreamSourceSlotStatus::Finalized => {
-                                    stored_slots.finalized_store(slot);
                                     let _ = sync_tx.send(ReadWriteSyncMessage::SlotFinalized { slot });
                                 },
                             }
@@ -278,7 +277,6 @@ async fn start2(
                                 match status {
                                     StreamSourceSlotStatus::Confirmed => stored_slots.confirmed_store(slot),
                                     StreamSourceSlotStatus::Finalized => {
-                                        stored_slots.finalized_store(slot);
                                         let _ = sync_tx.send(ReadWriteSyncMessage::SlotFinalized { slot });
                                     }
                                     _ => unreachable!(),

@@ -1,12 +1,12 @@
 use {
-    crate::metrics,
+    crate::{
+        metrics,
+        util::{HashMap, HashSet},
+    },
     solana_sdk::{clock::Slot, commitment_config::CommitmentLevel},
-    std::{
-        collections::{HashMap, HashSet},
-        sync::{
-            Arc, Mutex,
-            atomic::{AtomicU64, Ordering},
-        },
+    std::sync::{
+        Arc, Mutex, MutexGuard,
+        atomic::{AtomicU64, Ordering},
     },
 };
 
@@ -76,30 +76,51 @@ impl StoredSlots {
 }
 
 #[derive(Debug, Clone)]
-pub struct StoredConfirmedSlot {
+pub struct StoredSlotsRead {
     stored_slots: StoredSlots,
-    slots: Arc<Mutex<HashMap<Slot, HashSet<usize>>>>,
+    slots_confirmed: Arc<Mutex<HashMap<Slot, HashSet<usize>>>>,
+    slots_finalized: Arc<Mutex<HashMap<Slot, HashSet<usize>>>>,
     total_readers: usize,
 }
 
-impl StoredConfirmedSlot {
+impl StoredSlotsRead {
     pub fn new(stored_slots: StoredSlots, total_readers: usize) -> Self {
         Self {
             stored_slots,
-            slots: Arc::default(),
+            slots_confirmed: Arc::default(),
+            slots_finalized: Arc::default(),
             total_readers,
         }
     }
 
-    pub fn set_confirmed(&self, index: usize, slot: Slot) {
-        let mut lock = self.slots.lock().expect("unpanicked mutex");
-
+    fn set(
+        &self,
+        mut lock: MutexGuard<HashMap<Slot, HashSet<usize>>>,
+        index: usize,
+        slot: Slot,
+    ) -> bool {
         let entry = lock.entry(slot).or_default();
         entry.insert(index);
 
         if entry.len() == self.total_readers {
-            self.stored_slots.confirmed_store(slot);
             lock.remove(&slot);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn set_confirmed(&self, index: usize, slot: Slot) {
+        let lock = self.slots_confirmed.lock().expect("unpanicked mutex");
+        if self.set(lock, index, slot) {
+            self.stored_slots.finalized_store(slot);
+        }
+    }
+
+    pub fn set_finalized(&self, index: usize, slot: Slot) {
+        let lock = self.slots_finalized.lock().expect("unpanicked mutex");
+        if self.set(lock, index, slot) {
+            self.stored_slots.finalized_store(slot);
         }
     }
 }

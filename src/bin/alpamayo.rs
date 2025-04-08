@@ -106,7 +106,7 @@ fn main() -> anyhow::Result<()> {
         config.storage.read.requests_concurrency,
     ));
     let stored_confirmed_slot =
-        storage::slots::StoredConfirmedSlot::new(stored_slots.clone(), config.storage.read.threads);
+        storage::slots::StoredSlotsRead::new(stored_slots.clone(), config.storage.read.threads);
     for index in 0..config.storage.read.threads {
         let affinity = config.storage.read.affinity.as_ref().map(|affinity| {
             if affinity.len() == config.storage.read.threads {

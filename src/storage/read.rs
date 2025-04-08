@@ -6,7 +6,7 @@ use {
             blocks::{StorageBlockLocationResult, StoredBlocksRead},
             files::StorageFilesRead,
             rocksdb::{RocksdbRead, TransactionIndexValue},
-            slots::StoredConfirmedSlot,
+            slots::StoredSlotsRead,
             sync::ReadWriteSyncMessage,
         },
         util::HashMap,
@@ -49,7 +49,7 @@ pub fn start(
     mut sync_rx: broadcast::Receiver<ReadWriteSyncMessage>,
     read_requests_concurrency: Arc<Semaphore>,
     requests_rx: Arc<Mutex<mpsc::Receiver<ReadRequest>>>,
-    stored_confirmed_slot: StoredConfirmedSlot,
+    stored_slots_read: StoredSlotsRead,
 ) -> anyhow::Result<thread::JoinHandle<anyhow::Result<()>>> {
     thread::Builder::new()
         .name(format!("alpStorageRd{index:02}"))
@@ -91,7 +91,7 @@ pub fn start(
                     read_requests_concurrency,
                     requests_rx,
                     &mut read_requests,
-                    stored_confirmed_slot,
+                    stored_slots_read,
                 )
                 .await;
 
@@ -132,7 +132,7 @@ async fn start2(
     read_requests_concurrency: Arc<Semaphore>,
     read_requests_rx: Arc<Mutex<mpsc::Receiver<ReadRequest>>>,
     read_requests: &mut FuturesUnordered<LocalBoxFuture<'_, Option<ReadRequest>>>,
-    stored_confirmed_slot: StoredConfirmedSlot,
+    stored_slots_read: StoredSlotsRead,
 ) -> anyhow::Result<()> {
     let read_request_next =
         read_request_get_next(Arc::clone(&read_requests_concurrency), read_requests_rx);
@@ -153,12 +153,13 @@ async fn start2(
                 Ok(ReadWriteSyncMessage::BlockNew { slot, block }) => storage_processed.add_processed_block(slot, block),
                 Ok(ReadWriteSyncMessage::BlockDead { slot }) => storage_processed.mark_dead(slot),
                 Ok(ReadWriteSyncMessage::BlockConfirmed { slot, block }) => {
-                    stored_confirmed_slot.set_confirmed(index, slot);
+                    stored_slots_read.set_confirmed(index, slot);
                     storage_processed.set_confirmed(slot, block.clone());
                     *confirmed_in_process = Some((slot, block));
                 },
                 Ok(ReadWriteSyncMessage::SlotFinalized { slot }) => {
-                    storage_processed.set_finalized(slot); // todo: should set same as confirmed
+                    stored_slots_read.set_finalized(index, slot);
+                    storage_processed.set_finalized(slot);
                 }
                 Ok(ReadWriteSyncMessage::ConfirmedBlockPop) => blocks.pop_block(),
                 Ok(ReadWriteSyncMessage::ConfirmedBlockPush { block }) => {
