@@ -41,7 +41,7 @@ use {
     tracing::error,
 };
 
-const MAX_NUM_RECENT_BLOCKS: usize = 150;
+const RPF_MAX_NUM_RECENT_BLOCKS: usize = 150;
 
 pub fn start(
     index: usize,
@@ -418,13 +418,13 @@ impl StorageProcessed {
     }
 
     fn get_fees(&self, pubkeys: &[Pubkey], percentile: Option<u16>) -> Vec<RpcPrioritizationFee> {
-        let mut fees = Vec::with_capacity(MAX_NUM_RECENT_BLOCKS);
+        let mut fees = Vec::with_capacity(RPF_MAX_NUM_RECENT_BLOCKS);
         for (slot, block) in self.recent_blocks.iter().rev() {
             fees.push(RpcPrioritizationFee {
                 slot: *slot,
                 prioritization_fee: block.fees.get_fee(pubkeys, percentile),
             });
-            if fees.len() == MAX_NUM_RECENT_BLOCKS {
+            if fees.len() == RPF_MAX_NUM_RECENT_BLOCKS {
                 break;
             }
         }

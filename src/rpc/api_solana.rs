@@ -68,7 +68,7 @@ use {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct RpcRecentPrioritizationFeesConfigTriton {
+pub struct RpcRecentPrioritizationFeesConfig {
     pub percentile: Option<u16>,
 }
 
@@ -552,7 +552,7 @@ impl RpcRequest {
                     #[serde(default)]
                     pubkey_strs: Option<Vec<String>>,
                     #[serde(default)]
-                    config: Option<RpcRecentPrioritizationFeesConfigTriton>,
+                    config: Option<RpcRecentPrioritizationFeesConfig>,
                 }
 
                 let (
@@ -585,7 +585,7 @@ impl RpcRequest {
                 };
 
                 let percentile = if state.grpf_percentile {
-                    let RpcRecentPrioritizationFeesConfigTriton { percentile } =
+                    let RpcRecentPrioritizationFeesConfig { percentile } =
                         config.unwrap_or_default();
                     if let Some(percentile) = percentile {
                         if percentile > 10_000 {
