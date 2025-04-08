@@ -35,5 +35,6 @@ The minor version will be incremented upon a breaking change and the patch versi
 - rpc: support gSS ([#19](https://github.com/lamports-dev/alpamayo/pull/19))
 - rpc: support getLatestBlockhash ([#20](https://github.com/lamports-dev/alpamayo/pull/20))
 - rpc: support isBlockhashValid ([#21](https://github.com/lamports-dev/alpamayo/pull/21))
+- rpc: support getRecentPrioritizationFees ([#22](https://github.com/lamports-dev/alpamayo/pull/22))
 
 ### Breaking

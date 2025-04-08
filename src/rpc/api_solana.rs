@@ -6,7 +6,8 @@ use {
             read::{
                 ReadRequest, ReadResultBlock, ReadResultBlockHeight, ReadResultBlockTime,
                 ReadResultBlockhashValid, ReadResultBlocks, ReadResultLatestBlockhash,
-                ReadResultSignatureStatuses, ReadResultSignaturesForAddress, ReadResultTransaction,
+                ReadResultRecentPrioritizationFees, ReadResultSignatureStatuses,
+                ReadResultSignaturesForAddress, ReadResultTransaction,
             },
             slots::StoredSlots,
         },
@@ -45,6 +46,7 @@ use {
         hash::Hash,
         pubkey::Pubkey,
         signature::Signature,
+        transaction::MAX_TX_ACCOUNT_LOCKS,
     },
     solana_storage_proto::convert::generated,
     solana_transaction_status::{
@@ -63,6 +65,12 @@ use {
     },
     tracing::error,
 };
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcRecentPrioritizationFeesConfigTriton {
+    pub percentile: Option<u16>,
+}
 
 type RpcResponse = hyper::Response<BoxBody<Bytes, std::convert::Infallible>>;
 
@@ -131,6 +139,7 @@ struct SupportedCalls {
     get_blocks_with_limit: bool,
     get_block_time: bool,
     get_latest_blockhash: bool,
+    get_recent_prioritization_fees: bool,
     get_signatures_for_address: bool,
     get_signature_statuses: bool,
     get_slot: bool,
@@ -153,6 +162,10 @@ impl SupportedCalls {
             get_latest_blockhash: Self::check_call_support(
                 calls,
                 ConfigRpcCall::GetLatestBlockhash,
+            )?,
+            get_recent_prioritization_fees: Self::check_call_support(
+                calls,
+                ConfigRpcCall::GetRecentPrioritizationFees,
             )?,
             get_signatures_for_address: Self::check_call_support(
                 calls,
@@ -184,6 +197,7 @@ pub struct State {
     supported_calls: SupportedCalls,
     gsfa_limit: usize,
     gss_transaction_history: bool,
+    grpf_percentile: bool,
     requests_tx: mpsc::Sender<ReadRequest>,
     upstream: Option<RpcClient>,
     workers: Sender<WorkRequest>,
@@ -203,6 +217,7 @@ impl State {
             supported_calls: SupportedCalls::new(&config.calls)?,
             gsfa_limit: config.gsfa_limit,
             gss_transaction_history: config.gss_transaction_history,
+            grpf_percentile: config.grpf_percentile,
             requests_tx,
             upstream: config.upstream.map(RpcClient::new).transpose()?,
             workers,
@@ -302,6 +317,7 @@ enum RpcRequest {
     Blocks(RpcRequestBlocks),
     BlockTime(RpcRequestBlockTime),
     LatestBlockhash(RpcRequestLatestBlockhash),
+    RecentPrioritizationFees(RpcRequestRecentPrioritizationFees),
     SignaturesForAddress(RpcRequestSignaturesForAddress),
     SignatureStatuses(RpcRequestsSignatureStatuses),
     Transaction(RpcRequestTransaction),
@@ -527,6 +543,73 @@ impl RpcRequest {
                     id: id.into_owned(),
                     commitment,
                 }))
+            }
+            "getRecentPrioritizationFees"
+                if state.supported_calls.get_recent_prioritization_fees =>
+            {
+                #[derive(Debug, Deserialize)]
+                struct ReqParams {
+                    #[serde(default)]
+                    pubkey_strs: Option<Vec<String>>,
+                    #[serde(default)]
+                    config: Option<RpcRecentPrioritizationFeesConfigTriton>,
+                }
+
+                let (
+                    id,
+                    ReqParams {
+                        pubkey_strs,
+                        config,
+                    },
+                ) = Self::parse_params(request)?;
+
+                let pubkey_strs = pubkey_strs.unwrap_or_default();
+                if pubkey_strs.len() > MAX_TX_ACCOUNT_LOCKS {
+                    return Err(jsonrpc_response_error(
+                        id,
+                        jsonrpc_error_invalid_params::<()>(
+                            format!("Too many inputs provided; max {MAX_TX_ACCOUNT_LOCKS}"),
+                            None,
+                        ),
+                    ));
+                }
+                let pubkeys = match pubkey_strs
+                    .into_iter()
+                    .map(|pubkey_str| Self::verify_pubkey(&pubkey_str))
+                    .collect::<Result<Vec<_>, _>>()
+                {
+                    Ok(pubkeys) => pubkeys,
+                    Err(error) => {
+                        return Err(jsonrpc_response_error(id, error));
+                    }
+                };
+
+                let percentile = if state.grpf_percentile {
+                    let RpcRecentPrioritizationFeesConfigTriton { percentile } =
+                        config.unwrap_or_default();
+                    if let Some(percentile) = percentile {
+                        if percentile > 10_000 {
+                            return Err(jsonrpc_response_error(
+                                id,
+                                jsonrpc_error_invalid_params::<()>(
+                                    "Percentile is too big; max value is 10000",
+                                    None,
+                                ),
+                            ));
+                        }
+                    }
+                    percentile
+                } else {
+                    None
+                };
+
+                Ok(Self::RecentPrioritizationFees(
+                    RpcRequestRecentPrioritizationFees {
+                        id: id.into_owned(),
+                        pubkeys,
+                        percentile,
+                    },
+                ))
             }
             "getSignaturesForAddress" if state.supported_calls.get_signatures_for_address => {
                 #[derive(Debug, Deserialize)]
@@ -857,6 +940,7 @@ impl RpcRequest {
             Self::Blocks(request) => request.process(state, upstream_disabled).await,
             Self::BlockTime(request) => request.process(state, upstream_disabled).await,
             Self::LatestBlockhash(request) => request.process(state).await,
+            Self::RecentPrioritizationFees(request) => request.process(state).await,
             Self::SignaturesForAddress(request) => request.process(state, upstream_disabled).await,
             Self::SignatureStatuses(request) => request.process(state, upstream_disabled).await,
             Self::Transaction(request) => request.process(state, upstream_disabled).await,
@@ -1308,6 +1392,46 @@ impl RpcRequestLatestBlockhash {
             }
             ReadResultLatestBlockhash::ReadError(error) => {
                 anyhow::bail!("read error: {error}")
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+struct RpcRequestRecentPrioritizationFees {
+    id: Id<'static>,
+    pubkeys: Vec<Pubkey>,
+    percentile: Option<u16>,
+}
+
+impl RpcRequestRecentPrioritizationFees {
+    async fn process(self, state: Arc<State>) -> RpcRequestResult {
+        let deadline = Instant::now() + state.request_timeout;
+
+        // request
+        let (tx, rx) = oneshot::channel();
+        anyhow::ensure!(
+            state
+                .requests_tx
+                .send(ReadRequest::RecentPrioritizationFees {
+                    deadline,
+                    pubkeys: self.pubkeys,
+                    percentile: self.percentile,
+                    tx,
+                })
+                .await
+                .is_ok(),
+            "request channel is closed"
+        );
+        let Ok(result) = rx.await else {
+            anyhow::bail!("rx channel is closed");
+        };
+
+        match result {
+            ReadResultRecentPrioritizationFees::Timeout => anyhow::bail!("timeout"),
+            ReadResultRecentPrioritizationFees::Fees(fees) => {
+                let data = serde_json::to_value(&fees).expect("json serialization never fail");
+                Ok(jsonrpc_response_success(self.id, data))
             }
         }
     }

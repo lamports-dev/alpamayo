@@ -1,6 +1,8 @@
 use {
     crate::{
-        source::{sfa::SignaturesForAddress, transaction::TransactionWithBinary},
+        source::{
+            fees::TransactionsFees, sfa::SignaturesForAddress, transaction::TransactionWithBinary,
+        },
         util::HashMap,
     },
     prost::{
@@ -18,7 +20,7 @@ use {
     },
     solana_storage_proto::convert::generated,
     solana_transaction_status::{Reward, RewardType, Rewards},
-    std::{collections::hash_map::Entry as HashMapEntry, ops::Deref},
+    std::{collections::hash_map::Entry as HashMapEntry, ops::Deref, sync::Arc},
 };
 
 #[derive(Debug, Clone)]
@@ -39,6 +41,7 @@ pub struct BlockWithBinary {
     pub txs_offset: Vec<BlockTransactionOffset>,
     pub transactions: HashMap<Signature, TransactionWithBinary>,
     pub sfa: HashMap<Pubkey, SignaturesForAddress>,
+    pub fees: Arc<TransactionsFees>,
 }
 
 impl BlockWithBinary {
@@ -80,6 +83,8 @@ impl BlockWithBinary {
             }
         }
 
+        let fees = Arc::new(TransactionsFees::new(&transactions));
+
         let transactions = transactions
             .into_iter()
             .map(|tx| (tx.signature, tx))
@@ -94,6 +99,7 @@ impl BlockWithBinary {
             txs_offset,
             transactions,
             sfa,
+            fees,
         }
     }
 }

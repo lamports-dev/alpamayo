@@ -389,6 +389,7 @@ impl Stream for StreamSource {
                             let first_processed = this.first_processed;
                             let entry = this.slots.entry(slot);
                             let slot_info = entry.or_insert_with(|| SlotInfo::new(slot));
+                            let is_vote = tx.is_vote;
                             let index = tx.index;
                             match create_tx_with_meta(tx) {
                                 Ok(tx) => {
@@ -396,9 +397,10 @@ impl Stream for StreamSource {
                                         warn!(slot, signature = ?tx.signatures[0], "missing metadata");
                                     }
 
-                                    slot_info
-                                        .transactions
-                                        .push((index, TransactionWithBinary::new(slot, tx)));
+                                    slot_info.transactions.push((
+                                        index,
+                                        TransactionWithBinary::new(slot, tx, Some(is_vote)),
+                                    ));
                                     if let Some(first_processed) = first_processed {
                                         if slot <= first_processed {
                                             continue;

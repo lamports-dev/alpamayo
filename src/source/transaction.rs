@@ -1,5 +1,8 @@
 use {
-    crate::{source::sfa::SignatureForAddress, storage::rocksdb::TransactionIndex},
+    crate::{
+        source::{fees::TransactionFees, sfa::SignatureForAddress},
+        storage::rocksdb::TransactionIndex,
+    },
     prost::Message as _,
     solana_sdk::{clock::Slot, signature::Signature, transaction::TransactionError},
     solana_storage_proto::convert::generated,
@@ -12,11 +15,12 @@ pub struct TransactionWithBinary {
     pub signature: Signature,
     pub err: Option<TransactionError>,
     pub sfa: Vec<SignatureForAddress>,
+    pub fees: Option<TransactionFees>,
     pub protobuf: Vec<u8>,
 }
 
 impl TransactionWithBinary {
-    pub fn new(slot: Slot, tx: TransactionWithStatusMeta) -> Self {
+    pub fn new(slot: Slot, tx: TransactionWithStatusMeta, is_vote: Option<bool>) -> Self {
         let signature = *tx.transaction_signature();
         let key = TransactionIndex::encode(&signature);
 
@@ -40,6 +44,8 @@ impl TransactionWithBinary {
             }
         };
 
+        let fees = TransactionFees::create(&tx, is_vote);
+
         let protobuf = generated::ConfirmedTransaction::from(tx).encode_to_vec();
 
         Self {
@@ -47,6 +53,7 @@ impl TransactionWithBinary {
             signature,
             err,
             sfa,
+            fees,
             protobuf,
         }
     }

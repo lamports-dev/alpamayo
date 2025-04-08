@@ -295,6 +295,9 @@ pub struct ConfigRpc {
     /// Enable transaction history for getSignatureStatuses
     #[serde(default = "ConfigRpc::default_gss_transaction_history")]
     pub gss_transaction_history: bool,
+    /// Enable `percentile` in getRecentPrioritizationFees
+    #[serde(default = "ConfigRpc::default_grpf_percentile")]
+    pub grpf_percentile: bool,
     /// Max number of requests in the queue
     #[serde(
         default = "ConfigRpc::default_request_channel_capacity",
@@ -326,6 +329,10 @@ impl ConfigRpc {
         true
     }
 
+    const fn default_grpf_percentile() -> bool {
+        true
+    }
+
     const fn default_request_channel_capacity() -> usize {
         4096
     }
@@ -340,6 +347,7 @@ pub enum ConfigRpcCall {
     GetBlocksWithLimit,
     GetBlockTime,
     GetLatestBlockhash,
+    GetRecentPrioritizationFees,
     GetSignaturesForAddress,
     GetSignatureStatuses,
     GetSlot,

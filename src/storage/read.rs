@@ -1,7 +1,7 @@
 use {
     crate::{
         rpc::api_solana::RpcRequestBlocksUntil,
-        source::block::BlockWithBinary,
+        source::{block::BlockWithBinary, fees::TransactionsFees},
         storage::{
             blocks::{StorageBlockLocationResult, StoredBlocksRead},
             files::StorageFilesRead,
@@ -16,7 +16,9 @@ use {
         future::{FutureExt, LocalBoxFuture, pending, ready},
         stream::{FuturesUnordered, StreamExt},
     },
-    solana_rpc_client_api::response::RpcConfirmedTransactionStatusWithSignature,
+    solana_rpc_client_api::response::{
+        RpcConfirmedTransactionStatusWithSignature, RpcPrioritizationFee,
+    },
     solana_sdk::{
         clock::{MAX_PROCESSING_AGE, MAX_RECENT_BLOCKHASHES, Slot, UnixTimestamp},
         commitment_config::{CommitmentConfig, CommitmentLevel},
@@ -38,6 +40,8 @@ use {
     },
     tracing::error,
 };
+
+const MAX_NUM_RECENT_BLOCKS: usize = 150;
 
 pub fn start(
     index: usize,
@@ -241,6 +245,7 @@ struct RecentBlock {
     blockhash: String,
     block_height: Slot,
     signatures: Vec<Signature>,
+    fees: Arc<TransactionsFees>,
 }
 
 #[derive(Debug, Default)]
@@ -277,6 +282,7 @@ impl StorageProcessed {
                         blockhash: block.blockhash.clone(),
                         block_height,
                         signatures: block.transactions.keys().copied().collect(),
+                        fees: Arc::clone(&block.fees),
                     },
                 );
                 self.block_heights
@@ -410,6 +416,21 @@ impl StorageProcessed {
     fn get_block_height_by_blockhash(&self, blockhash: &String) -> Option<Slot> {
         self.block_heights.get(blockhash).copied()
     }
+
+    fn get_fees(&self, pubkeys: &[Pubkey], percentile: Option<u16>) -> Vec<RpcPrioritizationFee> {
+        let mut fees = Vec::with_capacity(MAX_NUM_RECENT_BLOCKS);
+        for (slot, block) in self.recent_blocks.iter().rev() {
+            fees.push(RpcPrioritizationFee {
+                slot: *slot,
+                prioritization_fee: block.fees.get_fee(pubkeys, percentile),
+            });
+            if fees.len() == MAX_NUM_RECENT_BLOCKS {
+                break;
+            }
+        }
+        fees.reverse();
+        fees
+    }
 }
 
 #[derive(Debug)]
@@ -455,6 +476,12 @@ pub enum ReadResultLatestBlockhash {
         last_valid_block_height: Slot,
     },
     ReadError(anyhow::Error),
+}
+
+#[derive(Debug)]
+pub enum ReadResultRecentPrioritizationFees {
+    Timeout,
+    Fees(Vec<RpcPrioritizationFee>),
 }
 
 #[derive(Debug)]
@@ -522,6 +549,12 @@ pub enum ReadRequest {
         deadline: Instant,
         commitment: CommitmentConfig,
         tx: oneshot::Sender<ReadResultLatestBlockhash>,
+    },
+    RecentPrioritizationFees {
+        deadline: Instant,
+        pubkeys: Vec<Pubkey>,
+        percentile: Option<u16>,
+        tx: oneshot::Sender<ReadResultRecentPrioritizationFees>,
     },
     SignaturesForAddress {
         deadline: Instant,
@@ -799,6 +832,23 @@ impl ReadRequest {
                     None => {
                         ReadResultLatestBlockhash::ReadError(anyhow::anyhow!("failed to get block"))
                     }
+                };
+
+                let _ = tx.send(result);
+                None
+            }
+            Self::RecentPrioritizationFees {
+                deadline,
+                pubkeys,
+                percentile,
+                tx,
+            } => {
+                let result = if deadline < Instant::now() {
+                    ReadResultRecentPrioritizationFees::Timeout
+                } else {
+                    ReadResultRecentPrioritizationFees::Fees(
+                        storage_processed.get_fees(&pubkeys, percentile),
+                    )
                 };
 
                 let _ = tx.send(result);

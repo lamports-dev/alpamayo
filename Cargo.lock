@@ -152,6 +152,7 @@ dependencies = [
  "serde_yaml",
  "signal-hook",
  "solana-client",
+ "solana-compute-budget",
  "solana-rpc-client",
  "solana-rpc-client-api",
  "solana-sdk",

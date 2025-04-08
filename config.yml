@@ -67,6 +67,7 @@ rpc:
     - getBlocksWithLimit
     - getBlockTime
     - getLatestBlockhash
+    - getRecentPrioritizationFees
     - getSignaturesForAddress
     - getSignatureStatuses
     - getSlot
@@ -75,6 +76,7 @@ rpc:
     - isBlockhashValid
   gsfa_limit: 1000
   gss_transaction_history: true
+  grpf_percentile: true
   request_channel_capacity: 4096
   upstream:
     endpoint: http://127.0.0.1:8899
