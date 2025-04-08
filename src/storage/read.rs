@@ -150,7 +150,7 @@ async fn start2(
             // sync update
             message = sync_rx.recv() => match message {
                 Ok(ReadWriteSyncMessage::Init { .. }) => anyhow::bail!("unexpected second init"),
-                Ok(ReadWriteSyncMessage::BlockNew { slot, block }) => storage_processed.add(slot, block),
+                Ok(ReadWriteSyncMessage::BlockNew { slot, block }) => storage_processed.add_processed_block(slot, block),
                 Ok(ReadWriteSyncMessage::BlockDead { slot }) => storage_processed.mark_dead(slot),
                 Ok(ReadWriteSyncMessage::BlockConfirmed { slot, block }) => {
                     stored_confirmed_slot.set_confirmed(index, slot);
@@ -158,7 +158,7 @@ async fn start2(
                     *confirmed_in_process = Some((slot, block));
                 },
                 Ok(ReadWriteSyncMessage::SlotFinalized { slot }) => {
-                    storage_processed.set_finalized(slot);
+                    storage_processed.set_finalized(slot); // todo: should set same as confirmed
                 }
                 Ok(ReadWriteSyncMessage::ConfirmedBlockPop) => blocks.pop_block(),
                 Ok(ReadWriteSyncMessage::ConfirmedBlockPush { block }) => {
@@ -317,7 +317,7 @@ impl StorageProcessed {
         }
     }
 
-    fn add(&mut self, slot: Slot, block: Arc<BlockWithBinary>) {
+    fn add_processed_block(&mut self, slot: Slot, block: Arc<BlockWithBinary>) {
         self.add_signatures(slot, &block);
         if let BTreeMapEntry::Vacant(entry) = self.blocks.entry(slot) {
             entry.insert(Some(block));
@@ -357,7 +357,10 @@ impl StorageProcessed {
         loop {
             match self.recent_blocks.first_key_value() {
                 Some((_slot, block))
-                    if (self.confirmed_height - block.block_height) as usize
+                    if self
+                        .confirmed_height
+                        .checked_sub(block.block_height)
+                        .unwrap_or_default() as usize
                         >= MAX_RECENT_BLOCKHASHES =>
                 {
                     if let Some((_slot, block)) = self.recent_blocks.pop_first() {
