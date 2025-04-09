@@ -389,7 +389,6 @@ impl StorageProcessed {
     }
 
     fn is_ready(&self) -> bool {
-        tracing::warn!(size = self.recent_blocks.len(), "recent_blocks size");
         self.recent_blocks.len() >= MAX_RECENT_BLOCKHASHES
     }
 

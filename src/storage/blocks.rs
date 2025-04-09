@@ -62,8 +62,11 @@ impl StoredBlocksWrite {
         let mut blocks = Vec::with_capacity(MAX_RECENT_BLOCKHASHES);
 
         let mut index = self.head;
-        while blocks.len() < MAX_RECENT_BLOCKHASHES && index != self.tail {
-            if self.blocks[index].exists && !self.blocks[index].dead {
+        while blocks.len() < MAX_RECENT_BLOCKHASHES
+            && index != self.tail
+            && self.blocks[index].exists
+        {
+            if !self.blocks[index].dead {
                 blocks.push(self.blocks[index]);
             }
 

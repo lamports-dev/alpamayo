@@ -95,16 +95,15 @@ pub fn start(
                                 .await
                                 .context("failed to open storage files")?;
 
-                            let bytes = storage_files
+                            storage_files
                                 .read(
                                     stored_block.storage_id,
                                     stored_block.offset,
                                     stored_block.size,
                                 )
                                 .await
-                                .context("failed to read block buffer")?;
-
-                            Ok::<_, anyhow::Error>((stored_block.slot, bytes))
+                                .context("failed to read block buffer")
+                                .map(|bytes| (stored_block.slot, bytes))
                         }
                     }))
                     .await

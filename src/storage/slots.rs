@@ -5,7 +5,7 @@ use {
     },
     solana_sdk::{clock::Slot, commitment_config::CommitmentLevel},
     std::sync::{
-        Arc, Mutex, MutexGuard,
+        Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
 };
@@ -102,10 +102,12 @@ impl StoredSlotsRead {
 
     fn set(
         &self,
-        mut lock: MutexGuard<HashMap<Slot, HashSet<usize>>>,
+        map: &Arc<Mutex<HashMap<Slot, HashSet<usize>>>>,
         index: usize,
         slot: Slot,
     ) -> bool {
+        let mut lock = map.lock().expect("unpanicked mutex");
+
         let entry = lock.entry(slot).or_default();
         entry.insert(index);
 
@@ -118,15 +120,13 @@ impl StoredSlotsRead {
     }
 
     pub fn set_confirmed(&self, index: usize, slot: Slot) {
-        let lock = self.slots_confirmed.lock().expect("unpanicked mutex");
-        if self.set(lock, index, slot) {
+        if self.set(&self.slots_confirmed, index, slot) {
             self.stored_slots.confirmed_store(slot);
         }
     }
 
     pub fn set_finalized(&self, index: usize, slot: Slot) {
-        let lock = self.slots_finalized.lock().expect("unpanicked mutex");
-        if self.set(lock, index, slot) {
+        if self.set(&self.slots_finalized, index, slot) {
             self.stored_slots.finalized_store(slot);
         }
     }
