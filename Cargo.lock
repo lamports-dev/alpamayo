@@ -142,6 +142,7 @@ dependencies = [
  "num_cpus",
  "prometheus",
  "prost 0.11.9",
+ "rayon",
  "reqwest 0.12.14",
  "richat-client",
  "richat-proto",

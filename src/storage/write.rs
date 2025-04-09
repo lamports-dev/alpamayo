@@ -24,17 +24,21 @@ use {
         stream::{FuturesUnordered, StreamExt},
     },
     prost::Message,
+    rayon::{
+        ThreadPoolBuilder,
+        iter::{IntoParallelIterator, ParallelIterator},
+    },
     richat_shared::shutdown::Shutdown,
     solana_sdk::clock::Slot,
     solana_storage_proto::convert::generated,
     solana_transaction_status::ConfirmedBlock,
     std::{
-        sync::{Arc, Mutex, mpsc as mpsc_sync},
+        sync::Arc,
         thread,
         time::{Duration, Instant},
     },
     tokio::{
-        sync::{Notify, broadcast, mpsc, oneshot},
+        sync::{Notify, broadcast, mpsc},
         task::{JoinHandle, spawn_local},
         time::sleep,
     },
@@ -56,7 +60,10 @@ pub fn start(
     thread::Builder::new()
         .name("alpStorageWrt".to_owned())
         .spawn(move || {
-            let recent_blocks_decode = Arc::new(BlockDecodeWorkers::new());
+            let recent_blocks_thread_pool = ThreadPoolBuilder::new()
+                .build()
+                .context("failed to build thread pool to decode recent blocks")?;
+
             tokio_uring::start(async move {
                 if let Some(cpus) = config.write.affinity {
                     affinity::set_thread_affinity(&cpus).expect("failed to set affinity")
@@ -83,7 +90,6 @@ pub fn start(
                 let recent_blocks =
                     match try_join_all(blocks.get_recent_blocks().into_iter().map(|stored_block| {
                         let storage_files_init = storage_files_read_sync_init.clone();
-                        let recent_blocks_decode = Arc::clone(&recent_blocks_decode);
                         async move {
                             let storage_files = StorageFilesRead::open(storage_files_init)
                                 .await
@@ -98,22 +104,46 @@ pub fn start(
                                 .await
                                 .context("failed to read block buffer")?;
 
-                            recent_blocks_decode.decode(stored_block.slot, bytes).await
+                            Ok::<_, anyhow::Error>((stored_block.slot, bytes))
                         }
                     }))
                     .await
                     .context("failed to load recent blocks")
-                    {
+                    .and_then(|items| {
+                        recent_blocks_thread_pool.install(|| {
+                            items
+                                .into_par_iter()
+                                .map(|(slot, bytes)| {
+                                    match generated::ConfirmedBlock::decode(bytes.as_ref())
+                                    .context("failed to decode protobuf")
+                                {
+                                    Ok(block) => match ConfirmedBlock::try_from(block)
+                                        .context("failed to convert to confirmed block")
+                                    {
+                                        Ok(block) => Ok((
+                                            slot,
+                                            Arc::new(
+                                                BlockWithBinary::new_from_confirmed_block_and_slot(
+                                                    block, slot,
+                                                ),
+                                            ),
+                                        )),
+                                        Err(error) => Err(error),
+                                    },
+                                    Err(error) => Err(error),
+                                }
+                                })
+                                .collect::<Result<Vec<_>, anyhow::Error>>()
+                        })
+                    }) {
                         Ok(recent_blocks) => recent_blocks,
                         Err(error) => {
                             storage_files.close().await;
                             return Err(error);
                         }
                     };
-                Arc::into_inner(recent_blocks_decode)
-                    .context("expected all futures is finished")?
-                    .shutdown()?;
                 info!(len = recent_blocks.len(), elapsed = ?ts.elapsed(), "load recent blocks");
+                drop(recent_blocks_thread_pool);
 
                 // notify readers
                 sync_tx
@@ -384,81 +414,5 @@ async fn start2(
 
             next_confirmed_slot += 1;
         }
-    }
-}
-
-type BlockDecodeWorkersItem = (
-    Slot,
-    Vec<u8>,
-    oneshot::Sender<anyhow::Result<(Slot, Arc<BlockWithBinary>)>>,
-);
-
-#[derive(Debug)]
-struct BlockDecodeWorkers {
-    tx: mpsc_sync::Sender<BlockDecodeWorkersItem>,
-    threads: Vec<thread::JoinHandle<()>>,
-}
-
-impl BlockDecodeWorkers {
-    fn new() -> Self {
-        let (tx, rx) = mpsc_sync::channel();
-
-        let rx = Arc::new(Mutex::new(rx));
-        let threads = (0..num_cpus::get())
-            .map(|_| {
-                let rx = Arc::clone(&rx);
-                thread::spawn(move || {
-                    loop {
-                        let (slot, bytes, tx): BlockDecodeWorkersItem = {
-                            let Ok(item) = rx.lock().expect("unpanicked mutex").recv() else {
-                                return;
-                            };
-                            item
-                        };
-
-                        let result = match generated::ConfirmedBlock::decode(bytes.as_ref())
-                            .context("failed to decode protobuf")
-                        {
-                            Ok(block) => match ConfirmedBlock::try_from(block)
-                                .context("failed to convert to confirmed block")
-                            {
-                                Ok(block) => Ok((
-                                    slot,
-                                    Arc::new(BlockWithBinary::new_from_confirmed_block_and_slot(
-                                        block, slot,
-                                    )),
-                                )),
-                                Err(error) => Err(error),
-                            },
-                            Err(error) => Err(error),
-                        };
-                        let _ = tx.send(result);
-                    }
-                })
-            })
-            .collect();
-
-        Self { tx, threads }
-    }
-
-    async fn decode(
-        &self,
-        slot: Slot,
-        bytes: Vec<u8>,
-    ) -> anyhow::Result<(Slot, Arc<BlockWithBinary>)> {
-        let (tx, rx) = oneshot::channel();
-        self.tx
-            .send((slot, bytes, tx))
-            .context("failed to send to workers")?;
-        rx.await.context("failed to recv result from worker")?
-    }
-
-    fn shutdown(self) -> anyhow::Result<()> {
-        drop(self.tx);
-        for th in self.threads {
-            th.join()
-                .map_err(|error| anyhow::anyhow!("failed to join thread: {error:?}"))?;
-        }
-        Ok(())
     }
 }
