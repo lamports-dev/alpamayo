@@ -59,15 +59,22 @@ pub fn start(
                     affinity::set_thread_affinity(&cpus).expect("failed to set affinity")
                 }
 
+                let mut confirmed_in_process = None;
+                let mut storage_processed = StorageProcessed::default();
+                let mut read_requests = FuturesUnordered::new();
                 let (mut blocks, db_read, storage_files) = match sync_rx.recv().await {
                     Ok(ReadWriteSyncMessage::Init {
                         blocks,
                         db_read,
                         storage_files_init,
+                        recent_blocks,
                     }) => {
                         let storage_files = StorageFilesRead::open(storage_files_init)
                             .await
                             .context("failed to open storage files")?;
+                        for (slot, block) in recent_blocks {
+                            storage_processed.set_confirmed(slot, Some(block));
+                        }
                         (blocks, db_read, storage_files)
                     }
                     Ok(_) => anyhow::bail!("invalid sync message"),
@@ -76,9 +83,6 @@ pub fn start(
                         anyhow::bail!("read runtime lagged")
                     }
                 };
-                let mut confirmed_in_process = None;
-                let mut storage_processed = StorageProcessed::default();
-                let mut read_requests = FuturesUnordered::new();
 
                 let result = start2(
                     index,
@@ -336,16 +340,16 @@ impl StorageProcessed {
     }
 
     fn set_confirmed(&mut self, slot: Slot, block: Option<Arc<BlockWithBinary>>) {
+        if let Some(block) = &block {
+            self.add_signatures(slot, block);
+        }
+
         self.confirmed_slot = slot;
         self.confirmed_height = self
             .recent_blocks
             .get(&slot)
             .map(|rb| rb.block_height)
             .unwrap_or(self.confirmed_height);
-
-        if let Some(block) = &block {
-            self.add_signatures(slot, block);
-        }
 
         loop {
             match self.blocks.first_key_value() {

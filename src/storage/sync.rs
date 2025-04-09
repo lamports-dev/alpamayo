@@ -18,6 +18,7 @@ pub enum ReadWriteSyncMessage {
         blocks: StoredBlocksRead,
         db_read: RocksdbRead,
         storage_files_init: StorageFilesSyncInit,
+        recent_blocks: Vec<(Slot, Arc<BlockWithBinary>)>,
     },
     // when we build the block
     BlockNew {

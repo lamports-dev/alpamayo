@@ -4,7 +4,7 @@ use {
         storage::{files::StorageId, slots::StoredSlots, sync::ReadWriteSyncMessage},
         util::HashMap,
     },
-    solana_sdk::clock::{Slot, UnixTimestamp},
+    solana_sdk::clock::{MAX_RECENT_BLOCKHASHES, Slot, UnixTimestamp},
     tokio::sync::broadcast,
 };
 
@@ -56,6 +56,26 @@ impl StoredBlocksWrite {
         stored_slots.first_available_store(this.front_slot());
 
         Ok(this)
+    }
+
+    pub fn get_recent_blocks(&self) -> Vec<StoredBlock> {
+        let mut blocks = Vec::with_capacity(MAX_RECENT_BLOCKHASHES);
+
+        let mut index = self.head;
+        while blocks.len() < MAX_RECENT_BLOCKHASHES && index != self.tail {
+            if self.blocks[index].exists && !self.blocks[index].dead {
+                blocks.push(self.blocks[index]);
+            }
+
+            index = if index == 0 {
+                self.blocks.len() - 1
+            } else {
+                index - 1
+            };
+        }
+
+        blocks.reverse();
+        blocks
     }
 
     pub fn to_read(&self) -> StoredBlocksRead {

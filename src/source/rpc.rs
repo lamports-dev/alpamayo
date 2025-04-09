@@ -1,8 +1,5 @@
 use {
-    crate::{
-        config::ConfigSourceRpc,
-        source::{block::BlockWithBinary, transaction::TransactionWithBinary},
-    },
+    crate::{config::ConfigSourceRpc, source::block::BlockWithBinary},
     base64::{Engine, prelude::BASE64_STANDARD},
     solana_client::{
         client_error::{ClientError, ClientErrorKind},
@@ -158,19 +155,8 @@ impl RpcSource {
             }
         }
 
-        Ok(BlockWithBinary::new(
-            block.previous_blockhash,
-            block.blockhash,
-            block.parent_slot,
-            block
-                .transactions
-                .into_iter()
-                .map(|tx| TransactionWithBinary::new(slot, tx, None))
-                .collect(),
-            block.rewards,
-            block.num_partitions,
-            block.block_time,
-            block.block_height,
+        Ok(BlockWithBinary::new_from_confirmed_block_and_slot(
+            block, slot,
         ))
     }
 

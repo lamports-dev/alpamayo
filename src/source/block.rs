@@ -19,7 +19,7 @@ use {
         transaction::TransactionError,
     },
     solana_storage_proto::convert::generated,
-    solana_transaction_status::{Reward, RewardType, Rewards},
+    solana_transaction_status::{ConfirmedBlock, Reward, RewardType, Rewards},
     std::{collections::hash_map::Entry as HashMapEntry, ops::Deref, sync::Arc},
 };
 
@@ -45,6 +45,23 @@ pub struct BlockWithBinary {
 }
 
 impl BlockWithBinary {
+    pub fn new_from_confirmed_block_and_slot(block: ConfirmedBlock, slot: Slot) -> Self {
+        Self::new(
+            block.previous_blockhash,
+            block.blockhash,
+            block.parent_slot,
+            block
+                .transactions
+                .into_iter()
+                .map(|tx| TransactionWithBinary::new(slot, tx, None))
+                .collect(),
+            block.rewards,
+            block.num_partitions,
+            block.block_time,
+            block.block_height,
+        )
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         previous_blockhash: String,
