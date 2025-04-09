@@ -49,7 +49,7 @@ pub fn start(
     mut sync_rx: broadcast::Receiver<ReadWriteSyncMessage>,
     read_requests_concurrency: Arc<Semaphore>,
     requests_rx: Arc<Mutex<mpsc::Receiver<ReadRequest>>>,
-    stored_slots_read: StoredSlotsRead,
+    mut stored_slots_read: StoredSlotsRead,
 ) -> anyhow::Result<thread::JoinHandle<anyhow::Result<()>>> {
     thread::Builder::new()
         .name(format!("alpStorageRd{index:02}"))
@@ -83,6 +83,7 @@ pub fn start(
                         anyhow::bail!("read runtime lagged")
                     }
                 };
+                stored_slots_read.set_ready(storage_processed.is_ready());
 
                 let result = start2(
                     index,
@@ -136,7 +137,7 @@ async fn start2(
     read_requests_concurrency: Arc<Semaphore>,
     read_requests_rx: Arc<Mutex<mpsc::Receiver<ReadRequest>>>,
     read_requests: &mut FuturesUnordered<LocalBoxFuture<'_, Option<ReadRequest>>>,
-    stored_slots_read: StoredSlotsRead,
+    mut stored_slots_read: StoredSlotsRead,
 ) -> anyhow::Result<()> {
     let read_request_next =
         read_request_get_next(Arc::clone(&read_requests_concurrency), read_requests_rx);
@@ -159,6 +160,7 @@ async fn start2(
                 Ok(ReadWriteSyncMessage::BlockConfirmed { slot, block }) => {
                     stored_slots_read.set_confirmed(index, slot);
                     storage_processed.set_confirmed(slot, block.clone());
+                    stored_slots_read.set_ready(storage_processed.is_ready());
                     *confirmed_in_process = Some((slot, block));
                 },
                 Ok(ReadWriteSyncMessage::SlotFinalized { slot }) => {
@@ -384,6 +386,11 @@ impl StorageProcessed {
             .get(&slot)
             .map(|rb| rb.block_height)
             .unwrap_or(self.finalized_height);
+    }
+
+    fn is_ready(&self) -> bool {
+        tracing::warn!(size = self.recent_blocks.len(), "recent_blocks size");
+        self.recent_blocks.len() >= MAX_RECENT_BLOCKHASHES
     }
 
     fn get_processed_block(&self, slot: Slot) -> Option<&Arc<BlockWithBinary>> {

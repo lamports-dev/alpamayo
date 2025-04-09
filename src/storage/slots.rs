@@ -6,7 +6,7 @@ use {
     solana_sdk::{clock::Slot, commitment_config::CommitmentLevel},
     std::sync::{
         Arc, Mutex, MutexGuard,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
 };
 
@@ -16,6 +16,7 @@ pub struct StoredSlots {
     confirmed: Arc<AtomicU64>,
     finalized: Arc<AtomicU64>,
     first_available: Arc<AtomicU64>,
+    max_recent_blockhashes: Arc<AtomicBool>,
 }
 
 impl Default for StoredSlots {
@@ -25,6 +26,7 @@ impl Default for StoredSlots {
             confirmed: Arc::new(AtomicU64::new(u64::MIN)),
             finalized: Arc::new(AtomicU64::new(u64::MIN)),
             first_available: Arc::new(AtomicU64::new(u64::MAX)),
+            max_recent_blockhashes: Arc::new(AtomicBool::new(false)),
         }
     }
 }
@@ -35,6 +37,7 @@ impl StoredSlots {
             && self.confirmed_load() != u64::MIN
             && self.finalized_load() != u64::MIN
             && self.first_available_load() != u64::MAX
+            && self.max_recent_blockhashes.load(Ordering::Relaxed)
     }
 
     pub fn processed_load(&self) -> Slot {
@@ -80,6 +83,8 @@ pub struct StoredSlotsRead {
     stored_slots: StoredSlots,
     slots_confirmed: Arc<Mutex<HashMap<Slot, HashSet<usize>>>>,
     slots_finalized: Arc<Mutex<HashMap<Slot, HashSet<usize>>>>,
+    max_recent_blockhashes: Arc<Mutex<usize>>,
+    max_recent_blockhashes_ready: bool,
     total_readers: usize,
 }
 
@@ -89,6 +94,8 @@ impl StoredSlotsRead {
             stored_slots,
             slots_confirmed: Arc::default(),
             slots_finalized: Arc::default(),
+            max_recent_blockhashes: Arc::default(),
+            max_recent_blockhashes_ready: false,
             total_readers,
         }
     }
@@ -113,7 +120,7 @@ impl StoredSlotsRead {
     pub fn set_confirmed(&self, index: usize, slot: Slot) {
         let lock = self.slots_confirmed.lock().expect("unpanicked mutex");
         if self.set(lock, index, slot) {
-            self.stored_slots.finalized_store(slot);
+            self.stored_slots.confirmed_store(slot);
         }
     }
 
@@ -121,6 +128,25 @@ impl StoredSlotsRead {
         let lock = self.slots_finalized.lock().expect("unpanicked mutex");
         if self.set(lock, index, slot) {
             self.stored_slots.finalized_store(slot);
+        }
+    }
+
+    // max recent blockhashes
+    pub fn set_ready(&mut self, ready: bool) {
+        if ready && !self.max_recent_blockhashes_ready {
+            self.max_recent_blockhashes_ready = true;
+
+            let mut lock = self
+                .max_recent_blockhashes
+                .lock()
+                .expect("unpanicked mutex");
+            *lock += 1;
+
+            if *lock == self.total_readers {
+                self.stored_slots
+                    .max_recent_blockhashes
+                    .store(true, Ordering::Relaxed);
+            }
         }
     }
 }
