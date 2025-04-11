@@ -64,15 +64,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "affinity"
-version = "0.1.2"
+name = "affinity-linux"
+version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "763e484feceb7dd021b21c5c6f81aee06b1594a743455ec7efbf72e6355e447b"
+checksum = "119038623e6a2eda09deff65fa7dec3a9b963254cbed11d23aa8a2484b3693fc"
 dependencies = [
- "cfg-if",
  "errno",
  "libc",
- "num_cpus",
 ]
 
 [[package]]
@@ -116,7 +114,7 @@ dependencies = [
 name = "alpamayo"
 version = "0.1.0"
 dependencies = [
- "affinity",
+ "affinity-linux",
  "anyhow",
  "base64 0.22.1",
  "bincode",
@@ -2559,9 +2557,9 @@ checksum = "830d08ce1d1d941e6b30645f1a0eb5643013d835ce3779a5fc208261dbe10f55"
 
 [[package]]
 name = "libc"
-version = "0.2.170"
+version = "0.2.171"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "875b3680cb2f8f71bdcf9a30f38d48282f5d3c95cbf9b3fa57269bb5d5c06828"
+checksum = "c19937216e9d3aa9956d9bb8dfc0b0c8beb6058fc4f7a4dc4d850edf86a237d6"
 
 [[package]]
 name = "libloading"
@@ -3860,9 +3858,9 @@ dependencies = [
 
 [[package]]
 name = "richat-client"
-version = "2.2.0"
+version = "2.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "657837fb0f81c3373f326347d94d1a100a4ca53b48e88cd99e2fa6133eeca953"
+checksum = "16a503fbc5121b99f887cdb7ac147cb8b77298c86cdce4041202b70ae505a9ce"
 dependencies = [
  "anyhow",
  "bytes",
@@ -3902,11 +3900,11 @@ dependencies = [
 
 [[package]]
 name = "richat-shared"
-version = "2.5.0"
+version = "2.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "674e94ac10554082e0c090ddd9cd5aa811b255834f9c133fe9ee99c1ce362304"
+checksum = "a575f9596295aa23463ad635f671b8800ffb94e10892db547273691f434ebf28"
 dependencies = [
- "affinity",
+ "affinity-linux",
  "anyhow",
  "base64 0.22.1",
  "bs58",

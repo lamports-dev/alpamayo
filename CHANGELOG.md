@@ -18,6 +18,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 - storage: remove transaction index on slot remove ([#8](https://github.com/lamports-dev/alpamayo/pull/8))
 - storage: set confirmed/finalized on first stream messages ([#17](https://github.com/lamports-dev/alpamayo/pull/17))
 - rpc: load recent blocks on startup ([#23](https://github.com/lamports-dev/alpamayo/pull/23))
+- rpc: move `ready` endpoint to metrics server ([#24](https://github.com/lamports-dev/alpamayo/pull/24))
 
 ### Features
 

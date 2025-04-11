@@ -1,5 +1,5 @@
 use {
-    crate::{config::ConfigMetrics, version::VERSION as VERSION_INFO},
+    crate::{config::ConfigMetrics, storage::slots::StoredSlots, version::VERSION as VERSION_INFO},
     prometheus::{
         Histogram, HistogramOpts, HistogramTimer, IntCounterVec, IntGaugeVec, Opts, Registry,
     },
@@ -31,6 +31,7 @@ lazy_static::lazy_static! {
 
 pub async fn spawn_server(
     config: ConfigMetrics,
+    stored_slots: StoredSlots,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> anyhow::Result<impl Future<Output = Result<(), JoinError>>> {
     static REGISTER: Once = Once::new();
@@ -64,7 +65,9 @@ pub async fn spawn_server(
         richat_shared::config::ConfigMetrics {
             endpoint: config.endpoint,
         },
-        || REGISTRY.gather(),
+        || REGISTRY.gather(),            // metrics
+        || true,                         // health
+        move || stored_slots.is_ready(), // ready
         shutdown,
     )
     .await

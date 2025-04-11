@@ -25,7 +25,7 @@ pub struct Config {
     #[serde(default)]
     pub logs: ConfigLogs,
     #[serde(default)]
-    pub metrics: Option<ConfigMetrics>,
+    pub metrics: ConfigMetrics,
     /// Rpc & Stream data sources
     #[serde(default)]
     pub source: ConfigSource,

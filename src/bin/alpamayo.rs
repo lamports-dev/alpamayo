@@ -68,6 +68,7 @@ fn main() -> anyhow::Result<()> {
     // Create source runtime
     let jh = thread::Builder::new().name("alpSource".to_owned()).spawn({
         let stream_start = Arc::clone(&stream_start);
+        let stored_slots = stored_slots.clone();
         let shutdown = shutdown.clone();
         move || {
             let runtime = config.source.tokio.clone().build_runtime("alpSourceRt")?;
@@ -83,18 +84,12 @@ fn main() -> anyhow::Result<()> {
                 .and_then(ready)
                 .boxed();
 
-                let metrics_fut = if let Some(config) = config.metrics {
-                    metrics::spawn_server(config, shutdown)
-                        .await?
-                        .map_err(anyhow::Error::from)
-                        .boxed()
-                } else {
-                    ready(Ok(())).boxed()
-                };
+                let server_fut = metrics::spawn_server(config.metrics, stored_slots, shutdown)
+                    .await?
+                    .map_err(anyhow::Error::from)
+                    .boxed();
 
-                try_join_all(vec![source_fut, metrics_fut])
-                    .await
-                    .map(|_| ())
+                try_join_all(vec![source_fut, server_fut]).await.map(|_| ())
             })
         }
     })?;

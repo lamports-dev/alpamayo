@@ -43,7 +43,8 @@ pub fn start(
 
             move || {
                 if let Some(cpus) = cpus {
-                    affinity::set_thread_affinity(cpus).expect("failed to set affinity");
+                    affinity_linux::set_thread_affinity(cpus.into_iter())
+                        .expect("failed to set affinity");
                 }
 
                 wrk_loop(rx, shutdown)

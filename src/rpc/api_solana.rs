@@ -223,10 +223,6 @@ impl State {
             workers,
         })
     }
-
-    pub fn is_ready(&self) -> bool {
-        self.stored_slots.is_ready()
-    }
 }
 
 pub async fn on_request(

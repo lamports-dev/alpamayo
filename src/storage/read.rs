@@ -56,7 +56,8 @@ pub fn start(
         .spawn(move || {
             tokio_uring::start(async move {
                 if let Some(cpus) = affinity {
-                    affinity::set_thread_affinity(&cpus).expect("failed to set affinity")
+                    affinity_linux::set_thread_affinity(cpus.into_iter())
+                        .expect("failed to set affinity")
                 }
 
                 let mut confirmed_in_process = None;

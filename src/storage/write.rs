@@ -66,7 +66,8 @@ pub fn start(
 
             tokio_uring::start(async move {
                 if let Some(cpus) = config.write.affinity {
-                    affinity::set_thread_affinity(&cpus).expect("failed to set affinity")
+                    affinity_linux::set_thread_affinity(cpus.into_iter())
+                        .expect("failed to set affinity")
                 }
 
                 let rpc_getblock_max_retries = config.blocks.rpc_getblock_max_retries;

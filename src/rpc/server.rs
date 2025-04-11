@@ -5,7 +5,7 @@ use {
         storage::{read::ReadRequest, slots::StoredSlots},
     },
     futures::future::{TryFutureExt, ready},
-    http_body_util::{BodyExt, Empty as BodyEmpty, Full as BodyFull},
+    http_body_util::{BodyExt, Empty as BodyEmpty},
     hyper::{Request, Response, StatusCode, body::Incoming as BodyIncoming, service::service_fn},
     hyper_util::{
         rt::tokio::{TokioExecutor, TokioIo},
@@ -62,15 +62,6 @@ pub async fn spawn(
                     async move {
                         match req.uri().path() {
                             "/" => api_solana::on_request(req, api_solana_state).await,
-                            "/ready" => {
-                                if api_solana_state.is_ready() {
-                                    Response::builder().body(BodyFull::from("OK").boxed())
-                                } else {
-                                    Response::builder()
-                                        .status(StatusCode::INTERNAL_SERVER_ERROR)
-                                        .body(BodyEmpty::new().boxed())
-                                }
-                            }
                             _ => Response::builder()
                                 .status(StatusCode::NOT_FOUND)
                                 .body(BodyEmpty::new().boxed()),
