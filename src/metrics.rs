@@ -14,6 +14,7 @@ pub const STORAGE_FILES_SPACE: &str = "storage_files_space_bytes"; // id, type
 pub const WRITE_BLOCK_SYNC_SECONDS: &str = "write_block_sync_seconds";
 
 pub const RPC_REQUESTS_TOTAL: &str = "rpc_requests_total"; // x_subscription_id, method
+pub const RPC_WORKERS_CPU_SECONDS_TOTAL: &str = "rpc_workers_cpu_seconds_total"; // x_subscription_id, method
 
 pub fn setup() -> anyhow::Result<PrometheusHandle> {
     let handle = PrometheusBuilder::new()
@@ -46,6 +47,10 @@ pub fn setup() -> anyhow::Result<PrometheusHandle> {
     describe_counter!(
         RPC_REQUESTS_TOTAL,
         "Number of RPC requests by x-subscription-id and method"
+    );
+    describe_gauge!(
+        RPC_WORKERS_CPU_SECONDS_TOTAL,
+        "CPU consumption by RPC workers by x-subscription-id and method"
     );
 
     Ok(handle)

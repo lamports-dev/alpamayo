@@ -1,7 +1,7 @@
 use {
     crate::{
         config::{ConfigRpc, ConfigRpcCall},
-        metrics::RPC_REQUESTS_TOTAL,
+        metrics::{RPC_REQUESTS_TOTAL, RPC_WORKERS_CPU_SECONDS_TOTAL, duration_to_seconds},
         rpc::{upstream::RpcClient, workers::WorkRequest},
         storage::{
             read::{
@@ -27,7 +27,7 @@ use {
         Id, Params, Request, Response, ResponsePayload, TwoPointZero,
         error::{ErrorCode, ErrorObject, ErrorObjectOwned, INVALID_PARAMS_MSG},
     },
-    metrics::counter,
+    metrics::{counter, gauge},
     prost::Message,
     serde::{Deserialize, Serialize, de},
     solana_rpc_client_api::{
@@ -341,7 +341,7 @@ impl RpcRequest {
             "getBlock" if state.supported_calls.get_block => {
                 counter!(
                     RPC_REQUESTS_TOTAL,
-                    "x_subscription_id" => x_subscription_id,
+                    "x_subscription_id" => Arc::clone(&x_subscription_id),
                     "method" => "getBlock",
                 )
                 .increment(1);
@@ -370,6 +370,7 @@ impl RpcRequest {
                 }
 
                 Ok(Self::Block(RpcRequestBlock {
+                    x_subscription_id,
                     id: id.into_owned(),
                     slot,
                     commitment,
@@ -820,7 +821,7 @@ impl RpcRequest {
             "getTransaction" if state.supported_calls.get_transaction => {
                 counter!(
                     RPC_REQUESTS_TOTAL,
-                    "x_subscription_id" => x_subscription_id,
+                    "x_subscription_id" => Arc::clone(&x_subscription_id),
                     "method" => "getTransaction",
                 )
                 .increment(1);
@@ -856,6 +857,7 @@ impl RpcRequest {
                 }
 
                 Ok(Self::Transaction(RpcRequestTransaction {
+                    x_subscription_id,
                     id: id.into_owned(),
                     signature,
                     commitment,
@@ -1079,6 +1081,7 @@ impl RpcRequest {
 }
 
 struct RpcRequestBlock {
+    x_subscription_id: Arc<str>,
     id: Id<'static>,
     slot: Slot,
     commitment: CommitmentConfig,
@@ -1192,11 +1195,8 @@ impl RpcRequestBlock {
 }
 
 pub struct RpcRequestBlockWorkRequest {
+    request: RpcRequestBlock,
     bytes: Vec<u8>,
-    id: Id<'static>,
-    slot: Slot,
-    encoding: UiTransactionEncoding,
-    encoding_options: BlockEncodingOptions,
     tx: Option<oneshot::Sender<RpcRequestResult>>,
 }
 
@@ -1207,11 +1207,8 @@ impl RpcRequestBlockWorkRequest {
     ) -> (WorkRequest, oneshot::Receiver<RpcRequestResult>) {
         let (tx, rx) = oneshot::channel();
         let this = Self {
+            request,
             bytes,
-            id: request.id,
-            slot: request.slot,
-            encoding: request.encoding,
-            encoding_options: request.encoding_options,
             tx: Some(tx),
         };
         (WorkRequest::Block(this), rx)
@@ -1219,36 +1216,51 @@ impl RpcRequestBlockWorkRequest {
 
     pub fn process(mut self) {
         if let Some(tx) = self.tx.take() {
-            let _ = tx.send(self.process2());
+            let ts = quanta::Instant::now();
+            let _ = tx.send(Self::process2(
+                self.bytes,
+                self.request.id,
+                self.request.slot,
+                self.request.encoding,
+                self.request.encoding_options,
+            ));
+            gauge!(
+                RPC_WORKERS_CPU_SECONDS_TOTAL,
+                "x_subscription_id" => self.request.x_subscription_id,
+                "method" => "getBlock"
+            )
+            .increment(duration_to_seconds(ts.elapsed()));
         }
     }
 
-    fn process2(self) -> RpcRequestResult {
+    fn process2(
+        bytes: Vec<u8>,
+        id: Id<'static>,
+        slot: Slot,
+        encoding: UiTransactionEncoding,
+        encoding_options: BlockEncodingOptions,
+    ) -> RpcRequestResult {
         // parse
-        let block = match generated::ConfirmedBlock::decode(self.bytes.as_ref()) {
+        let block = match generated::ConfirmedBlock::decode(bytes.as_ref()) {
             Ok(block) => match ConfirmedBlock::try_from(block) {
                 Ok(block) => block,
                 Err(error) => {
-                    error!(self.slot, ?error, "failed to decode block");
+                    error!(slot, ?error, "failed to decode block");
                     anyhow::bail!("failed to decode block")
                 }
             },
             Err(error) => {
-                error!(
-                    self.slot,
-                    ?error,
-                    "failed to decode block protobuf / bincode"
-                );
+                error!(slot, ?error, "failed to decode block protobuf / bincode");
                 anyhow::bail!("failed to decode block protobuf / bincode")
             }
         };
 
         // encode
-        let block = match block.encode_with_options(self.encoding, self.encoding_options) {
+        let block = match block.encode_with_options(encoding, encoding_options) {
             Ok(block) => block,
             Err(error) => {
                 return Ok(jsonrpc_response_error_custom(
-                    self.id,
+                    id,
                     RpcCustomError::from(error),
                 ));
             }
@@ -1257,7 +1269,7 @@ impl RpcRequestBlockWorkRequest {
         // serialize
         let data = serde_json::to_value(&block).expect("json serialization never fail");
 
-        Ok(jsonrpc_response_success(self.id, data))
+        Ok(jsonrpc_response_success(id, data))
     }
 }
 
@@ -1753,7 +1765,9 @@ impl RpcRequestsSignatureStatuses {
     }
 }
 
+#[derive(Debug)]
 struct RpcRequestTransaction {
+    x_subscription_id: Arc<str>,
     id: Id<'static>,
     signature: Signature,
     commitment: CommitmentConfig,
@@ -1851,12 +1865,10 @@ impl RpcRequestTransaction {
 
 #[derive(Debug)]
 pub struct RpcRequestTransactionWorkRequest {
+    request: RpcRequestTransaction,
     slot: Slot,
     block_time: Option<UnixTimestamp>,
     bytes: Vec<u8>,
-    id: Id<'static>,
-    encoding: UiTransactionEncoding,
-    max_supported_transaction_version: Option<u8>,
     tx: Option<oneshot::Sender<RpcRequestResult>>,
 }
 
@@ -1869,12 +1881,10 @@ impl RpcRequestTransactionWorkRequest {
     ) -> (WorkRequest, oneshot::Receiver<RpcRequestResult>) {
         let (tx, rx) = oneshot::channel();
         let this = Self {
+            request,
             slot,
             block_time,
             bytes,
-            id: request.id,
-            encoding: request.encoding,
-            max_supported_transaction_version: request.max_supported_transaction_version,
             tx: Some(tx),
         };
         (WorkRequest::Transaction(this), rx)
@@ -1882,23 +1892,44 @@ impl RpcRequestTransactionWorkRequest {
 
     pub fn process(mut self) {
         if let Some(tx) = self.tx.take() {
-            let _ = tx.send(self.process2());
+            let ts = quanta::Instant::now();
+            let _ = tx.send(Self::process2(
+                self.bytes,
+                self.slot,
+                self.block_time,
+                self.request.id,
+                self.request.encoding,
+                self.request.max_supported_transaction_version,
+            ));
+            gauge!(
+                RPC_WORKERS_CPU_SECONDS_TOTAL,
+                "x_subscription_id" => self.request.x_subscription_id,
+                "method" => "getTransaction"
+            )
+            .increment(duration_to_seconds(ts.elapsed()));
         }
     }
 
-    fn process2(self) -> RpcRequestResult {
+    fn process2(
+        bytes: Vec<u8>,
+        slot: Slot,
+        block_time: Option<UnixTimestamp>,
+        id: Id<'static>,
+        encoding: UiTransactionEncoding,
+        max_supported_transaction_version: Option<u8>,
+    ) -> RpcRequestResult {
         // parse
-        let tx_with_meta = match generated::ConfirmedTransaction::decode(self.bytes.as_ref()) {
+        let tx_with_meta = match generated::ConfirmedTransaction::decode(bytes.as_ref()) {
             Ok(tx) => match TransactionWithStatusMeta::try_from(tx) {
                 Ok(tx_with_meta) => tx_with_meta,
                 Err(error) => {
-                    error!(self.slot, ?error, "failed to decode transaction");
+                    error!(slot, ?error, "failed to decode transaction");
                     anyhow::bail!("failed to decode transaction")
                 }
             },
             Err(error) => {
                 error!(
-                    self.slot,
+                    slot,
                     ?error,
                     "failed to decode transaction protobuf / bincode"
                 );
@@ -1908,15 +1939,15 @@ impl RpcRequestTransactionWorkRequest {
 
         // encode
         let confirmed_tx = ConfirmedTransactionWithStatusMeta {
-            slot: self.slot,
+            slot,
             tx_with_meta,
-            block_time: self.block_time,
+            block_time,
         };
-        let tx = match confirmed_tx.encode(self.encoding, self.max_supported_transaction_version) {
+        let tx = match confirmed_tx.encode(encoding, max_supported_transaction_version) {
             Ok(tx) => tx,
             Err(error) => {
                 return Ok(jsonrpc_response_error_custom(
-                    self.id,
+                    id,
                     RpcCustomError::from(error),
                 ));
             }
@@ -1925,7 +1956,7 @@ impl RpcRequestTransactionWorkRequest {
         // serialize
         let data = serde_json::to_value(&tx).expect("json serialization never fail");
 
-        Ok(jsonrpc_response_success(self.id, data))
+        Ok(jsonrpc_response_success(id, data))
     }
 }
 
