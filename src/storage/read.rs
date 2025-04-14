@@ -1012,15 +1012,14 @@ impl ReadRequest {
                     return None;
                 }
 
-                let read_fut = match db_read
-                    .read_signatures_for_address(address, slot, before, until, signatures)
-                {
-                    Ok(fut) => fut,
-                    Err(error) => {
-                        let _ = tx.send(ReadResultSignaturesForAddress::ReadError(error));
-                        return None;
-                    }
-                };
+                let read_fut =
+                    match db_read.read_sfa_index(address, slot, before, until, signatures) {
+                        Ok(fut) => fut,
+                        Err(error) => {
+                            let _ = tx.send(ReadResultSignaturesForAddress::ReadError(error));
+                            return None;
+                        }
+                    };
 
                 Some(Box::pin(async move {
                     match read_fut.await {
@@ -1137,7 +1136,7 @@ impl ReadRequest {
                     return None;
                 }
 
-                let read_fut = match db_read.read_signature_statuses(signatures_history) {
+                let read_fut = match db_read.read_signature_statuses_index(signatures_history) {
                     Ok(fut) => fut,
                     Err(error) => {
                         let _ = tx.send(ReadResultSignatureStatuses::ReadError(error));

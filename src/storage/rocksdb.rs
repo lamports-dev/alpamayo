@@ -984,7 +984,7 @@ impl RocksdbRead {
     }
 
     #[allow(clippy::type_complexity)]
-    pub fn read_signatures_for_address(
+    pub fn read_sfa_index(
         &self,
         address: Pubkey,
         slot: Slot,
@@ -1012,7 +1012,7 @@ impl RocksdbRead {
     }
 
     #[allow(clippy::type_complexity)]
-    pub fn read_signature_statuses(
+    pub fn read_signature_statuses_index(
         &self,
         signatures: Vec<Signature>,
     ) -> anyhow::Result<
