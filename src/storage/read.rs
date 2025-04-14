@@ -944,7 +944,7 @@ impl ReadRequest {
 
                 if let Some(before) = before {
                     // read slot for before signature
-                    let read_tx_index = match db_read.read_tx_index(before) {
+                    let read_fut = match db_read.read_tx_index(before) {
                         Ok(fut) => fut,
                         Err(error) => {
                             let _ = tx.send(ReadResultSignaturesForAddress::ReadError(error));
@@ -953,7 +953,7 @@ impl ReadRequest {
                     };
 
                     Some(Box::pin(async move {
-                        let result = match read_tx_index.await {
+                        let result = match read_fut.await {
                             Ok(Some(index)) if index.slot <= highest_slot => {
                                 return Some(ReadRequest::SignaturesForAddress2 {
                                     deadline,
@@ -1012,7 +1012,7 @@ impl ReadRequest {
                     return None;
                 }
 
-                let read_sigs_index = match db_read
+                let read_fut = match db_read
                     .read_signatures_for_address(address, slot, before, until, signatures)
                 {
                     Ok(fut) => fut,
@@ -1023,7 +1023,7 @@ impl ReadRequest {
                 };
 
                 Some(Box::pin(async move {
-                    match read_sigs_index.await {
+                    match read_fut.await {
                         Ok((signatures, finished)) => Some(ReadRequest::SignaturesForAddress3 {
                             deadline,
                             signatures,
