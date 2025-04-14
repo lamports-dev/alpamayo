@@ -177,7 +177,7 @@ pub struct ConfigStorageFile {
     pub size: u64,
 }
 
-#[derive(Debug, Default, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConfigStorageRocksdb {
     pub path: PathBuf,
