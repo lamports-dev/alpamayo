@@ -1,6 +1,7 @@
 use {
     crate::{
         config::ConfigStorageFile,
+        metrics::STORAGE_FILES_SPACE,
         storage::{
             blocks::{StoredBlock, StoredBlocksWrite},
             util,
@@ -9,6 +10,7 @@ use {
     },
     anyhow::Context,
     futures::future::{FutureExt, LocalBoxFuture, TryFutureExt, join_all, try_join_all},
+    metrics::{Gauge, gauge},
     std::{io, path::PathBuf, rc::Rc},
     tokio_uring::fs::File,
 };
@@ -72,6 +74,7 @@ pub struct StorageFilesWrite {
     files: Vec<StorageFile>,
     id2file: HashMap<StorageId, usize>,
     next_file: usize,
+    metric_space_free: Gauge,
 }
 
 impl StorageFilesWrite {
@@ -110,7 +113,21 @@ impl StorageFilesWrite {
             files,
             id2file,
             next_file: 0,
+            metric_space_free: gauge!(STORAGE_FILES_SPACE, "id" => "*", "type" => "free"),
         };
+
+        gauge!(STORAGE_FILES_SPACE, "id" => "*", "type" => "total")
+            .set(write.files.iter().map(|file| file.size as f64).sum::<f64>());
+        write.metric_space_free.set(
+            write
+                .files
+                .iter()
+                .map(|file| file.free_space() as f64)
+                .sum::<f64>(),
+        );
+        for file in write.files.iter() {
+            file.metric_space_free.set(file.free_space() as f64);
+        }
 
         let read_sync_init = StorageFilesSyncInit {
             files_paths,
@@ -136,12 +153,16 @@ impl StorageFilesWrite {
             );
         }
 
+        gauge!(STORAGE_FILES_SPACE, "id" => config.id.to_string(), "type" => "total")
+            .set(config.size as f64);
+
         Ok(StorageFile {
             id: config.id,
             file,
             tail: 0,
             head: 0,
             size: config.size,
+            metric_space_free: gauge!(STORAGE_FILES_SPACE, "id" => config.id.to_string(), "type" => "free"),
         })
     }
 
@@ -159,12 +180,17 @@ impl StorageFilesWrite {
         let Some(index) = self.get_file_index_for_new_block(buffer.len() as u64) else {
             return Ok((buffer, None));
         };
-
         let file = &mut self.files[index];
+
+        let free_space_init = file.free_space() as f64;
         let (offset, buffer) = file
             .write(buffer)
             .await
             .with_context(|| format!("failed to write block to file id#{}", file.id))?;
+        let free_space_new = file.free_space() as f64;
+        file.metric_space_free.set(free_space_new);
+        self.metric_space_free
+            .increment(free_space_new - free_space_init);
 
         Ok((buffer, Some((file.id, offset))))
     }
@@ -175,6 +201,7 @@ impl StorageFilesWrite {
         };
         let file = &mut self.files[file_index];
 
+        let free_space_init = file.free_space() as f64;
         file.tail = block.size + block.offset;
         anyhow::ensure!(
             file.tail <= file.size,
@@ -182,6 +209,10 @@ impl StorageFilesWrite {
             file.tail,
             file.size
         );
+        let free_space_new = file.free_space() as f64;
+        file.metric_space_free.set(free_space_new);
+        self.metric_space_free
+            .increment(free_space_new - free_space_init);
 
         Ok(())
     }
@@ -210,6 +241,7 @@ struct StorageFile {
     tail: u64,
     head: u64,
     size: u64,
+    metric_space_free: Gauge,
 }
 
 impl StorageFile {

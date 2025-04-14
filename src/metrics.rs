@@ -2,7 +2,7 @@ use {
     crate::{config::ConfigMetrics, storage::slots::StoredSlots, version::VERSION as VERSION_INFO},
     anyhow::Context,
     hyper::body::Bytes,
-    metrics::{counter, describe_counter, describe_histogram},
+    metrics::{counter, describe_counter, describe_gauge, describe_histogram},
     metrics_exporter_prometheus::{Matcher, PrometheusBuilder, PrometheusHandle},
     std::{future::Future, time::Duration},
     tokio::{task::JoinError, time::sleep},
@@ -10,6 +10,7 @@ use {
 
 pub const STORAGE_STORED_SLOTS: &str = "storage_stored_slots"; // commitment
 pub const STORAGE_BLOCK_SYNC_SECONDS: &str = "storage_block_sync_seconds";
+pub const STORAGE_FILES_SPACE: &str = "storage_files_space"; // id, type
 
 pub fn setup() -> anyhow::Result<PrometheusHandle> {
     let handle = PrometheusBuilder::new()
@@ -36,6 +37,7 @@ pub fn setup() -> anyhow::Result<PrometheusHandle> {
 
     describe_counter!(STORAGE_STORED_SLOTS, "Stored slots in db");
     describe_histogram!(STORAGE_BLOCK_SYNC_SECONDS, "Storage block sync time");
+    describe_gauge!(STORAGE_FILES_SPACE, "Storage space in files for blocks");
 
     Ok(handle)
 }
