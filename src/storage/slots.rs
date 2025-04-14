@@ -3,7 +3,7 @@ use {
         metrics::STORAGE_STORED_SLOTS,
         util::{HashMap, HashSet},
     },
-    metrics::{Counter, counter},
+    metrics::{Gauge, gauge},
     solana_sdk::clock::Slot,
     std::{
         ops::Deref,
@@ -15,30 +15,45 @@ use {
 };
 
 #[derive(Debug)]
+struct Metrics {
+    processed: Gauge,
+    confirmed: Gauge,
+    finalized: Gauge,
+    first_available: Gauge,
+    total: Gauge,
+}
+
+impl Default for Metrics {
+    fn default() -> Self {
+        Self {
+            processed: gauge!(STORAGE_STORED_SLOTS, "type" => "processed"),
+            confirmed: gauge!(STORAGE_STORED_SLOTS, "type" => "confirmed"),
+            finalized: gauge!(STORAGE_STORED_SLOTS, "type" => "finalized"),
+            first_available: gauge!(STORAGE_STORED_SLOTS, "type" => "first_available"),
+            total: gauge!(STORAGE_STORED_SLOTS, "type" => "total"),
+        }
+    }
+}
+
+#[derive(Debug)]
 pub struct StoredSlotsInner {
     processed: AtomicU64,
-    processed_counter: Counter,
     confirmed: AtomicU64,
-    confirmed_counter: Counter,
     finalized: AtomicU64,
-    finalized_counter: Counter,
     first_available: AtomicU64,
-    first_available_counter: Counter,
     max_recent_blockhashes: AtomicBool,
+    metrics: Metrics,
 }
 
 impl Default for StoredSlotsInner {
     fn default() -> Self {
         Self {
             processed: AtomicU64::new(u64::MIN),
-            processed_counter: counter!(STORAGE_STORED_SLOTS, "commitment" => "processed"),
             confirmed: AtomicU64::new(u64::MIN),
-            confirmed_counter: counter!(STORAGE_STORED_SLOTS, "commitment" => "confirmed"),
             finalized: AtomicU64::new(u64::MIN),
-            finalized_counter: counter!(STORAGE_STORED_SLOTS, "commitment" => "finalized"),
             first_available: AtomicU64::new(u64::MAX),
-            first_available_counter: counter!(STORAGE_STORED_SLOTS, "commitment" => "first_available"),
             max_recent_blockhashes: AtomicBool::new(false),
+            metrics: Metrics::default(),
         }
     }
 }
@@ -71,7 +86,7 @@ impl StoredSlots {
 
     pub fn processed_store(&self, slot: Slot) {
         self.processed.store(slot, Ordering::SeqCst);
-        self.processed_counter.absolute(slot);
+        self.metrics.processed.set(slot as f64);
     }
 
     pub fn confirmed_load(&self) -> Slot {
@@ -80,7 +95,7 @@ impl StoredSlots {
 
     pub fn confirmed_store(&self, slot: Slot) {
         self.confirmed.store(slot, Ordering::SeqCst);
-        self.confirmed_counter.absolute(slot);
+        self.metrics.confirmed.set(slot as f64);
     }
 
     pub fn finalized_load(&self) -> Slot {
@@ -89,7 +104,7 @@ impl StoredSlots {
 
     pub fn finalized_store(&self, slot: Slot) {
         self.finalized.store(slot, Ordering::Relaxed);
-        self.finalized_counter.absolute(slot);
+        self.metrics.finalized.set(slot as f64);
     }
 
     pub fn first_available_load(&self) -> Slot {
@@ -99,7 +114,11 @@ impl StoredSlots {
     pub fn first_available_store(&self, slot: Option<Slot>) {
         let slot = slot.unwrap_or(u64::MAX);
         self.first_available.store(slot, Ordering::SeqCst);
-        self.first_available_counter.absolute(slot);
+        self.metrics.first_available.set(slot as f64);
+    }
+
+    pub fn set_total(&self, total: usize) {
+        self.metrics.total.set(total as f64);
     }
 }
 

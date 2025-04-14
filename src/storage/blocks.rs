@@ -147,6 +147,14 @@ impl StoredBlocksWrite {
             self.stored_slots.first_available_store(self.front_slot());
         }
 
+        // set total
+        let total = if self.head >= self.tail {
+            self.head - self.tail + 1
+        } else {
+            (self.blocks.len() - self.tail) + self.head + 1
+        };
+        self.stored_slots.set_total(total);
+
         Ok(())
     }
 
