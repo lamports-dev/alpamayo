@@ -1,6 +1,7 @@
 use {
     crate::{
         config::{ConfigRpc, ConfigRpcCall},
+        metrics::RPC_REQUESTS_TOTAL,
         rpc::{upstream::RpcClient, workers::WorkRequest},
         storage::{
             read::{
@@ -26,6 +27,7 @@ use {
         Id, Params, Request, Response, ResponsePayload, TwoPointZero,
         error::{ErrorCode, ErrorObject, ErrorObjectOwned, INVALID_PARAMS_MSG},
     },
+    metrics::counter,
     prost::Message,
     serde::{Deserialize, Serialize, de},
     solana_rpc_client_api::{
@@ -231,6 +233,13 @@ pub async fn on_request(
 ) -> HttpResult<RpcResponse> {
     let (parts, body) = req.into_parts();
 
+    let x_subscription_id: Arc<str> = parts
+        .headers
+        .get("x-subscription-id")
+        .and_then(|value| value.to_str().ok().map(ToOwned::to_owned))
+        .unwrap_or_default()
+        .into();
+
     // Same name as in Agave Rpc
     let upstream_disabled = parts
         .headers
@@ -247,7 +256,8 @@ pub async fn on_request(
         Err(error) => return response_400(error),
     };
     let mut buffer = match requests {
-        RpcRequests::Single(request) => match RpcRequest::parse(request, &state) {
+        RpcRequests::Single(request) => match RpcRequest::parse(request, x_subscription_id, &state)
+        {
             Ok(request) => match request.process(Arc::clone(&state), upstream_disabled).await {
                 Ok(response) => {
                     serde_json::to_vec(&response).expect("json serialization never fail")
@@ -260,8 +270,9 @@ pub async fn on_request(
             let mut futures = FuturesOrdered::new();
             for request in requests {
                 let state = Arc::clone(&state);
+                let x_subscription_id = Arc::clone(&x_subscription_id);
                 futures.push_back(async move {
-                    match RpcRequest::parse(request, &state) {
+                    match RpcRequest::parse(request, x_subscription_id, &state) {
                         Ok(request) => request.process(state, upstream_disabled).await,
                         Err(error) => Ok(error),
                     }
@@ -323,10 +334,18 @@ enum RpcRequest {
 impl RpcRequest {
     fn parse<'a>(
         request: Request<'a>,
+        x_subscription_id: Arc<str>,
         state: &Arc<State>,
     ) -> Result<Self, Response<'a, serde_json::Value>> {
         match request.method.as_ref() {
             "getBlock" if state.supported_calls.get_block => {
+                counter!(
+                    RPC_REQUESTS_TOTAL,
+                    "x_subscription_id" => x_subscription_id,
+                    "method" => "getBlock",
+                )
+                .increment(1);
+
                 #[derive(Debug, Deserialize)]
                 struct ReqParams {
                     slot: Slot,
@@ -359,6 +378,13 @@ impl RpcRequest {
                 }))
             }
             "getBlockHeight" if state.supported_calls.get_block_height => {
+                counter!(
+                    RPC_REQUESTS_TOTAL,
+                    "x_subscription_id" => x_subscription_id,
+                    "method" => "getBlockHeight",
+                )
+                .increment(1);
+
                 #[derive(Debug, Deserialize)]
                 struct ReqParams {
                     #[serde(default)]
@@ -380,6 +406,13 @@ impl RpcRequest {
                 }))
             }
             "getBlocks" if state.supported_calls.get_blocks => {
+                counter!(
+                    RPC_REQUESTS_TOTAL,
+                    "x_subscription_id" => x_subscription_id,
+                    "method" => "getBlocks",
+                )
+                .increment(1);
+
                 #[derive(Debug, Deserialize)]
                 struct ReqParams {
                     start_slot: Slot,
@@ -448,6 +481,13 @@ impl RpcRequest {
                 }))
             }
             "getBlocksWithLimit" if state.supported_calls.get_blocks_with_limit => {
+                counter!(
+                    RPC_REQUESTS_TOTAL,
+                    "x_subscription_id" => x_subscription_id,
+                    "method" => "getBlocksWithLimit",
+                )
+                .increment(1);
+
                 #[derive(Debug, Deserialize)]
                 struct ReqParams {
                     start_slot: Slot,
@@ -503,6 +543,13 @@ impl RpcRequest {
                 }))
             }
             "getBlockTime" if state.supported_calls.get_block_time => {
+                counter!(
+                    RPC_REQUESTS_TOTAL,
+                    "x_subscription_id" => x_subscription_id,
+                    "method" => "getBlockTime",
+                )
+                .increment(1);
+
                 #[derive(Debug, Deserialize)]
                 struct ReqParams {
                     slot: Slot,
@@ -520,6 +567,13 @@ impl RpcRequest {
                 }
             }
             "getLatestBlockhash" if state.supported_calls.get_latest_blockhash => {
+                counter!(
+                    RPC_REQUESTS_TOTAL,
+                    "x_subscription_id" => x_subscription_id,
+                    "method" => "getLatestBlockhash",
+                )
+                .increment(1);
+
                 #[derive(Debug, Deserialize)]
                 struct ReqParams {
                     #[serde(default)]
@@ -543,6 +597,13 @@ impl RpcRequest {
             "getRecentPrioritizationFees"
                 if state.supported_calls.get_recent_prioritization_fees =>
             {
+                counter!(
+                    RPC_REQUESTS_TOTAL,
+                    "x_subscription_id" => x_subscription_id,
+                    "method" => "getRecentPrioritizationFees",
+                )
+                .increment(1);
+
                 #[derive(Debug, Deserialize)]
                 struct ReqParams {
                     #[serde(default)]
@@ -608,6 +669,13 @@ impl RpcRequest {
                 ))
             }
             "getSignaturesForAddress" if state.supported_calls.get_signatures_for_address => {
+                counter!(
+                    RPC_REQUESTS_TOTAL,
+                    "x_subscription_id" => x_subscription_id,
+                    "method" => "getSignaturesForAddress",
+                )
+                .increment(1);
+
                 #[derive(Debug, Deserialize)]
                 struct ReqParams {
                     address: String,
@@ -653,6 +721,13 @@ impl RpcRequest {
                 }))
             }
             "getSignatureStatuses" if state.supported_calls.get_signature_statuses => {
+                counter!(
+                    RPC_REQUESTS_TOTAL,
+                    "x_subscription_id" => x_subscription_id,
+                    "method" => "getSignatureStatuses",
+                )
+                .increment(1);
+
                 #[derive(Debug, Deserialize)]
                 struct ReqParams {
                     signature_strs: Vec<String>,
@@ -705,6 +780,13 @@ impl RpcRequest {
                 }))
             }
             "getSlot" if state.supported_calls.get_slot => {
+                counter!(
+                    RPC_REQUESTS_TOTAL,
+                    "x_subscription_id" => x_subscription_id,
+                    "method" => "getSlot",
+                )
+                .increment(1);
+
                 #[derive(Debug, Deserialize)]
                 struct ReqParams {
                     #[serde(default)]
@@ -736,6 +818,13 @@ impl RpcRequest {
                 Err(jsonrpc_response_success(id, context_slot.into()))
             }
             "getTransaction" if state.supported_calls.get_transaction => {
+                counter!(
+                    RPC_REQUESTS_TOTAL,
+                    "x_subscription_id" => x_subscription_id,
+                    "method" => "getTransaction",
+                )
+                .increment(1);
+
                 #[derive(Debug, Deserialize)]
                 struct ReqParams {
                     signature_str: String,
@@ -775,6 +864,13 @@ impl RpcRequest {
                 }))
             }
             "getVersion" if state.supported_calls.get_version => {
+                counter!(
+                    RPC_REQUESTS_TOTAL,
+                    "x_subscription_id" => x_subscription_id,
+                    "method" => "getVersion",
+                )
+                .increment(1);
+
                 if let Some(error) = match serde_json::from_str::<serde_json::Value>(
                     request.params.as_ref().map(|p| p.get()).unwrap_or("null"),
                 ) {
@@ -804,6 +900,13 @@ impl RpcRequest {
                 }
             }
             "isBlockhashValid" if state.supported_calls.is_blockhash_valid => {
+                counter!(
+                    RPC_REQUESTS_TOTAL,
+                    "x_subscription_id" => x_subscription_id,
+                    "method" => "isBlockhashValid",
+                )
+                .increment(1);
+
                 #[derive(Debug, Deserialize)]
                 struct ReqParams {
                     blockhash: String,
@@ -833,11 +936,20 @@ impl RpcRequest {
                     commitment,
                 }))
             }
-            _ => Err(Response {
-                jsonrpc: Some(TwoPointZero),
-                payload: ResponsePayload::error(ErrorCode::MethodNotFound),
-                id: request.id,
-            }),
+            _ => {
+                counter!(
+                    RPC_REQUESTS_TOTAL,
+                    "x_subscription_id" => x_subscription_id,
+                    "method" => "unknown",
+                )
+                .increment(1);
+
+                Err(Response {
+                    jsonrpc: Some(TwoPointZero),
+                    payload: ResponsePayload::error(ErrorCode::MethodNotFound),
+                    id: request.id,
+                })
+            }
         }
     }
 
