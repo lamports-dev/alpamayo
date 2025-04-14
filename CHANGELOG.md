@@ -12,6 +12,14 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Fixes
 
+### Features
+
+### Breaking
+
+## [0.1.0] - 2025-04-14
+
+### Fixes
+
 - rpc: add `getSlot` to config ([#1](https://github.com/lamports-dev/alpamayo/pull/1))
 - rpc: change upstream header to `x-bigtable: disabled` ([#5](https://github.com/lamports-dev/alpamayo/pull/5))
 - rpc: use confirmed during sync ([#6](https://github.com/lamports-dev/alpamayo/pull/6))
@@ -39,5 +47,3 @@ The minor version will be incremented upon a breaking change and the patch versi
 - rpc: support isBlockhashValid ([#21](https://github.com/lamports-dev/alpamayo/pull/21))
 - rpc: support getRecentPrioritizationFees ([#22](https://github.com/lamports-dev/alpamayo/pull/22))
 - metrics: move to metrics.rs ([#25](https://github.com/lamports-dev/alpamayo/pull/25))
-
-### Breaking
