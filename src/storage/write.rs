@@ -1,7 +1,7 @@
 use {
     crate::{
         config::ConfigStorage,
-        metrics::{STORAGE_BLOCK_SYNC_SECONDS, duration_to_seconds},
+        metrics::{WRITE_BLOCK_SYNC_SECONDS, duration_to_seconds},
         source::{
             block::BlockWithBinary,
             rpc::GetBlockError,
@@ -228,7 +228,7 @@ async fn start2(
         }));
     };
 
-    let metric_storage_block_sync = histogram!(STORAGE_BLOCK_SYNC_SECONDS);
+    let metric_storage_block_sync = histogram!(WRITE_BLOCK_SYNC_SECONDS);
 
     // queue of confirmed blocks
     let mut queued_slots = HashMap::<Slot, Option<Arc<BlockWithBinary>>>::default();

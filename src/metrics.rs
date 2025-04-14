@@ -9,13 +9,14 @@ use {
 };
 
 pub const STORAGE_STORED_SLOTS: &str = "storage_stored_slots"; // type
-pub const STORAGE_BLOCK_SYNC_SECONDS: &str = "storage_block_sync_seconds";
 pub const STORAGE_FILES_SPACE: &str = "storage_files_space_bytes"; // id, type
+
+pub const WRITE_BLOCK_SYNC_SECONDS: &str = "write_block_sync_seconds";
 
 pub fn setup() -> anyhow::Result<PrometheusHandle> {
     let handle = PrometheusBuilder::new()
         .set_buckets_for_metric(
-            Matcher::Full(STORAGE_BLOCK_SYNC_SECONDS.to_owned()),
+            Matcher::Full(WRITE_BLOCK_SYNC_SECONDS.to_owned()),
             &[0.005, 0.01, 0.02, 0.03, 0.04, 0.05, 0.075, 0.1, 0.2, 0.4],
         )?
         .install_recorder()
@@ -36,8 +37,9 @@ pub fn setup() -> anyhow::Result<PrometheusHandle> {
     .absolute(1);
 
     describe_gauge!(STORAGE_STORED_SLOTS, "Stored slots in db");
-    describe_histogram!(STORAGE_BLOCK_SYNC_SECONDS, "Storage block sync time");
     describe_gauge!(STORAGE_FILES_SPACE, "Storage space in files for blocks");
+
+    describe_histogram!(WRITE_BLOCK_SYNC_SECONDS, "Write block sync time");
 
     Ok(handle)
 }
