@@ -52,7 +52,7 @@ impl ColumnName for SlotBasicIndex {
 }
 
 impl SlotBasicIndex {
-    pub fn key(slot: Slot) -> [u8; 8] {
+    pub const fn key(slot: Slot) -> [u8; 8] {
         slot.to_be_bytes()
     }
 
@@ -155,7 +155,7 @@ impl ColumnName for SlotExtraIndex {
 }
 
 impl SlotExtraIndex {
-    pub fn key(slot: Slot) -> [u8; 8] {
+    pub const fn key(slot: Slot) -> [u8; 8] {
         slot.to_be_bytes()
     }
 

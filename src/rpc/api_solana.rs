@@ -259,7 +259,7 @@ pub async fn on_request(
         RpcRequests::Batch(requests) => {
             let mut futures = FuturesOrdered::new();
             for request in requests {
-                let state = state.clone();
+                let state = Arc::clone(&state);
                 futures.push_back(async move {
                     match RpcRequest::parse(request, &state) {
                         Ok(request) => request.process(state, upstream_disabled).await,

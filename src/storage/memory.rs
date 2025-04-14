@@ -23,7 +23,7 @@ pub enum MemoryConfirmedBlock {
 }
 
 impl MemoryConfirmedBlock {
-    fn missed_or_dead(slot: Slot, dead: bool) -> Self {
+    const fn missed_or_dead(slot: Slot, dead: bool) -> Self {
         if dead {
             Self::Dead { slot }
         } else {
@@ -31,7 +31,7 @@ impl MemoryConfirmedBlock {
         }
     }
 
-    pub fn get_slot(&self) -> Slot {
+    pub const fn get_slot(&self) -> Slot {
         *match self {
             Self::Missed { slot } => slot,
             Self::Dead { slot } => slot,
@@ -49,7 +49,7 @@ struct BlockInfo {
 }
 
 impl BlockInfo {
-    fn new(slot: Slot, block: Arc<BlockWithBinary>) -> Self {
+    const fn new(slot: Slot, block: Arc<BlockWithBinary>) -> Self {
         Self {
             slot,
             block: Some(block),
@@ -58,7 +58,7 @@ impl BlockInfo {
         }
     }
 
-    fn new_empty(slot: Slot) -> Self {
+    const fn new_empty(slot: Slot) -> Self {
         Self {
             slot,
             block: None,

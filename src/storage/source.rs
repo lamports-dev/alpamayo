@@ -46,7 +46,7 @@ pub struct RpcSourceConnected {
 }
 
 impl RpcSourceConnected {
-    pub fn new(rpc_tx: mpsc::Sender<RpcRequest>) -> Self {
+    pub const fn new(rpc_tx: mpsc::Sender<RpcRequest>) -> Self {
         Self { rpc_tx }
     }
 
