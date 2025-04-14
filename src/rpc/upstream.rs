@@ -1,6 +1,10 @@
 use {
-    crate::{config::ConfigRpcUpstream, rpc::api_solana::RpcRequestBlocksUntil},
+    crate::{
+        config::ConfigRpcUpstream, metrics::RPC_UPSTREAM_REQUESTS_TOTAL,
+        rpc::api_solana::RpcRequestBlocksUntil,
+    },
     jsonrpsee_types::{Id, Response},
+    metrics::{Counter, counter},
     reqwest::{Client, StatusCode, Version, header::CONTENT_TYPE},
     serde_json::json,
     solana_rpc_client_api::config::{
@@ -11,7 +15,10 @@ use {
         clock::Slot, commitment_config::CommitmentConfig, pubkey::Pubkey, signature::Signature,
     },
     solana_transaction_status::{BlockEncodingOptions, UiTransactionEncoding},
-    std::time::{Duration, Instant},
+    std::{
+        sync::Arc,
+        time::{Duration, Instant},
+    },
     tokio::time::{sleep, timeout_at},
 };
 
@@ -39,8 +46,10 @@ impl RpcClient {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn get_block(
         &self,
+        x_subscription_id: Arc<str>,
         deadline: Instant,
         id: &Id<'static>,
         slot: Slot,
@@ -49,6 +58,12 @@ impl RpcClient {
         encoding_options: BlockEncodingOptions,
     ) -> RpcClientResult {
         self.call_with_timeout(
+            counter!(
+                RPC_UPSTREAM_REQUESTS_TOTAL,
+                "x_subscription_id" => Arc::clone(&x_subscription_id),
+                "method" => "getBlock",
+            ),
+            x_subscription_id.as_ref(),
             deadline,
             serde_json::to_string(&json!({
                 "jsonrpc": "2.0",
@@ -70,20 +85,29 @@ impl RpcClient {
 
     pub async fn get_blocks(
         &self,
+        x_subscription_id: Arc<str>,
         deadline: Instant,
         id: &Id<'static>,
         start_slot: Slot,
         until: RpcRequestBlocksUntil,
         commitment: CommitmentConfig,
     ) -> RpcClientResult {
+        let method = match until {
+            RpcRequestBlocksUntil::EndSlot(_) => "getBlocks",
+            RpcRequestBlocksUntil::Limit(_) => "getBlocksWithLimit",
+        };
+
         self.call_with_timeout(
+            counter!(
+                RPC_UPSTREAM_REQUESTS_TOTAL,
+                "x_subscription_id" => Arc::clone(&x_subscription_id),
+                "method" => method,
+            ),
+            x_subscription_id.as_ref(),
             deadline,
             serde_json::to_string(&json!({
                 "jsonrpc": "2.0",
-                "method": match until {
-                    RpcRequestBlocksUntil::EndSlot(_) => "getBlocks",
-                    RpcRequestBlocksUntil::Limit(_) => "getBlocksWithLimit",
-                },
+                "method": method,
                 "id": id,
                 "params": match until {
                     RpcRequestBlocksUntil::EndSlot(end_slot) => json!([start_slot, end_slot, commitment]),
@@ -97,11 +121,18 @@ impl RpcClient {
 
     pub async fn get_block_time(
         &self,
+        x_subscription_id: Arc<str>,
         deadline: Instant,
         id: &Id<'static>,
         slot: Slot,
     ) -> RpcClientResult {
         self.call_with_timeout(
+            counter!(
+                RPC_UPSTREAM_REQUESTS_TOTAL,
+                "x_subscription_id" => Arc::clone(&x_subscription_id),
+                "method" => "getBlockTime",
+            ),
+            x_subscription_id.as_ref(),
             deadline,
             serde_json::to_string(&json!({
                 "jsonrpc": "2.0",
@@ -117,6 +148,7 @@ impl RpcClient {
     #[allow(clippy::too_many_arguments)]
     pub async fn get_signatures_for_address(
         &self,
+        x_subscription_id: Arc<str>,
         deadline: Instant,
         id: &Id<'static>,
         address: Pubkey,
@@ -126,6 +158,12 @@ impl RpcClient {
         commitment: CommitmentConfig,
     ) -> RpcClientResult {
         self.call_with_timeout(
+            counter!(
+                RPC_UPSTREAM_REQUESTS_TOTAL,
+                "x_subscription_id" => Arc::clone(&x_subscription_id),
+                "method" => "getSignaturesForAddress",
+            ),
+            x_subscription_id.as_ref(),
             deadline,
             serde_json::to_string(&json!({
                 "jsonrpc": "2.0",
@@ -146,6 +184,7 @@ impl RpcClient {
 
     pub async fn get_signature_statuses(
         &self,
+        x_subscription_id: Arc<str>,
         deadline: Instant,
         id: &Id<'static>,
         signatures: Vec<&Signature>,
@@ -153,6 +192,12 @@ impl RpcClient {
         let signatures = signatures.iter().map(|s| s.to_string()).collect::<Vec<_>>();
 
         self.call_with_timeout(
+            counter!(
+                RPC_UPSTREAM_REQUESTS_TOTAL,
+                "x_subscription_id" => Arc::clone(&x_subscription_id),
+                "method" => "getSignatureStatuses",
+            ),
+            x_subscription_id.as_ref(),
             deadline,
             serde_json::to_string(&json!({
                 "jsonrpc": "2.0",
@@ -167,8 +212,10 @@ impl RpcClient {
         .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn get_transaction(
         &self,
+        x_subscription_id: Arc<str>,
         deadline: Instant,
         id: &Id<'static>,
         signature: Signature,
@@ -177,6 +224,12 @@ impl RpcClient {
         max_supported_transaction_version: Option<u8>,
     ) -> RpcClientResult {
         self.call_with_timeout(
+            counter!(
+                RPC_UPSTREAM_REQUESTS_TOTAL,
+                "x_subscription_id" => Arc::clone(&x_subscription_id),
+                "method" => "getTransaction",
+            ),
+            x_subscription_id.as_ref(),
             deadline,
             serde_json::to_string(&json!({
                 "jsonrpc": "2.0",
@@ -193,18 +246,35 @@ impl RpcClient {
         .await
     }
 
-    async fn call_with_timeout(&self, deadline: Instant, body: String) -> RpcClientResult {
-        match timeout_at(deadline.into(), self.call(body)).await {
+    async fn call_with_timeout(
+        &self,
+        call_counter: Counter,
+        x_subscription_id: &str,
+        deadline: Instant,
+        body: String,
+    ) -> RpcClientResult {
+        match timeout_at(
+            deadline.into(),
+            self.call(call_counter, x_subscription_id, body),
+        )
+        .await
+        {
             Ok(result) => result,
             Err(_timeout) => anyhow::bail!("upstream timeout"),
         }
     }
 
-    async fn call(&self, body: String) -> RpcClientResult {
+    async fn call(
+        &self,
+        call_counter: Counter,
+        x_subscription_id: &str,
+        body: String,
+    ) -> RpcClientResult {
         let mut retries = self.retries_max;
         let mut backoff = self.retries_backoff_init;
         loop {
-            match self.call2(body.clone()).await {
+            call_counter.increment(1);
+            match self.call2(x_subscription_id, body.clone()).await {
                 Ok(result) => return Ok(result),
                 Err(error) => {
                     if retries == 0 {
@@ -219,12 +289,13 @@ impl RpcClient {
         }
     }
 
-    async fn call2(&self, body: String) -> RpcClientResult {
+    async fn call2(&self, x_subscription_id: &str, body: String) -> RpcClientResult {
         let request = self
             .client
             .post(&self.endpoint)
             .version(self.version)
             .header(CONTENT_TYPE, "application/json")
+            .header("x-subscription-id", x_subscription_id)
             .body(body);
 
         let Ok(response) = request.send().await else {
