@@ -52,7 +52,7 @@ storage:
   read:
     threads: 2
     affinity: 3-4
-    requests_concurrency: 256
+    requests_concurrency: 128
 rpc:
   endpoint: 127.0.0.1:9000
   tokio:

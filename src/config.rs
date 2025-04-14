@@ -259,7 +259,7 @@ impl Default for ConfigStorageRead {
         Self {
             threads: 2,
             affinity: None,
-            requests_concurrency: 256,
+            requests_concurrency: 128,
         }
     }
 }
