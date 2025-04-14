@@ -1,7 +1,7 @@
 use {
     crate::{
         config::ConfigStorage,
-        metrics,
+        metrics::{STORAGE_BLOCK_SYNC_SECONDS, duration_to_seconds},
         source::{
             block::BlockWithBinary,
             rpc::GetBlockError,
@@ -23,7 +23,9 @@ use {
         future::{FutureExt, pending, try_join_all},
         stream::{FuturesUnordered, StreamExt},
     },
+    metrics::histogram,
     prost::Message,
+    quanta::Instant,
     rayon::{
         ThreadPoolBuilder,
         iter::{IntoParallelIterator, ParallelIterator},
@@ -32,11 +34,7 @@ use {
     solana_sdk::clock::Slot,
     solana_storage_proto::convert::generated,
     solana_transaction_status::ConfirmedBlock,
-    std::{
-        sync::Arc,
-        thread,
-        time::{Duration, Instant},
-    },
+    std::{sync::Arc, thread, time::Duration},
     tokio::{
         sync::{Notify, broadcast, mpsc},
         task::{JoinHandle, spawn_local},
@@ -230,6 +228,8 @@ async fn start2(
         }));
     };
 
+    let metric_storage_block_sync = histogram!(STORAGE_BLOCK_SYNC_SECONDS);
+
     // queue of confirmed blocks
     let mut queued_slots = HashMap::<Slot, Option<Arc<BlockWithBinary>>>::default();
     let mut queued_slots_backfilled = false;
@@ -287,11 +287,11 @@ async fn start2(
                     block: block.clone(),
                 });
 
-                let timer = metrics::storage_block_sync_start_timer();
+                let ts = Instant::now();
                 db_write
                     .push_block(next_database_slot, block, storage_files, &mut blocks)
                     .await?;
-                timer.observe_duration();
+                metric_storage_block_sync.record(duration_to_seconds(ts.elapsed()));
 
                 next_database_slot += 1;
             }
@@ -406,11 +406,11 @@ async fn start2(
                 block: block.clone(),
             });
 
-            let timer = metrics::storage_block_sync_start_timer();
+            let ts = Instant::now();
             db_write
                 .push_block(next_confirmed_slot, block, storage_files, &mut blocks)
                 .await?;
-            timer.observe_duration();
+            metric_storage_block_sync.record(duration_to_seconds(ts.elapsed()));
 
             next_confirmed_slot += 1;
         }

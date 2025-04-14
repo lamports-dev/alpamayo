@@ -37,6 +37,7 @@ fn main() -> anyhow::Result<()> {
 
     // Setup logs
     alpamayo::log::setup(config.logs.json)?;
+    let metrics_handle = metrics::setup()?;
 
     // Exit if we only check the config
     if args.check {
@@ -84,10 +85,11 @@ fn main() -> anyhow::Result<()> {
                 .and_then(ready)
                 .boxed();
 
-                let server_fut = metrics::spawn_server(config.metrics, stored_slots, shutdown)
-                    .await?
-                    .map_err(anyhow::Error::from)
-                    .boxed();
+                let server_fut =
+                    metrics::spawn_server(config.metrics, metrics_handle, stored_slots, shutdown)
+                        .await?
+                        .map_err(anyhow::Error::from)
+                        .boxed();
 
                 try_join_all(vec![source_fut, server_fut]).await.map(|_| ())
             })

@@ -1,109 +1,73 @@
 use {
     crate::{config::ConfigMetrics, storage::slots::StoredSlots, version::VERSION as VERSION_INFO},
-    prometheus::{
-        Histogram, HistogramOpts, HistogramTimer, IntCounterVec, IntGaugeVec, Opts, Registry,
-    },
-    solana_sdk::{clock::Slot, commitment_config::CommitmentLevel},
-    std::{future::Future, sync::Once},
-    tokio::task::JoinError,
+    anyhow::Context,
+    hyper::body::Bytes,
+    metrics::{counter, describe_counter, describe_histogram},
+    metrics_exporter_prometheus::{Matcher, PrometheusBuilder, PrometheusHandle},
+    std::{future::Future, time::Duration},
+    tokio::{task::JoinError, time::sleep},
 };
 
-lazy_static::lazy_static! {
-    pub static ref REGISTRY: Registry = Registry::new();
+pub const STORAGE_STORED_SLOTS: &str = "storage_stored_slots"; // commitment
+pub const STORAGE_BLOCK_SYNC_SECONDS: &str = "storage_block_sync_seconds";
 
-    static ref VERSION: IntCounterVec = IntCounterVec::new(
-        Opts::new("version", "Alpamayo version info"),
-        &["buildts", "git", "package", "proto_dragonsmouth", "proto_richat", "rustc", "solana", "version"]
-    ).unwrap();
+pub fn setup() -> anyhow::Result<PrometheusHandle> {
+    let handle = PrometheusBuilder::new()
+        .set_buckets_for_metric(
+            Matcher::Full(STORAGE_BLOCK_SYNC_SECONDS.to_owned()),
+            &[0.005, 0.01, 0.02, 0.03, 0.04, 0.05, 0.075, 0.1, 0.2, 0.4],
+        )?
+        .install_recorder()
+        .context("failed to install prometheus exporter")?;
 
-    static ref STORAGE_STORED_SLOTS: IntGaugeVec = IntGaugeVec::new(
-        Opts::new("storage_stored_slots", "Stored slots in db"),
-        &["commitment"]
-    ).unwrap();
+    describe_counter!("version", "Alpamayo version info");
+    counter!(
+        "version",
+        "buildts" => VERSION_INFO.buildts,
+        "git" => VERSION_INFO.git,
+        "package" => VERSION_INFO.package,
+        "proto_dragonsmouth" => VERSION_INFO.proto,
+        "proto_richat" => VERSION_INFO.proto_richat,
+        "rustc" => VERSION_INFO.rustc,
+        "solana" => VERSION_INFO.solana,
+        "version" => VERSION_INFO.version,
+    )
+    .absolute(1);
 
-    static ref STORAGE_BLOCK_SYNC_SECONDS: Histogram = Histogram::with_opts(
-        HistogramOpts {
-            common_opts: Opts::new("storage_block_sync_seconds", "Storage block sync time"),
-            buckets: vec![0.005, 0.01, 0.02, 0.03, 0.04, 0.05, 0.075, 0.1, 0.2, 0.4]
-        }
-    ).unwrap();
+    describe_counter!(STORAGE_STORED_SLOTS, "Stored slots in db");
+    describe_histogram!(STORAGE_BLOCK_SYNC_SECONDS, "Storage block sync time");
+
+    Ok(handle)
 }
 
 pub async fn spawn_server(
     config: ConfigMetrics,
+    handle: PrometheusHandle,
     stored_slots: StoredSlots,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> anyhow::Result<impl Future<Output = Result<(), JoinError>>> {
-    static REGISTER: Once = Once::new();
-    REGISTER.call_once(|| {
-        macro_rules! register {
-            ($collector:ident) => {
-                REGISTRY
-                    .register(Box::new($collector.clone()))
-                    .expect("collector can't be registered");
-            };
+    let recorder_handle = handle.clone();
+    tokio::spawn(async move {
+        loop {
+            sleep(Duration::from_secs(1)).await;
+            recorder_handle.run_upkeep();
         }
-        register!(VERSION);
-        register!(STORAGE_STORED_SLOTS);
-        register!(STORAGE_BLOCK_SYNC_SECONDS);
-
-        VERSION
-            .with_label_values(&[
-                VERSION_INFO.buildts,
-                VERSION_INFO.git,
-                VERSION_INFO.package,
-                VERSION_INFO.proto,
-                VERSION_INFO.proto_richat,
-                VERSION_INFO.rustc,
-                VERSION_INFO.solana,
-                VERSION_INFO.version,
-            ])
-            .inc();
     });
 
     richat_shared::metrics::spawn_server(
         richat_shared::config::ConfigMetrics {
             endpoint: config.endpoint,
         },
-        || REGISTRY.gather(),            // metrics
-        || true,                         // health
-        move || stored_slots.is_ready(), // ready
+        move || Bytes::from(handle.render()), // metrics
+        || true,                              // health
+        move || stored_slots.is_ready(),      // ready
         shutdown,
     )
     .await
     .map_err(Into::into)
 }
 
-fn commitment_as_label(commitment: CommitmentLevel) -> &'static str {
-    match commitment {
-        CommitmentLevel::Processed => "processed",
-        CommitmentLevel::Confirmed => "confirmed",
-        CommitmentLevel::Finalized => "finalized",
-    }
-}
-
-pub fn storage_stored_slots_set_commitment(slot: Slot, commitment: CommitmentLevel) {
-    let labels = &[commitment_as_label(commitment)];
-    if slot == u64::MIN {
-        let _ = STORAGE_STORED_SLOTS.remove_label_values(labels);
-    } else {
-        STORAGE_STORED_SLOTS
-            .with_label_values(labels)
-            .set(slot as i64);
-    }
-}
-
-pub fn storage_stored_slots_set_first_available(slot: Slot) {
-    let labels = &["first_available"];
-    if slot == u64::MIN {
-        let _ = STORAGE_STORED_SLOTS.remove_label_values(labels);
-    } else {
-        STORAGE_STORED_SLOTS
-            .with_label_values(labels)
-            .set(slot as i64);
-    }
-}
-
-pub fn storage_block_sync_start_timer() -> HistogramTimer {
-    STORAGE_BLOCK_SYNC_SECONDS.start_timer()
+#[inline]
+pub fn duration_to_seconds(d: Duration) -> f64 {
+    d.as_secs() as f64 + d.subsec_nanos() as f64 / 1e9
 }
