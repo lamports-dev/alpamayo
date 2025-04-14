@@ -1,5 +1,6 @@
 use {
     crate::{
+        metrics::{READ_DISK_SECONDS_TOTAL, duration_to_seconds},
         rpc::api_solana::RpcRequestBlocksUntil,
         source::{block::BlockWithBinary, fees::TransactionsFees},
         storage::{
@@ -16,6 +17,7 @@ use {
         future::{FutureExt, LocalBoxFuture, pending, ready},
         stream::{FuturesUnordered, StreamExt},
     },
+    metrics::gauge,
     solana_rpc_client_api::response::{
         RpcConfirmedTransactionStatusWithSignature, RpcPrioritizationFee,
     },
@@ -542,6 +544,7 @@ pub enum ReadRequest {
         deadline: Instant,
         slot: Slot,
         tx: oneshot::Sender<ReadResultBlock>,
+        x_subscription_id: Arc<str>,
     },
     BlockHeight {
         deadline: Instant,
@@ -579,6 +582,7 @@ pub enum ReadRequest {
         until: Option<Signature>,
         limit: usize,
         tx: oneshot::Sender<ReadResultSignaturesForAddress>,
+        x_subscription_id: Arc<str>,
     },
     SignaturesForAddress2 {
         deadline: Instant,
@@ -588,6 +592,7 @@ pub enum ReadRequest {
         until: Signature,
         signatures: Vec<RpcConfirmedTransactionStatusWithSignature>,
         tx: oneshot::Sender<ReadResultSignaturesForAddress>,
+        x_subscription_id: Arc<str>,
         lock: Option<OwnedSemaphorePermit>,
     },
     SignaturesForAddress3 {
@@ -602,16 +607,19 @@ pub enum ReadRequest {
         signatures: Vec<Signature>,
         search_transaction_history: bool,
         tx: oneshot::Sender<ReadResultSignatureStatuses>,
+        x_subscription_id: Arc<str>,
     },
     Transaction {
         deadline: Instant,
         signature: Signature,
         tx: oneshot::Sender<ReadResultTransaction>,
+        x_subscription_id: Arc<str>,
     },
     Transaction2 {
         deadline: Instant,
         index: TransactionIndexValue<'static>,
         tx: oneshot::Sender<ReadResultTransaction>,
+        x_subscription_id: Arc<str>,
         lock: Option<OwnedSemaphorePermit>,
     },
     BlockhashValid {
@@ -633,7 +641,12 @@ impl ReadRequest {
         lock: Option<OwnedSemaphorePermit>,
     ) -> Option<LocalBoxFuture<'a, Option<Self>>> {
         match self {
-            Self::Block { deadline, slot, tx } => {
+            Self::Block {
+                deadline,
+                slot,
+                tx,
+                x_subscription_id,
+            } => {
                 if deadline < Instant::now() {
                     let _ = tx.send(ReadResultBlock::Timeout);
                     return None;
@@ -679,8 +692,17 @@ impl ReadRequest {
                 let read_fut =
                     storage_files.read(location.storage_id, location.offset, location.size);
 
+                let ts = quanta::Instant::now();
                 Some(Box::pin(async move {
-                    let result = match timeout_at(deadline.into(), read_fut).await {
+                    let result = timeout_at(deadline.into(), read_fut).await;
+                    gauge!(
+                        READ_DISK_SECONDS_TOTAL,
+                        "x_subscription_id" => x_subscription_id,
+                        "type" => "file",
+                    )
+                    .increment(duration_to_seconds(ts.elapsed()));
+
+                    let result = match result {
                         Ok(Ok(bytes)) => ReadResultBlock::Block(bytes),
                         Ok(Err(error)) => ReadResultBlock::ReadError(error),
                         Err(_error) => ReadResultBlock::Timeout,
@@ -877,6 +899,7 @@ impl ReadRequest {
                 until,
                 limit,
                 tx,
+                x_subscription_id,
             } => {
                 if deadline < Instant::now() {
                     let _ = tx.send(ReadResultSignaturesForAddress::Timeout);
@@ -952,9 +975,18 @@ impl ReadRequest {
                         }
                     };
 
+                    let ts = quanta::Instant::now();
                     Some(Box::pin(async move {
-                        let result = match read_fut.await {
-                            Ok(Some(index)) if index.slot <= highest_slot => {
+                        let result = timeout_at(deadline.into(), read_fut).await;
+                        gauge!(
+                            READ_DISK_SECONDS_TOTAL,
+                            "x_subscription_id" => Arc::clone(&x_subscription_id),
+                            "type" => "index_tx",
+                        )
+                        .increment(duration_to_seconds(ts.elapsed()));
+
+                        let result = match result {
+                            Ok(Ok(Some(index))) if index.slot <= highest_slot => {
                                 return Some(ReadRequest::SignaturesForAddress2 {
                                     deadline,
                                     address,
@@ -963,22 +995,24 @@ impl ReadRequest {
                                     until,
                                     signatures,
                                     tx,
+                                    x_subscription_id,
                                     lock,
                                 });
                             }
                             // found but not satisfy commitment, return empty vec
-                            Ok(Some(_index)) => ReadResultSignaturesForAddress::Signatures {
+                            Ok(Ok(Some(_index))) => ReadResultSignaturesForAddress::Signatures {
                                 signatures: vec![],
                                 finished: true,
                                 before: None,
                             },
                             // not found, maybe upstream storage have an index
-                            Ok(None) => ReadResultSignaturesForAddress::Signatures {
+                            Ok(Ok(None)) => ReadResultSignaturesForAddress::Signatures {
                                 signatures: vec![],
                                 finished: false,
                                 before: Some(before),
                             },
-                            Err(error) => ReadResultSignaturesForAddress::ReadError(error),
+                            Ok(Err(error)) => ReadResultSignaturesForAddress::ReadError(error),
+                            Err(_error) => ReadResultSignaturesForAddress::Timeout,
                         };
 
                         let _ = tx.send(result);
@@ -993,6 +1027,7 @@ impl ReadRequest {
                         until,
                         signatures,
                         tx,
+                        x_subscription_id,
                         lock,
                     }))))
                 }
@@ -1005,6 +1040,7 @@ impl ReadRequest {
                 until,
                 signatures,
                 tx,
+                x_subscription_id,
                 lock,
             } => {
                 if deadline < Instant::now() {
@@ -1021,17 +1057,32 @@ impl ReadRequest {
                         }
                     };
 
+                let ts = quanta::Instant::now();
                 Some(Box::pin(async move {
-                    match read_fut.await {
-                        Ok((signatures, finished)) => Some(ReadRequest::SignaturesForAddress3 {
-                            deadline,
-                            signatures,
-                            finished,
-                            tx,
-                            lock,
-                        }),
-                        Err(error) => {
+                    let result = timeout_at(deadline.into(), read_fut).await;
+                    gauge!(
+                        READ_DISK_SECONDS_TOTAL,
+                        "x_subscription_id" => x_subscription_id,
+                        "type" => "index_sfa",
+                    )
+                    .increment(duration_to_seconds(ts.elapsed()));
+
+                    match result {
+                        Ok(Ok((signatures, finished))) => {
+                            Some(ReadRequest::SignaturesForAddress3 {
+                                deadline,
+                                signatures,
+                                finished,
+                                tx,
+                                lock,
+                            })
+                        }
+                        Ok(Err(error)) => {
                             let _ = tx.send(ReadResultSignaturesForAddress::ReadError(error));
+                            None
+                        }
+                        Err(_error) => {
+                            let _ = tx.send(ReadResultSignaturesForAddress::Timeout);
                             None
                         }
                     }
@@ -1095,6 +1146,7 @@ impl ReadRequest {
                 signatures,
                 search_transaction_history,
                 tx,
+                x_subscription_id,
             } => {
                 if deadline < Instant::now() {
                     let _ = tx.send(ReadResultSignatureStatuses::Timeout);
@@ -1145,9 +1197,18 @@ impl ReadRequest {
                 };
 
                 let finalized_slot = storage_processed.finalized_slot;
+                let ts = quanta::Instant::now();
                 Some(Box::pin(async move {
-                    let result = match read_fut.await {
-                        Ok(signatures_history) => {
+                    let result = timeout_at(deadline.into(), read_fut).await;
+                    gauge!(
+                        READ_DISK_SECONDS_TOTAL,
+                        "x_subscription_id" => x_subscription_id,
+                        "type" => "index_signature_statuses",
+                    )
+                    .increment(duration_to_seconds(ts.elapsed()));
+
+                    let result = match result {
+                        Ok(Ok(signatures_history)) => {
                             for (signature, value) in signatures_history {
                                 if value.slot <= finalized_slot {
                                     signatures_found.insert(
@@ -1169,7 +1230,8 @@ impl ReadRequest {
                             }
                             create_result(&signatures, signatures_found)
                         }
-                        Err(error) => ReadResultSignatureStatuses::ReadError(error),
+                        Ok(Err(error)) => ReadResultSignatureStatuses::ReadError(error),
+                        Err(_error) => ReadResultSignatureStatuses::Timeout,
                     };
 
                     let _ = tx.send(result);
@@ -1181,6 +1243,7 @@ impl ReadRequest {
                 deadline,
                 signature,
                 tx,
+                x_subscription_id,
             } => {
                 if deadline < Instant::now() {
                     let _ = tx.send(ReadResultTransaction::Timeout);
@@ -1206,18 +1269,29 @@ impl ReadRequest {
                     }
                 };
 
+                let ts = quanta::Instant::now();
                 Some(Box::pin(async move {
-                    let result = match read_fut.await {
-                        Ok(Some(index)) => {
+                    let result = timeout_at(deadline.into(), read_fut).await;
+                    gauge!(
+                        READ_DISK_SECONDS_TOTAL,
+                        "x_subscription_id" => Arc::clone(&x_subscription_id),
+                        "type" => "index_tx",
+                    )
+                    .increment(duration_to_seconds(ts.elapsed()));
+
+                    let result = match result {
+                        Ok(Ok(Some(index))) => {
                             return Some(ReadRequest::Transaction2 {
                                 deadline,
                                 index,
                                 tx,
+                                x_subscription_id,
                                 lock,
                             });
                         }
-                        Ok(None) => ReadResultTransaction::NotFound,
-                        Err(error) => ReadResultTransaction::ReadError(error),
+                        Ok(Ok(None)) => ReadResultTransaction::NotFound,
+                        Ok(Err(error)) => ReadResultTransaction::ReadError(error),
+                        Err(_error) => ReadResultTransaction::Timeout,
                     };
 
                     let _ = tx.send(result);
@@ -1228,6 +1302,7 @@ impl ReadRequest {
                 deadline,
                 index,
                 tx,
+                x_subscription_id,
                 lock,
             } => {
                 if deadline < Instant::now() {
@@ -1258,7 +1333,15 @@ impl ReadRequest {
                     index.size,
                 );
 
+                let ts = quanta::Instant::now();
                 Some(Box::pin(async move {
+                    gauge!(
+                        READ_DISK_SECONDS_TOTAL,
+                        "x_subscription_id" => x_subscription_id,
+                        "type" => "file",
+                    )
+                    .increment(duration_to_seconds(ts.elapsed()));
+
                     let result = match timeout_at(deadline.into(), read_fut).await {
                         Ok(Ok(bytes)) => ReadResultTransaction::Transaction {
                             slot: index.slot,

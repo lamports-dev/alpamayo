@@ -672,7 +672,7 @@ impl RpcRequest {
             "getSignaturesForAddress" if state.supported_calls.get_signatures_for_address => {
                 counter!(
                     RPC_REQUESTS_TOTAL,
-                    "x_subscription_id" => x_subscription_id,
+                    "x_subscription_id" => Arc::clone(&x_subscription_id),
                     "method" => "getSignaturesForAddress",
                 )
                 .increment(1);
@@ -713,6 +713,7 @@ impl RpcRequest {
                 let id = Self::min_context_check(id, min_context_slot, commitment, state)?;
 
                 Ok(Self::SignaturesForAddress(RpcRequestSignaturesForAddress {
+                    x_subscription_id,
                     id: id.into_owned(),
                     commitment,
                     address,
@@ -724,7 +725,7 @@ impl RpcRequest {
             "getSignatureStatuses" if state.supported_calls.get_signature_statuses => {
                 counter!(
                     RPC_REQUESTS_TOTAL,
-                    "x_subscription_id" => x_subscription_id,
+                    "x_subscription_id" => Arc::clone(&x_subscription_id),
                     "method" => "getSignatureStatuses",
                 )
                 .increment(1);
@@ -775,6 +776,7 @@ impl RpcRequest {
                 }
 
                 Ok(Self::SignatureStatuses(RpcRequestsSignatureStatuses {
+                    x_subscription_id,
                     id: id.into_owned(),
                     signatures,
                     search_transaction_history,
@@ -1116,7 +1118,8 @@ impl RpcRequestBlock {
                 .send(ReadRequest::Block {
                     deadline,
                     slot: self.slot,
-                    tx
+                    tx,
+                    x_subscription_id: Arc::clone(&self.x_subscription_id),
                 })
                 .await
                 .is_ok(),
@@ -1559,6 +1562,7 @@ impl RpcRequestRecentPrioritizationFees {
 
 #[derive(Debug)]
 struct RpcRequestSignaturesForAddress {
+    x_subscription_id: Arc<str>,
     id: Id<'static>,
     commitment: CommitmentConfig,
     address: Pubkey,
@@ -1584,6 +1588,7 @@ impl RpcRequestSignaturesForAddress {
                     until: self.until,
                     limit: self.limit,
                     tx,
+                    x_subscription_id: Arc::clone(&self.x_subscription_id),
                 })
                 .await
                 .is_ok(),
@@ -1665,6 +1670,7 @@ impl RpcRequestSignaturesForAddress {
 
 #[derive(Debug)]
 struct RpcRequestsSignatureStatuses {
+    x_subscription_id: Arc<str>,
     id: Id<'static>,
     signatures: Vec<Signature>,
     search_transaction_history: bool,
@@ -1683,7 +1689,8 @@ impl RpcRequestsSignatureStatuses {
                     deadline,
                     signatures: self.signatures.clone(),
                     search_transaction_history: self.search_transaction_history,
-                    tx
+                    tx,
+                    x_subscription_id: Arc::clone(&self.x_subscription_id),
                 })
                 .await
                 .is_ok(),
@@ -1787,7 +1794,8 @@ impl RpcRequestTransaction {
                 .send(ReadRequest::Transaction {
                     deadline,
                     signature: self.signature,
-                    tx
+                    tx,
+                    x_subscription_id: Arc::clone(&self.x_subscription_id),
                 })
                 .await
                 .is_ok(),

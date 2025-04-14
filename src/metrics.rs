@@ -11,6 +11,8 @@ use {
 pub const STORAGE_STORED_SLOTS: &str = "storage_stored_slots"; // type
 pub const STORAGE_FILES_SPACE: &str = "storage_files_space_bytes"; // id, type
 
+pub const READ_DISK_SECONDS_TOTAL: &str = "read_disk_seconds_total"; // x_subscription_id, type
+
 pub const WRITE_BLOCK_SYNC_SECONDS: &str = "write_block_sync_seconds";
 
 pub const RPC_REQUESTS_TOTAL: &str = "rpc_requests_total"; // x_subscription_id, method
@@ -41,6 +43,11 @@ pub fn setup() -> anyhow::Result<PrometheusHandle> {
 
     describe_gauge!(STORAGE_STORED_SLOTS, "Stored slots in db");
     describe_gauge!(STORAGE_FILES_SPACE, "Storage space in files for blocks");
+
+    describe_gauge!(
+        READ_DISK_SECONDS_TOTAL,
+        "Read disk time by x-subscription-id and type"
+    );
 
     describe_histogram!(WRITE_BLOCK_SYNC_SECONDS, "Write block sync time");
 
