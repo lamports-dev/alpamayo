@@ -2,8 +2,8 @@ use {
     crate::{
         config::{ConfigRpc, ConfigRpcCall},
         metrics::{
-            RPC_REQUESTS_DURATION_SECONDS, RPC_REQUESTS_TOTAL, RPC_WORKERS_CPU_SECONDS_TOTAL,
-            duration_to_seconds,
+            RPC_REQUESTS_DURATION_SECONDS, RPC_REQUESTS_GENERATED_BYTES_TOTAL, RPC_REQUESTS_TOTAL,
+            RPC_WORKERS_CPU_SECONDS_TOTAL, duration_to_seconds,
         },
         rpc::{upstream::RpcClient, workers::WorkRequest},
         storage::{
@@ -330,7 +330,7 @@ pub async fn on_request(
         RpcRequests::Single(request) => match RpcRequest::process(
             Arc::clone(&state),
             request,
-            x_subscription_id,
+            Arc::clone(&x_subscription_id),
             upstream_disabled,
         )
         .await
@@ -368,6 +368,11 @@ pub async fn on_request(
         }
     };
     buffer.push(b'\n');
+    counter!(
+        RPC_REQUESTS_GENERATED_BYTES_TOTAL,
+        "x_subscription_id" => x_subscription_id,
+    )
+    .increment(buffer.len() as u64);
     response_200(buffer)
 }
 
