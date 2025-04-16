@@ -1,11 +1,18 @@
 use {
     crate::{
-        config::{ConfigRpc, ConfigRpcCall},
+        config::{ConfigRpc, ConfigRpcCallJson},
         metrics::{
             RPC_REQUESTS_DURATION_SECONDS, RPC_REQUESTS_GENERATED_BYTES_TOTAL, RPC_REQUESTS_TOTAL,
             RPC_WORKERS_CPU_SECONDS_TOTAL, duration_to_seconds,
         },
-        rpc::{upstream::RpcClient, workers::WorkRequest},
+        rpc::{
+            api::{
+                RpcResponse, check_call_support, get_x_bigtable_disabled, get_x_subscription_id,
+                response_400, response_500,
+            },
+            upstream::RpcClientJsonrpc,
+            workers::WorkRequest,
+        },
         storage::{
             read::{
                 ReadRequest, ReadResultBlock, ReadResultBlockHeight, ReadResultBlockTime,
@@ -19,9 +26,8 @@ use {
     anyhow::Context,
     crossbeam::channel::{Sender, TrySendError},
     futures::stream::{FuturesOrdered, StreamExt},
-    http_body_util::{BodyExt, Full as BodyFull, Limited, combinators::BoxBody},
+    http_body_util::{BodyExt, Full as BodyFull, Limited},
     hyper::{
-        StatusCode,
         body::{Bytes, Incoming as BodyIncoming},
         header::CONTENT_TYPE,
         http::Result as HttpResult,
@@ -59,7 +65,6 @@ use {
         TransactionStatus, TransactionWithStatusMeta, UiTransactionEncoding,
     },
     std::{
-        fmt,
         str::FromStr,
         sync::Arc,
         time::{Duration, Instant},
@@ -77,26 +82,12 @@ pub struct RpcRecentPrioritizationFeesConfig {
     pub percentile: Option<u16>,
 }
 
-type RpcResponse = hyper::Response<BoxBody<Bytes, std::convert::Infallible>>;
-
 type RpcRequestResult = anyhow::Result<Response<'static, serde_json::Value>>;
 
 fn response_200<D: Into<Bytes>>(data: D) -> HttpResult<RpcResponse> {
     hyper::Response::builder()
         .header(CONTENT_TYPE, "application/json; charset=utf-8")
         .body(BodyFull::from(data.into()).boxed())
-}
-
-fn response_400<E: fmt::Display>(error: E) -> HttpResult<RpcResponse> {
-    hyper::Response::builder()
-        .status(StatusCode::BAD_REQUEST)
-        .body(format!("{error}\n").boxed())
-}
-
-fn response_500<E: fmt::Display>(error: E) -> HttpResult<RpcResponse> {
-    hyper::Response::builder()
-        .status(StatusCode::INTERNAL_SERVER_ERROR)
-        .body(format!("{error}\n").boxed())
 }
 
 fn jsonrpc_response_success(
@@ -154,43 +145,34 @@ struct SupportedCalls {
 }
 
 impl SupportedCalls {
-    fn new(calls: &[ConfigRpcCall]) -> anyhow::Result<Self> {
+    fn new(calls: &[ConfigRpcCallJson]) -> anyhow::Result<Self> {
         Ok(Self {
-            get_block: Self::check_call_support(calls, ConfigRpcCall::GetBlock)?,
-            get_block_height: Self::check_call_support(calls, ConfigRpcCall::GetBlockHeight)?,
-            get_blocks: Self::check_call_support(calls, ConfigRpcCall::GetBlocks)?,
-            get_blocks_with_limit: Self::check_call_support(
+            get_block: check_call_support(calls, ConfigRpcCallJson::GetBlock)?,
+            get_block_height: check_call_support(calls, ConfigRpcCallJson::GetBlockHeight)?,
+            get_blocks: check_call_support(calls, ConfigRpcCallJson::GetBlocks)?,
+            get_blocks_with_limit: check_call_support(
                 calls,
-                ConfigRpcCall::GetBlocksWithLimit,
+                ConfigRpcCallJson::GetBlocksWithLimit,
             )?,
-            get_block_time: Self::check_call_support(calls, ConfigRpcCall::GetBlockTime)?,
-            get_latest_blockhash: Self::check_call_support(
+            get_block_time: check_call_support(calls, ConfigRpcCallJson::GetBlockTime)?,
+            get_latest_blockhash: check_call_support(calls, ConfigRpcCallJson::GetLatestBlockhash)?,
+            get_recent_prioritization_fees: check_call_support(
                 calls,
-                ConfigRpcCall::GetLatestBlockhash,
+                ConfigRpcCallJson::GetRecentPrioritizationFees,
             )?,
-            get_recent_prioritization_fees: Self::check_call_support(
+            get_signatures_for_address: check_call_support(
                 calls,
-                ConfigRpcCall::GetRecentPrioritizationFees,
+                ConfigRpcCallJson::GetSignaturesForAddress,
             )?,
-            get_signatures_for_address: Self::check_call_support(
+            get_signature_statuses: check_call_support(
                 calls,
-                ConfigRpcCall::GetSignaturesForAddress,
+                ConfigRpcCallJson::GetSignatureStatuses,
             )?,
-            get_signature_statuses: Self::check_call_support(
-                calls,
-                ConfigRpcCall::GetSignatureStatuses,
-            )?,
-            get_slot: Self::check_call_support(calls, ConfigRpcCall::GetSlot)?,
-            get_transaction: Self::check_call_support(calls, ConfigRpcCall::GetTransaction)?,
-            get_version: Self::check_call_support(calls, ConfigRpcCall::GetVersion)?,
-            is_blockhash_valid: Self::check_call_support(calls, ConfigRpcCall::IsBlockhashValid)?,
+            get_slot: check_call_support(calls, ConfigRpcCallJson::GetSlot)?,
+            get_transaction: check_call_support(calls, ConfigRpcCallJson::GetTransaction)?,
+            get_version: check_call_support(calls, ConfigRpcCallJson::GetVersion)?,
+            is_blockhash_valid: check_call_support(calls, ConfigRpcCallJson::IsBlockhashValid)?,
         })
-    }
-
-    fn check_call_support(calls: &[ConfigRpcCall], call: ConfigRpcCall) -> anyhow::Result<bool> {
-        let count = calls.iter().filter(|value| **value == call).count();
-        anyhow::ensure!(count <= 1, "{call:?} defined multiple times");
-        Ok(count == 1)
     }
 
     fn get_method(&self, method: &str) -> RpcRequestMethod {
@@ -272,7 +254,7 @@ pub struct State {
     gss_transaction_history: bool,
     grpf_percentile: bool,
     requests_tx: mpsc::Sender<ReadRequest>,
-    upstream: Option<RpcClient>,
+    upstream: Option<RpcClientJsonrpc>,
     workers: Sender<WorkRequest>,
 }
 
@@ -287,12 +269,15 @@ impl State {
             stored_slots,
             body_limit: config.body_limit,
             request_timeout: config.request_timeout,
-            supported_calls: SupportedCalls::new(&config.calls)?,
+            supported_calls: SupportedCalls::new(&config.calls_jsonrpc)?,
             gsfa_limit: config.gsfa_limit,
             gss_transaction_history: config.gss_transaction_history,
             grpf_percentile: config.grpf_percentile,
             requests_tx,
-            upstream: config.upstream.map(RpcClient::new).transpose()?,
+            upstream: config
+                .upstream_jsonrpc
+                .map(RpcClientJsonrpc::new)
+                .transpose()?,
             workers,
         })
     }
@@ -304,27 +289,17 @@ pub async fn on_request(
 ) -> HttpResult<RpcResponse> {
     let (parts, body) = req.into_parts();
 
-    let x_subscription_id: Arc<str> = parts
-        .headers
-        .get("x-subscription-id")
-        .and_then(|value| value.to_str().ok().map(ToOwned::to_owned))
-        .unwrap_or_default()
-        .into();
-
-    // Same name as in Agave Rpc
-    let upstream_disabled = parts
-        .headers
-        .get("x-bigtable")
-        .is_some_and(|v| v == "disabled");
+    let x_subscription_id: Arc<str> = get_x_subscription_id(&parts.headers);
+    let upstream_disabled = get_x_bigtable_disabled(&parts.headers);
 
     let bytes = match Limited::new(body, state.body_limit).collect().await {
         Ok(body) => body.to_bytes(),
-        Err(error) => return response_400(error),
+        Err(error) => return response_400(format!("{error:?}\n"), None),
     };
 
     let requests = match RpcRequests::parse(&bytes) {
         Ok(requests) => requests,
-        Err(error) => return response_400(error),
+        Err(error) => return response_400(format!("{error:?}\n"), None),
     };
     let mut buffer = match requests {
         RpcRequests::Single(request) => match RpcRequest::process(
@@ -1183,7 +1158,7 @@ impl RpcRequestBlock {
                 )
                 .await
         } else {
-            Self::error_skipped(self.id, self.slot)
+            Self::error_skipped_long_term_storage(self.id, self.slot)
         }
     }
 
@@ -1195,6 +1170,13 @@ impl RpcRequestBlock {
     }
 
     fn error_skipped(id: Id<'static>, slot: Slot) -> RpcRequestResult {
+        Ok(jsonrpc_response_error_custom(
+            id,
+            RpcCustomError::SlotSkipped { slot },
+        ))
+    }
+
+    fn error_skipped_long_term_storage(id: Id<'static>, slot: Slot) -> RpcRequestResult {
         Ok(jsonrpc_response_error_custom(
             id,
             RpcCustomError::LongTermStorageSlotSkipped { slot },

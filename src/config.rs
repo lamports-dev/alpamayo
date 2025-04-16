@@ -284,8 +284,10 @@ pub struct ConfigRpc {
         with = "humantime_serde"
     )]
     pub request_timeout: Duration,
-    /// Supported RPC calls
-    pub calls: Vec<ConfigRpcCall>,
+    /// Supported Rest (GET) methods
+    pub calls_rest: Vec<ConfigRpcCallRest>,
+    /// Supported JSON-RPC calls
+    pub calls_jsonrpc: Vec<ConfigRpcCallJson>,
     /// Maximum number of Signatures in getSignaturesForAddress
     #[serde(
         default = "ConfigRpc::default_gsfa_limit",
@@ -304,9 +306,12 @@ pub struct ConfigRpc {
         deserialize_with = "deserialize_num_str"
     )]
     pub request_channel_capacity: usize,
-    /// In case of removed data upstream would be used to fetch block
+    /// In case of removed data upstream would be used to fetch data
     #[serde(default)]
-    pub upstream: Option<ConfigRpcUpstream>,
+    pub upstream_rest: Option<ConfigRpcUpstream>,
+    /// In case of removed data upstream would be used to fetch data
+    #[serde(default)]
+    pub upstream_jsonrpc: Option<ConfigRpcUpstream>,
     /// Thread pool to parse / encode data
     #[serde(default)]
     pub workers: ConfigRpcWorkers,
@@ -340,7 +345,14 @@ impl ConfigRpc {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub enum ConfigRpcCall {
+pub enum ConfigRpcCallRest {
+    GetBlock,
+    GetTransaction,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub enum ConfigRpcCallJson {
     GetBlock,
     GetBlockHeight,
     GetBlocks,
@@ -363,10 +375,8 @@ pub struct ConfigRpcUpstream {
     pub user_agent: String,
     #[serde(deserialize_with = "ConfigRpcUpstream::deserialize_version")]
     pub version: Version,
-    #[serde(deserialize_with = "deserialize_num_str")]
-    pub retries_max: usize,
     #[serde(with = "humantime_serde")]
-    pub retries_backoff_init: Duration,
+    pub timeout: Duration,
 }
 
 impl Default for ConfigRpcUpstream {
@@ -375,8 +385,7 @@ impl Default for ConfigRpcUpstream {
             endpoint: "http://127.0.0.1:8899".to_owned(),
             user_agent: format!("alpamayo/v{}", VERSION.package),
             version: Version::default(),
-            retries_max: 3,
-            retries_backoff_init: Duration::from_millis(100),
+            timeout: Duration::from_secs(30),
         }
     }
 }

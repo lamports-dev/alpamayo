@@ -1,7 +1,7 @@
 use {
     crate::{
         config::ConfigRpc,
-        rpc::{api_solana, workers},
+        rpc::{api_rest, api_solana, workers},
         storage::{read::ReadRequest, slots::StoredSlots},
     },
     futures::future::{TryFutureExt, ready},
@@ -28,6 +28,11 @@ pub async fn spawn(
     let listener = TcpListener::bind(config.endpoint).await?;
     info!("start server at: {}", config.endpoint);
 
+    let api_rest_state = Arc::new(api_rest::State::new(
+        &config,
+        stored_slots.clone(),
+        requests_tx.clone(),
+    )?);
     let api_solana_state = Arc::new(api_solana::State::new(
         config,
         stored_slots,
@@ -56,16 +61,25 @@ pub async fn spawn(
             };
 
             let service = service_fn({
+                let api_rest_state = Arc::clone(&api_rest_state);
                 let api_solana_state = Arc::clone(&api_solana_state);
                 move |req: Request<BodyIncoming>| {
+                    let api_rest_state = Arc::clone(&api_rest_state);
                     let api_solana_state = Arc::clone(&api_solana_state);
                     async move {
-                        match req.uri().path() {
-                            "/" => api_solana::on_request(req, api_solana_state).await,
-                            _ => Response::builder()
-                                .status(StatusCode::NOT_FOUND)
-                                .body(BodyEmpty::new().boxed()),
+                        // JSON-RPC
+                        if req.uri().path() == "/" {
+                            return api_solana::on_request(req, api_solana_state).await;
                         }
+
+                        // Rest (GET)
+                        if let Some(handler) = api_rest_state.get_handler(req) {
+                            return handler.await;
+                        }
+
+                        Response::builder()
+                            .status(StatusCode::NOT_FOUND)
+                            .body(BodyEmpty::new().boxed())
                     }
                 }
             });

@@ -142,6 +142,7 @@ dependencies = [
  "prost 0.11.9",
  "quanta",
  "rayon",
+ "regex",
  "reqwest 0.12.15",
  "richat-client",
  "richat-proto",
@@ -165,6 +166,7 @@ dependencies = [
  "tonic",
  "tracing",
  "tracing-subscriber",
+ "url",
  "vergen",
 ]
 

@@ -1,10 +1,16 @@
 use {
     crate::{
-        config::ConfigRpcUpstream, metrics::RPC_UPSTREAM_REQUESTS_TOTAL,
-        rpc::api_solana::RpcRequestBlocksUntil,
+        config::ConfigRpcUpstream,
+        metrics::RPC_UPSTREAM_REQUESTS_TOTAL,
+        rpc::{
+            api::{RpcResponse, X_ERROR, X_SUBSCRIPTION_ID},
+            api_solana::RpcRequestBlocksUntil,
+        },
     },
+    http_body_util::{BodyExt, Full as BodyFull},
+    hyper::http::Result as HttpResult,
     jsonrpsee_types::{Id, Response},
-    metrics::{Counter, counter},
+    metrics::counter,
     reqwest::{Client, StatusCode, Version, header::CONTENT_TYPE},
     serde_json::json,
     solana_rpc_client_api::config::{
@@ -15,34 +21,123 @@ use {
         clock::Slot, commitment_config::CommitmentConfig, pubkey::Pubkey, signature::Signature,
     },
     solana_transaction_status::{BlockEncodingOptions, UiTransactionEncoding},
-    std::{
-        sync::Arc,
-        time::{Duration, Instant},
-    },
-    tokio::time::{sleep, timeout_at},
+    std::{sync::Arc, time::Instant},
+    tokio::time::timeout_at,
+    url::Url,
 };
 
-type RpcClientResult = anyhow::Result<jsonrpsee_types::Response<'static, serde_json::Value>>;
+#[derive(Debug)]
+pub struct RpcClientRest {
+    client: Client,
+    url: Url,
+    version: Version,
+}
+
+impl RpcClientRest {
+    pub fn new(config: ConfigRpcUpstream) -> anyhow::Result<Self> {
+        let client = Client::builder()
+            .user_agent(config.user_agent)
+            .timeout(config.timeout)
+            .build()?;
+
+        Ok(Self {
+            client,
+            url: config.endpoint.parse()?,
+            version: config.version,
+        })
+    }
+
+    pub async fn get_block(
+        &self,
+        x_subscription_id: Arc<str>,
+        deadline: Instant,
+        slot: Slot,
+    ) -> anyhow::Result<HttpResult<RpcResponse>> {
+        counter!(
+            RPC_UPSTREAM_REQUESTS_TOTAL,
+            "x_subscription_id" => Arc::clone(&x_subscription_id),
+            "method" => "getBlock_rest",
+        )
+        .increment(1);
+
+        let mut url = self.url.clone();
+        let slot = slot.to_string();
+        if let Ok(mut segments) = url.path_segments_mut() {
+            segments.extend(&["blocks", &slot]);
+        }
+
+        self.call_with_timeout(url.as_str(), &x_subscription_id, deadline)
+            .await
+    }
+
+    async fn call_with_timeout(
+        &self,
+        url: &str,
+        x_subscription_id: &str,
+        deadline: Instant,
+    ) -> anyhow::Result<HttpResult<RpcResponse>> {
+        match timeout_at(deadline.into(), self.call(url, x_subscription_id)).await {
+            Ok(result) => result,
+            Err(_timeout) => anyhow::bail!("upstream timeout"),
+        }
+    }
+
+    async fn call(
+        &self,
+        url: &str,
+        x_subscription_id: &str,
+    ) -> anyhow::Result<HttpResult<RpcResponse>> {
+        let request = self
+            .client
+            .get(url)
+            .version(self.version)
+            .header(X_SUBSCRIPTION_ID, x_subscription_id);
+
+        let Ok(response) = request.send().await else {
+            anyhow::bail!("request to upstream failed");
+        };
+
+        let (status, x_error) = if response.status() == StatusCode::BAD_REQUEST {
+            (
+                StatusCode::BAD_REQUEST,
+                response.headers().get(X_ERROR).cloned(),
+            )
+        } else {
+            (StatusCode::OK, None)
+        };
+
+        let Ok(bytes) = response.bytes().await else {
+            anyhow::bail!("failed to collect bytes from upstream");
+        };
+
+        let mut response = hyper::Response::builder().status(status);
+        if let Some(x_error) = x_error {
+            response = response.header(X_ERROR, x_error);
+        }
+        Ok(response.body(BodyFull::from(bytes).boxed()))
+    }
+}
+
+type RpcClientJsonrpcResult = anyhow::Result<jsonrpsee_types::Response<'static, serde_json::Value>>;
 
 #[derive(Debug)]
-pub struct RpcClient {
+pub struct RpcClientJsonrpc {
     client: Client,
     endpoint: String,
     version: Version,
-    retries_max: usize,
-    retries_backoff_init: Duration,
 }
 
-impl RpcClient {
+impl RpcClientJsonrpc {
     pub fn new(config: ConfigRpcUpstream) -> anyhow::Result<Self> {
-        let client = Client::builder().user_agent(config.user_agent).build()?;
+        let client = Client::builder()
+            .user_agent(config.user_agent)
+            .timeout(config.timeout)
+            .build()?;
 
         Ok(Self {
             client,
             endpoint: config.endpoint,
             version: config.version,
-            retries_max: config.retries_max,
-            retries_backoff_init: config.retries_backoff_init,
         })
     }
 
@@ -56,15 +151,16 @@ impl RpcClient {
         commitment: CommitmentConfig,
         encoding: UiTransactionEncoding,
         encoding_options: BlockEncodingOptions,
-    ) -> RpcClientResult {
+    ) -> RpcClientJsonrpcResult {
+        counter!(
+            RPC_UPSTREAM_REQUESTS_TOTAL,
+            "x_subscription_id" => Arc::clone(&x_subscription_id),
+            "method" => "getBlock",
+        )
+        .increment(1);
+
         self.call_with_timeout(
-            counter!(
-                RPC_UPSTREAM_REQUESTS_TOTAL,
-                "x_subscription_id" => Arc::clone(&x_subscription_id),
-                "method" => "getBlock",
-            ),
             x_subscription_id.as_ref(),
-            deadline,
             serde_json::to_string(&json!({
                 "jsonrpc": "2.0",
                 "method": "getBlock",
@@ -79,6 +175,7 @@ impl RpcClient {
                 }]
             }))
             .expect("json serialization never fail"),
+            deadline,
         )
         .await
     }
@@ -91,20 +188,21 @@ impl RpcClient {
         start_slot: Slot,
         until: RpcRequestBlocksUntil,
         commitment: CommitmentConfig,
-    ) -> RpcClientResult {
+    ) -> RpcClientJsonrpcResult {
         let method = match until {
             RpcRequestBlocksUntil::EndSlot(_) => "getBlocks",
             RpcRequestBlocksUntil::Limit(_) => "getBlocksWithLimit",
         };
 
+        counter!(
+            RPC_UPSTREAM_REQUESTS_TOTAL,
+            "x_subscription_id" => Arc::clone(&x_subscription_id),
+            "method" => method,
+        )
+        .increment(1);
+
         self.call_with_timeout(
-            counter!(
-                RPC_UPSTREAM_REQUESTS_TOTAL,
-                "x_subscription_id" => Arc::clone(&x_subscription_id),
-                "method" => method,
-            ),
             x_subscription_id.as_ref(),
-            deadline,
             serde_json::to_string(&json!({
                 "jsonrpc": "2.0",
                 "method": method,
@@ -115,6 +213,7 @@ impl RpcClient {
                 }
             }))
             .expect("json serialization never fail"),
+            deadline,
         )
         .await
     }
@@ -125,15 +224,16 @@ impl RpcClient {
         deadline: Instant,
         id: &Id<'static>,
         slot: Slot,
-    ) -> RpcClientResult {
+    ) -> RpcClientJsonrpcResult {
+        counter!(
+            RPC_UPSTREAM_REQUESTS_TOTAL,
+            "x_subscription_id" => Arc::clone(&x_subscription_id),
+            "method" => "getBlockTime",
+        )
+        .increment(1);
+
         self.call_with_timeout(
-            counter!(
-                RPC_UPSTREAM_REQUESTS_TOTAL,
-                "x_subscription_id" => Arc::clone(&x_subscription_id),
-                "method" => "getBlockTime",
-            ),
             x_subscription_id.as_ref(),
-            deadline,
             serde_json::to_string(&json!({
                 "jsonrpc": "2.0",
                 "method": "getBlockTime",
@@ -141,6 +241,7 @@ impl RpcClient {
                 "params": [slot]
             }))
             .expect("json serialization never fail"),
+            deadline,
         )
         .await
     }
@@ -156,15 +257,16 @@ impl RpcClient {
         until: Option<Signature>,
         limit: usize,
         commitment: CommitmentConfig,
-    ) -> RpcClientResult {
+    ) -> RpcClientJsonrpcResult {
+        counter!(
+            RPC_UPSTREAM_REQUESTS_TOTAL,
+            "x_subscription_id" => Arc::clone(&x_subscription_id),
+            "method" => "getSignaturesForAddress",
+        )
+        .increment(1);
+
         self.call_with_timeout(
-            counter!(
-                RPC_UPSTREAM_REQUESTS_TOTAL,
-                "x_subscription_id" => Arc::clone(&x_subscription_id),
-                "method" => "getSignaturesForAddress",
-            ),
             x_subscription_id.as_ref(),
-            deadline,
             serde_json::to_string(&json!({
                 "jsonrpc": "2.0",
                 "method": "getSignaturesForAddress",
@@ -178,6 +280,7 @@ impl RpcClient {
                 }]
             }))
             .expect("json serialization never fail"),
+            deadline,
         )
         .await
     }
@@ -188,17 +291,18 @@ impl RpcClient {
         deadline: Instant,
         id: &Id<'static>,
         signatures: Vec<&Signature>,
-    ) -> RpcClientResult {
+    ) -> RpcClientJsonrpcResult {
         let signatures = signatures.iter().map(|s| s.to_string()).collect::<Vec<_>>();
 
+        counter!(
+            RPC_UPSTREAM_REQUESTS_TOTAL,
+            "x_subscription_id" => Arc::clone(&x_subscription_id),
+            "method" => "getSignatureStatuses",
+        )
+        .increment(1);
+
         self.call_with_timeout(
-            counter!(
-                RPC_UPSTREAM_REQUESTS_TOTAL,
-                "x_subscription_id" => Arc::clone(&x_subscription_id),
-                "method" => "getSignatureStatuses",
-            ),
             x_subscription_id.as_ref(),
-            deadline,
             serde_json::to_string(&json!({
                 "jsonrpc": "2.0",
                 "method": "getSignatureStatuses",
@@ -208,6 +312,7 @@ impl RpcClient {
                 }]
             }))
             .expect("json serialization never fail"),
+            deadline,
         )
         .await
     }
@@ -222,15 +327,16 @@ impl RpcClient {
         commitment: CommitmentConfig,
         encoding: UiTransactionEncoding,
         max_supported_transaction_version: Option<u8>,
-    ) -> RpcClientResult {
+    ) -> RpcClientJsonrpcResult {
+        counter!(
+            RPC_UPSTREAM_REQUESTS_TOTAL,
+            "x_subscription_id" => Arc::clone(&x_subscription_id),
+            "method" => "getTransaction",
+        )
+        .increment(1);
+
         self.call_with_timeout(
-            counter!(
-                RPC_UPSTREAM_REQUESTS_TOTAL,
-                "x_subscription_id" => Arc::clone(&x_subscription_id),
-                "method" => "getTransaction",
-            ),
             x_subscription_id.as_ref(),
-            deadline,
             serde_json::to_string(&json!({
                 "jsonrpc": "2.0",
                 "method": "getTransaction",
@@ -242,54 +348,24 @@ impl RpcClient {
                 }]
             }))
             .expect("json serialization never fail"),
+            deadline,
         )
         .await
     }
 
     async fn call_with_timeout(
         &self,
-        call_counter: Counter,
         x_subscription_id: &str,
-        deadline: Instant,
         body: String,
-    ) -> RpcClientResult {
-        match timeout_at(
-            deadline.into(),
-            self.call(call_counter, x_subscription_id, body),
-        )
-        .await
-        {
+        deadline: Instant,
+    ) -> RpcClientJsonrpcResult {
+        match timeout_at(deadline.into(), self.call(x_subscription_id, body)).await {
             Ok(result) => result,
             Err(_timeout) => anyhow::bail!("upstream timeout"),
         }
     }
 
-    async fn call(
-        &self,
-        call_counter: Counter,
-        x_subscription_id: &str,
-        body: String,
-    ) -> RpcClientResult {
-        let mut retries = self.retries_max;
-        let mut backoff = self.retries_backoff_init;
-        loop {
-            call_counter.increment(1);
-            match self.call2(x_subscription_id, body.clone()).await {
-                Ok(result) => return Ok(result),
-                Err(error) => {
-                    if retries == 0 {
-                        return Err(error);
-                    }
-
-                    sleep(backoff).await;
-                    retries -= 1;
-                    backoff *= 2;
-                }
-            }
-        }
-    }
-
-    async fn call2(&self, x_subscription_id: &str, body: String) -> RpcClientResult {
+    async fn call(&self, x_subscription_id: &str, body: String) -> RpcClientJsonrpcResult {
         let request = self
             .client
             .post(&self.endpoint)
