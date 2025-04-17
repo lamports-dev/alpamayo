@@ -3,7 +3,7 @@ use {
         config::ConfigRpcUpstream,
         metrics::RPC_UPSTREAM_REQUESTS_TOTAL,
         rpc::{
-            api::{RpcResponse, X_ERROR, X_SUBSCRIPTION_ID},
+            api::{RpcResponse, X_ERROR, X_SLOT, X_SUBSCRIPTION_ID},
             api_solana::RpcRequestBlocksUntil,
         },
     },
@@ -70,6 +70,29 @@ impl RpcClientRest {
             .await
     }
 
+    pub async fn get_transaction(
+        &self,
+        x_subscription_id: Arc<str>,
+        deadline: Instant,
+        signature: Signature,
+    ) -> anyhow::Result<HttpResult<RpcResponse>> {
+        counter!(
+            RPC_UPSTREAM_REQUESTS_TOTAL,
+            "x_subscription_id" => Arc::clone(&x_subscription_id),
+            "method" => "getTransaction_rest",
+        )
+        .increment(1);
+
+        let mut url = self.url.clone();
+        let signature = signature.to_string();
+        if let Ok(mut segments) = url.path_segments_mut() {
+            segments.extend(&["tx", &signature]);
+        }
+
+        self.call_with_timeout(url.as_str(), &x_subscription_id, deadline)
+            .await
+    }
+
     async fn call_with_timeout(
         &self,
         url: &str,
@@ -97,13 +120,18 @@ impl RpcClientRest {
             anyhow::bail!("request to upstream failed");
         };
 
-        let (status, x_error) = if response.status() == StatusCode::BAD_REQUEST {
+        let (status, x_slot, x_error) = if response.status() == StatusCode::BAD_REQUEST {
             (
                 StatusCode::BAD_REQUEST,
+                None,
                 response.headers().get(X_ERROR).cloned(),
             )
         } else {
-            (StatusCode::OK, None)
+            (
+                StatusCode::OK,
+                response.headers().get(X_SLOT).cloned(),
+                None,
+            )
         };
 
         let Ok(bytes) = response.bytes().await else {
@@ -111,6 +139,9 @@ impl RpcClientRest {
         };
 
         let mut response = hyper::Response::builder().status(status);
+        if let Some(x_slot) = x_slot {
+            response = response.header(X_SLOT, x_slot);
+        }
         if let Some(x_error) = x_error {
             response = response.header(X_ERROR, x_error);
         }

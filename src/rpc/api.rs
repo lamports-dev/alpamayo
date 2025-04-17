@@ -11,6 +11,7 @@ use {
 pub const X_SUBSCRIPTION_ID: &str = "x-subscription-id";
 pub const X_BIGTABLE: &str = "x-bigtable"; // Same name as in Agave Rpc
 pub const X_ERROR: &str = "x-error";
+pub const X_SLOT: &str = "x-slot";
 
 pub type RpcResponse = hyper::Response<BoxBody<Bytes, std::convert::Infallible>>;
 

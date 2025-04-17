@@ -14,6 +14,8 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Features
 
+- rpc: support rest for block and tx ([#26](https://github.com/lamports-dev/alpamayo/pull/26))
+
 ### Breaking
 
 ## [0.1.0] - 2025-04-14

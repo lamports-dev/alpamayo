@@ -1,21 +1,23 @@
 use {
     crate::{
         config::{ConfigRpc, ConfigRpcCallRest},
+        metrics::RPC_REQUESTS_TOTAL,
         rpc::{
             api::{
-                RpcResponse, check_call_support, get_x_bigtable_disabled, get_x_subscription_id,
-                response_400, response_500,
+                RpcResponse, X_SLOT, check_call_support, get_x_bigtable_disabled,
+                get_x_subscription_id, response_400, response_500,
             },
             upstream::RpcClientRest,
         },
         storage::{
-            read::{ReadRequest, ReadResultBlock},
+            read::{ReadRequest, ReadResultBlock, ReadResultTransaction},
             slots::StoredSlots,
         },
     },
     futures::future::BoxFuture,
     http_body_util::{BodyExt, Full as BodyFull},
     hyper::{body::Incoming as BodyIncoming, http::Result as HttpResult},
+    metrics::counter,
     regex::Regex,
     solana_sdk::{clock::Slot, signature::Signature},
     std::{
@@ -113,10 +115,17 @@ impl State {
         req: hyper::Request<BodyIncoming>,
         slot: Slot,
     ) -> anyhow::Result<HttpResult<RpcResponse>> {
+        let deadline = Instant::now() + self.request_timeout;
+
         let x_subscription_id = get_x_subscription_id(req.headers());
         let upstream_disabled = get_x_bigtable_disabled(req.headers());
 
-        let deadline = Instant::now() + self.request_timeout;
+        counter!(
+            RPC_REQUESTS_TOTAL,
+            "x_subscription_id" => Arc::clone(&x_subscription_id),
+            "method" => "getBlock_rest",
+        )
+        .increment(1);
 
         // check slot before sending request
         let slot_tip = self.stored_slots.confirmed_load();
@@ -213,6 +222,91 @@ impl State {
         req: hyper::Request<BodyIncoming>,
         signature: Signature,
     ) -> anyhow::Result<HttpResult<RpcResponse>> {
-        todo!()
+        let deadline = Instant::now() + self.request_timeout;
+
+        let x_subscription_id = get_x_subscription_id(req.headers());
+        let upstream_disabled = get_x_bigtable_disabled(req.headers());
+
+        counter!(
+            RPC_REQUESTS_TOTAL,
+            "x_subscription_id" => Arc::clone(&x_subscription_id),
+            "method" => "getTransaction_rest",
+        )
+        .increment(1);
+
+        // request
+        let (tx, rx) = oneshot::channel();
+        anyhow::ensure!(
+            self.requests_tx
+                .send(ReadRequest::Transaction {
+                    deadline,
+                    signature,
+                    tx,
+                    x_subscription_id: Arc::clone(&x_subscription_id),
+                })
+                .await
+                .is_ok(),
+            "request channel is closed"
+        );
+        let Ok(result) = rx.await else {
+            anyhow::bail!("rx channel is closed");
+        };
+        let (slot, bytes) = match result {
+            ReadResultTransaction::Timeout => anyhow::bail!("timeout"),
+            ReadResultTransaction::NotFound => {
+                return self
+                    .get_transaction_upstream(
+                        upstream_disabled,
+                        x_subscription_id,
+                        deadline,
+                        signature,
+                    )
+                    .await;
+            }
+            ReadResultTransaction::Transaction {
+                slot,
+                block_time: _,
+                bytes,
+            } => (slot, bytes),
+            ReadResultTransaction::ReadError(error) => anyhow::bail!("read error: {error}"),
+        };
+
+        // verify that we still have data for that block (i.e. we read correct data)
+        if slot <= self.stored_slots.first_available_load() {
+            return self
+                .get_transaction_upstream(upstream_disabled, x_subscription_id, deadline, signature)
+                .await;
+        }
+
+        Ok(hyper::Response::builder()
+            .header(X_SLOT, slot)
+            .body(BodyFull::from(bytes).boxed()))
+    }
+
+    async fn get_transaction_upstream(
+        &self,
+        upstream_disabled: bool,
+        x_subscription_id: Arc<str>,
+        deadline: Instant,
+        signature: Signature,
+    ) -> anyhow::Result<HttpResult<RpcResponse>> {
+        if let Some(upstream) = (!upstream_disabled)
+            .then_some(self.upstream.as_ref())
+            .flatten()
+        {
+            upstream
+                .get_transaction(x_subscription_id, deadline, signature)
+                .await
+        } else {
+            Self::transaction_error_history_not_available()
+        }
+    }
+
+    fn transaction_error_history_not_available() -> anyhow::Result<HttpResult<RpcResponse>> {
+        let msg = "Transaction history is not available from this node\n".to_owned();
+        Ok(response_400(
+            msg,
+            Some("TransactionHistoryNotAvailable".into()),
+        ))
     }
 }
