@@ -285,8 +285,10 @@ pub struct ConfigRpc {
     )]
     pub request_timeout: Duration,
     /// Supported Rest (GET) methods
+    #[serde(default)]
     pub calls_rest: Vec<ConfigRpcCallRest>,
     /// Supported JSON-RPC calls
+    #[serde(default)]
     pub calls_jsonrpc: Vec<ConfigRpcCallJson>,
     /// Maximum number of Signatures in getSignaturesForAddress
     #[serde(

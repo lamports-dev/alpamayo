@@ -526,6 +526,7 @@ enum WriteRequest {
     },
     SlotRemove {
         slot: Slot,
+        dead: bool,
         tx: oneshot::Sender<anyhow::Result<()>>,
     },
 }
@@ -614,8 +615,8 @@ impl RocksdbWrite {
                         break;
                     }
                 }
-                WriteRequest::SlotRemove { slot, tx } => {
-                    if tx.send(Self::spawn_remove_slot(&db, slot)).is_err() {
+                WriteRequest::SlotRemove { slot, dead, tx } => {
+                    if tx.send(Self::spawn_remove_slot(&db, slot, dead)).is_err() {
                         break;
                     }
                 }
@@ -623,34 +624,38 @@ impl RocksdbWrite {
         }
     }
 
-    fn spawn_remove_slot(db: &DB, slot: Slot) -> anyhow::Result<()> {
-        let value = db
-            .get_pinned_cf(
-                Rocksdb::cf_handle::<SlotExtraIndex>(db),
-                SlotExtraIndex::key(slot),
-            )
-            .context("failed to get existed slot")?
-            .ok_or_else(|| anyhow::anyhow!("existed slot {slot} not found"))?;
-        let block = SlotExtraIndexValue::decode(&value).context("failed to decode slot data")?;
-
+    fn spawn_remove_slot(db: &DB, slot: Slot, dead: bool) -> anyhow::Result<()> {
         let mut batch = WriteBatch::with_capacity_bytes(128 * 1024); // 128KiB
         batch.delete_cf(
             Rocksdb::cf_handle::<SlotBasicIndex>(db),
             SlotBasicIndex::key(slot),
         );
-        batch.delete_cf(
-            Rocksdb::cf_handle::<SlotExtraIndex>(db),
-            SlotExtraIndex::key(slot),
-        );
-        for hash in block.transactions {
-            batch.delete_cf(Rocksdb::cf_handle::<TransactionIndex>(db), hash);
-        }
-        for hash in block.sfa {
+
+        if !dead {
+            let value = db
+                .get_pinned_cf(
+                    Rocksdb::cf_handle::<SlotExtraIndex>(db),
+                    SlotExtraIndex::key(slot),
+                )
+                .context("failed to get existed slot")?
+                .ok_or_else(|| anyhow::anyhow!("existed slot {slot} not found"))?;
+            let block =
+                SlotExtraIndexValue::decode(&value).context("failed to decode slot data")?;
             batch.delete_cf(
-                Rocksdb::cf_handle::<SfaIndex>(db),
-                SfaIndex::concat(hash, slot),
+                Rocksdb::cf_handle::<SlotExtraIndex>(db),
+                SlotExtraIndex::key(slot),
             );
+            for hash in block.transactions {
+                batch.delete_cf(Rocksdb::cf_handle::<TransactionIndex>(db), hash);
+            }
+            for hash in block.sfa {
+                batch.delete_cf(
+                    Rocksdb::cf_handle::<SfaIndex>(db),
+                    SfaIndex::concat(hash, slot),
+                );
+            }
         }
+
         db.write(batch).map_err(Into::into)
     }
 
@@ -755,6 +760,7 @@ impl RocksdbWrite {
         self.req_tx
             .send(WriteRequest::SlotRemove {
                 slot: block.slot,
+                dead: block.dead,
                 tx,
             })
             .context("failed to send WriteRequest::SlotRemove request")?;
