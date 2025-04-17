@@ -9,7 +9,7 @@ use {
 };
 
 pub const X_SUBSCRIPTION_ID: &str = "x-subscription-id";
-pub const X_BIGTABLE: &str = "x-bigtable"; // Same name as in Agave Rpc
+pub const X_BIGTABLE: &str = "x-bigtable"; // https://github.com/anza-xyz/agave/blob/v2.2.10/rpc/src/rpc_service.rs#L554
 pub const X_ERROR: &str = "x-error";
 pub const X_SLOT: &str = "x-slot";
 
