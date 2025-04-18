@@ -63,7 +63,7 @@ impl RpcClientRest {
         let mut url = self.url.clone();
         let slot = slot.to_string();
         if let Ok(mut segments) = url.path_segments_mut() {
-            segments.extend(&["blocks", &slot]);
+            segments.extend(&["block", &slot]);
         }
 
         self.call_with_timeout(url.as_str(), &x_subscription_id, deadline)
@@ -192,7 +192,7 @@ impl RpcClientJsonrpc {
 
         self.call_with_timeout(
             x_subscription_id.as_ref(),
-            serde_json::to_string(&json!({
+            json!({
                 "jsonrpc": "2.0",
                 "method": "getBlock",
                 "id": id,
@@ -204,8 +204,8 @@ impl RpcClientJsonrpc {
                     max_supported_transaction_version: encoding_options
                         .max_supported_transaction_version,
                 }]
-            }))
-            .expect("json serialization never fail"),
+            })
+            .to_string(),
             deadline,
         )
         .await
@@ -234,7 +234,7 @@ impl RpcClientJsonrpc {
 
         self.call_with_timeout(
             x_subscription_id.as_ref(),
-            serde_json::to_string(&json!({
+            json!({
                 "jsonrpc": "2.0",
                 "method": method,
                 "id": id,
@@ -242,8 +242,8 @@ impl RpcClientJsonrpc {
                     RpcRequestBlocksUntil::EndSlot(end_slot) => json!([start_slot, end_slot, commitment]),
                     RpcRequestBlocksUntil::Limit(limit) => json!([start_slot, limit, commitment]),
                 }
-            }))
-            .expect("json serialization never fail"),
+            })
+            .to_string(),
             deadline,
         )
         .await
@@ -265,13 +265,13 @@ impl RpcClientJsonrpc {
 
         self.call_with_timeout(
             x_subscription_id.as_ref(),
-            serde_json::to_string(&json!({
+            json!({
                 "jsonrpc": "2.0",
                 "method": "getBlockTime",
                 "id": id,
                 "params": [slot]
-            }))
-            .expect("json serialization never fail"),
+            })
+            .to_string(),
             deadline,
         )
         .await
@@ -298,7 +298,7 @@ impl RpcClientJsonrpc {
 
         self.call_with_timeout(
             x_subscription_id.as_ref(),
-            serde_json::to_string(&json!({
+            json!({
                 "jsonrpc": "2.0",
                 "method": "getSignaturesForAddress",
                 "id": id,
@@ -309,8 +309,8 @@ impl RpcClientJsonrpc {
                     commitment: Some(commitment),
                     min_context_slot: None,
                 }]
-            }))
-            .expect("json serialization never fail"),
+            })
+            .to_string(),
             deadline,
         )
         .await
@@ -334,15 +334,15 @@ impl RpcClientJsonrpc {
 
         self.call_with_timeout(
             x_subscription_id.as_ref(),
-            serde_json::to_string(&json!({
+            json!({
                 "jsonrpc": "2.0",
                 "method": "getSignatureStatuses",
                 "id": id,
                 "params": [signatures, RpcSignatureStatusConfig {
                     search_transaction_history: true
                 }]
-            }))
-            .expect("json serialization never fail"),
+            })
+            .to_string(),
             deadline,
         )
         .await
@@ -368,7 +368,7 @@ impl RpcClientJsonrpc {
 
         self.call_with_timeout(
             x_subscription_id.as_ref(),
-            serde_json::to_string(&json!({
+            json!({
                 "jsonrpc": "2.0",
                 "method": "getTransaction",
                 "id": id,
@@ -377,8 +377,8 @@ impl RpcClientJsonrpc {
                     commitment: Some(commitment),
                     max_supported_transaction_version,
                 }]
-            }))
-            .expect("json serialization never fail"),
+            })
+            .to_string(),
             deadline,
         )
         .await
