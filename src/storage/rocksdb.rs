@@ -897,10 +897,11 @@ impl RocksdbRead {
                 size: value.size,
             });
 
-            if let Some(current_slot) = current_slot {
-                if current_slot + 1 != slot {
-                    tracing::warn!(current_slot, slot, "hole"); // TODO: replace to anyhow
-                }
+            if let Some(next_slot) = current_slot.map(|slot| slot + 1) {
+                anyhow::ensure!(
+                    next_slot == slot,
+                    "failed to load slots from index, found a hole: {slot}, expected {next_slot}"
+                );
             }
             current_slot = Some(slot);
         }
