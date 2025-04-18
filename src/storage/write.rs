@@ -243,6 +243,16 @@ async fn start2(
         let mut next_confirmed_slot_last_update = Instant::now();
         let mut next_rpc_request_slot = slot + 1;
         let mut next_database_slot = slot + 1;
+        info!(
+            slot_db = next_database_slot,
+            slot_node = next_confirmed_slot,
+            diff = next_confirmed_slot - next_database_slot,
+            "initiate node catch-up process"
+        );
+        anyhow::ensure!(
+            next_database_slot <= next_confirmed_slot,
+            "node is outdated"
+        );
 
         loop {
             // update confirmed slot every 3s
@@ -252,6 +262,12 @@ async fn start2(
                     Err(error) => return Err(error.into()),
                 };
                 next_confirmed_slot_last_update = Instant::now();
+                info!(
+                    slot_db = next_database_slot,
+                    slot_node = next_confirmed_slot,
+                    diff = next_confirmed_slot - next_database_slot,
+                    "trying to catch-up the node"
+                );
             }
 
             // break if we are close enough

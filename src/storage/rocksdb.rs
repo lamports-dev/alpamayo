@@ -16,6 +16,7 @@ use {
         bytes::Buf,
         encoding::{decode_varint, encode_varint},
     },
+    quanta::Instant,
     rocksdb::{
         ColumnFamily, ColumnFamilyDescriptor, DB, DBCompressionType, Direction, IteratorMode,
         Options, WriteBatch,
@@ -34,6 +35,7 @@ use {
         thread::{Builder, JoinHandle},
     },
     tokio::sync::{broadcast, oneshot},
+    tracing::info,
 };
 
 thread_local! {
@@ -666,6 +668,13 @@ impl RocksdbWrite {
         files: &mut StorageFilesWrite,
         blocks: &mut StoredBlocksWrite,
     ) -> anyhow::Result<()> {
+        if let Some(next_slot) = blocks.get_latest_slot().map(|slot| slot + 1) {
+            anyhow::ensure!(
+                next_slot == slot,
+                "trying to push invalid slot: {slot}, expected {next_slot}"
+            );
+        }
+
         // get some space if we reached blocks limit
         if blocks.is_full() {
             self.pop_block(files, blocks).await?;
@@ -868,23 +877,32 @@ impl RocksdbRead {
 
     fn spawn_slots(db: &DB) -> anyhow::Result<Vec<StoredBlock>> {
         let mut slots = vec![];
+        let mut current_slot = None;
         for item in db.iterator_cf(
             Rocksdb::cf_handle::<SlotBasicIndex>(db),
             IteratorMode::Start,
         ) {
             let (key, value) = item.context("failed to get next item")?;
+            let slot = SlotBasicIndex::decode(&key).context("failed to decode slot key")?;
             let value =
                 SlotBasicIndexValue::decode(&value).context("failed to decode slot data")?;
             slots.push(StoredBlock {
                 exists: true,
                 dead: value.dead,
-                slot: SlotBasicIndex::decode(&key).context("failed to decode slot key")?,
+                slot,
                 block_time: value.block_time,
                 block_height: value.block_height,
                 storage_id: value.storage_id,
                 offset: value.offset,
                 size: value.size,
             });
+
+            if let Some(current_slot) = current_slot {
+                if current_slot + 1 != slot {
+                    tracing::warn!(current_slot, slot, "hole"); // TODO: replace to anyhow
+                }
+            }
+            current_slot = Some(slot);
         }
         Ok(slots)
     }
@@ -969,8 +987,12 @@ impl RocksdbRead {
             .send(ReadRequest::Slots { tx })
             .context("failed to send ReadRequest::Slots request")?;
         Ok(Box::pin(async move {
-            rx.await
-                .context("failed to get ReadRequest::Slots request result")?
+            let ts = Instant::now();
+            let slots = rx
+                .await
+                .context("failed to get ReadRequest::Slots request result")?;
+            info!(elapsed = ?ts.elapsed(), "read slot index");
+            slots
         }))
     }
 
