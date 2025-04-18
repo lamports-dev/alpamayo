@@ -272,6 +272,7 @@ async fn start2(
 
             // break if we are close enough
             if next_database_slot + 2 >= next_confirmed_slot {
+                next_confirmed_slot = next_database_slot;
                 break;
             }
 

@@ -14,9 +14,17 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Features
 
-- rpc: support HTTP/GET `/version` ([#28](https://github.com/lamports-dev/alpamayo/pull/28))
-
 ### Breaking
+
+## [0.2.1] - 2025-04-18
+
+### Fixes
+
+- storage: fix catch-up on startup ([#28](https://github.com/lamports-dev/alpamayo/pull/28))
+
+### Features
+
+- rpc: support HTTP/GET `/version` ([#28](https://github.com/lamports-dev/alpamayo/pull/28))
 
 ## [0.2.0] - 2025-04-17
 
