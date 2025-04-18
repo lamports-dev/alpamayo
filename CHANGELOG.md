@@ -14,6 +14,8 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Features
 
+- bench: add received size ([#29](https://github.com/lamports-dev/alpamayo/pull/29))
+
 ### Breaking
 
 ## [0.2.1] - 2025-04-17

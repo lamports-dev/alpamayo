@@ -3,6 +3,7 @@ use {
     anyhow::Context,
     clap::Parser,
     futures::future::{FutureExt, TryFutureExt, ready, try_join_all},
+    quanta::Instant,
     richat_shared::shutdown::Shutdown,
     signal_hook::{consts::SIGINT, iterator::Signals},
     std::{
@@ -62,8 +63,10 @@ fn main() -> anyhow::Result<()> {
     let (read_requests_tx, read_requests_rx) = mpsc::channel(config.rpc.request_channel_capacity);
 
     // Open Rocksdb for slots and indexes
+    let ts = Instant::now();
     let (db_write, db_read, db_threads) =
         storage::rocksdb::Rocksdb::open(config.storage.rocksdb.clone(), sync_tx.clone())?;
+    info!(elapsed = ?ts.elapsed(), "rocksdb opened");
     threads.extend(db_threads);
 
     // Create source runtime
