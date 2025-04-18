@@ -5,7 +5,7 @@ use {
         rpc::{
             api::{
                 RpcResponse, X_SLOT, check_call_support, get_x_bigtable_disabled,
-                get_x_subscription_id, response_400, response_500,
+                get_x_subscription_id, response_200, response_400, response_500,
             },
             upstream::RpcClientRest,
         },
@@ -13,6 +13,7 @@ use {
             read::{ReadRequest, ReadResultBlock, ReadResultTransaction},
             slots::StoredSlots,
         },
+        version::VERSION,
     },
     futures::future::BoxFuture,
     http_body_util::{BodyExt, Full as BodyFull},
@@ -105,6 +106,19 @@ impl State {
                     }));
                 }
             }
+        }
+
+        if path == "/version" {
+            return Some(Box::pin(async move {
+                response_200(
+                    serde_json::json!({
+                        "version": VERSION.version,
+                        "solana": VERSION.solana,
+                        "git": VERSION.git,
+                    })
+                    .to_string(),
+                )
+            }));
         }
 
         None

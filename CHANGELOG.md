@@ -14,6 +14,8 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Features
 
+- rpc: support HTTP/GET `/version` ([#28](https://github.com/lamports-dev/alpamayo/pull/28))
+
 ### Breaking
 
 ## [0.2.0] - 2025-04-17

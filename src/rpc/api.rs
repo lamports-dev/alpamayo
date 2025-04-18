@@ -1,8 +1,9 @@
 use {
-    http_body_util::{BodyExt, combinators::BoxBody},
+    http_body_util::{BodyExt, Full as BodyFull, combinators::BoxBody},
     hyper::{
         HeaderMap, StatusCode,
         body::{Body, Bytes},
+        header::CONTENT_TYPE,
         http::Result as HttpResult,
     },
     std::{fmt, sync::Arc},
@@ -31,6 +32,12 @@ pub fn get_x_subscription_id(headers: &HeaderMap) -> Arc<str> {
 
 pub fn get_x_bigtable_disabled(headers: &HeaderMap) -> bool {
     headers.get(X_BIGTABLE).is_some_and(|v| v == "disabled")
+}
+
+pub fn response_200<D: Into<Bytes>>(data: D) -> HttpResult<RpcResponse> {
+    hyper::Response::builder()
+        .header(CONTENT_TYPE, "application/json; charset=utf-8")
+        .body(BodyFull::from(data.into()).boxed())
 }
 
 pub fn response_400<B>(body: B, x_error: Option<Vec<u8>>) -> HttpResult<RpcResponse>

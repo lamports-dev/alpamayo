@@ -26,8 +26,9 @@ Please use issues only for reporting bugs or discussing feature-related topics. 
 
 ### Extra methods:
 
-- [ ] `getBlockProtobuf`
-- [ ] `getVersionAlpamayo`
+- [x] `/block/${slot}`
+- [x] `/tx/${signature}`
+- [x] `/version`
 
 ## Blueprint
 

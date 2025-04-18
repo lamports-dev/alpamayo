@@ -8,7 +8,7 @@ use {
         rpc::{
             api::{
                 RpcResponse, check_call_support, get_x_bigtable_disabled, get_x_subscription_id,
-                response_400, response_500,
+                response_200, response_400, response_500,
             },
             upstream::RpcClientJsonrpc,
             workers::WorkRequest,
@@ -26,10 +26,9 @@ use {
     anyhow::Context,
     crossbeam::channel::{Sender, TrySendError},
     futures::stream::{FuturesOrdered, StreamExt},
-    http_body_util::{BodyExt, Full as BodyFull, Limited},
+    http_body_util::{BodyExt, Limited},
     hyper::{
         body::{Bytes, Incoming as BodyIncoming},
-        header::CONTENT_TYPE,
         http::Result as HttpResult,
     },
     jsonrpsee_types::{
@@ -83,12 +82,6 @@ pub struct RpcRecentPrioritizationFeesConfig {
 }
 
 type RpcRequestResult = anyhow::Result<Response<'static, serde_json::Value>>;
-
-fn response_200<D: Into<Bytes>>(data: D) -> HttpResult<RpcResponse> {
-    hyper::Response::builder()
-        .header(CONTENT_TYPE, "application/json; charset=utf-8")
-        .body(BodyFull::from(data.into()).boxed())
-}
 
 fn jsonrpc_response_success(
     id: Id<'_>,
