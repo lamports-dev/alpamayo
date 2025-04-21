@@ -3,7 +3,7 @@ use {
         config::ConfigRpcUpstream,
         metrics::RPC_UPSTREAM_REQUESTS_TOTAL,
         rpc::{
-            api::{RpcResponse, X_ERROR, X_SLOT, X_SUBSCRIPTION_ID},
+            api::{X_ERROR, X_SLOT},
             api_solana::RpcRequestBlocksUntil,
         },
     },
@@ -12,6 +12,7 @@ use {
     jsonrpsee_types::{Id, Response},
     metrics::counter,
     reqwest::{Client, StatusCode, Version, header::CONTENT_TYPE},
+    richat_shared::jsonrpc::helpers::{RpcResponse, X_SUBSCRIPTION_ID},
     serde_json::json,
     solana_rpc_client_api::config::{
         RpcBlockConfig, RpcSignatureStatusConfig, RpcSignaturesForAddressConfig,
