@@ -4,7 +4,7 @@ use {
         metrics::RPC_UPSTREAM_REQUESTS_TOTAL,
         rpc::{
             api::{X_ERROR, X_SLOT},
-            api_solana::RpcRequestBlocksUntil,
+            api_jsonrpc::RpcRequestBlocksUntil,
         },
     },
     http_body_util::{BodyExt, Full as BodyFull},

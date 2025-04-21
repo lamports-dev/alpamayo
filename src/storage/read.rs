@@ -1,7 +1,7 @@
 use {
     crate::{
         metrics::{READ_DISK_SECONDS_TOTAL, duration_to_seconds},
-        rpc::api_solana::RpcRequestBlocksUntil,
+        rpc::api_jsonrpc::RpcRequestBlocksUntil,
         source::{block::BlockWithBinary, fees::TransactionsFees},
         storage::{
             blocks::{StorageBlockLocationResult, StoredBlocksRead},

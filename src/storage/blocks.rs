@@ -1,6 +1,6 @@
 use {
     crate::{
-        rpc::api_solana::RpcRequestBlocksUntil,
+        rpc::api_jsonrpc::RpcRequestBlocksUntil,
         storage::{files::StorageId, slots::StoredSlots, sync::ReadWriteSyncMessage},
         util::HashMap,
     },

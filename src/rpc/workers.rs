@@ -1,7 +1,7 @@
 use {
     crate::{
         config::ConfigRpcWorkers,
-        rpc::api_solana::{RpcRequestBlockWorkRequest, RpcRequestTransactionWorkRequest},
+        rpc::api_jsonrpc::{RpcRequestBlockWorkRequest, RpcRequestTransactionWorkRequest},
     },
     crossbeam::channel::{self, Receiver, RecvTimeoutError, Sender},
     futures::future::{BoxFuture, FutureExt, TryFutureExt, try_join_all},
