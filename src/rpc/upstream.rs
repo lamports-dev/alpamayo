@@ -28,13 +28,13 @@ use {
 };
 
 #[derive(Debug)]
-pub struct RpcClientRest {
+pub struct RpcClientHttpget {
     client: Client,
     url: Url,
     version: Version,
 }
 
-impl RpcClientRest {
+impl RpcClientHttpget {
     pub fn new(config: ConfigRpcUpstream) -> anyhow::Result<Self> {
         let client = Client::builder()
             .user_agent(config.user_agent)

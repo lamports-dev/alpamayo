@@ -1,7 +1,7 @@
 use {
     crate::{
         config::ConfigRpc,
-        rpc::{api_rest, api_jsonrpc, workers},
+        rpc::{api_httpget, api_jsonrpc, workers},
         storage::{read::ReadRequest, slots::StoredSlots},
     },
     futures::future::{TryFutureExt, ready},
@@ -28,7 +28,7 @@ pub async fn spawn(
     let listener = TcpListener::bind(config.endpoint).await?;
     info!("start server at: {}", config.endpoint);
 
-    let api_rest_state = Arc::new(api_rest::State::new(
+    let api_httpget_state = Arc::new(api_httpget::State::new(
         &config,
         stored_slots.clone(),
         requests_tx.clone(),
@@ -61,10 +61,10 @@ pub async fn spawn(
             };
 
             let service = service_fn({
-                let api_rest_state = Arc::clone(&api_rest_state);
+                let api_httpget_state = Arc::clone(&api_httpget_state);
                 let api_jsonrpc_processor = Arc::clone(&api_jsonrpc_processor);
                 move |req: Request<BodyIncoming>| {
-                    let api_rest_state = Arc::clone(&api_rest_state);
+                    let api_httpget_state = Arc::clone(&api_httpget_state);
                     let api_jsonrpc_processor = Arc::clone(&api_jsonrpc_processor);
                     async move {
                         // JSON-RPC
@@ -72,8 +72,8 @@ pub async fn spawn(
                             return api_jsonrpc_processor.on_request(req).await;
                         }
 
-                        // Rest (GET)
-                        if let Some(handler) = api_rest_state.get_handler(req) {
+                        // Http/Get
+                        if let Some(handler) = api_httpget_state.get_handler(req) {
                             return handler.await;
                         }
 

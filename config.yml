@@ -60,7 +60,7 @@ rpc:
     affinity: 5-6
   body_limit: 50KiB
   request_timeout: 60s
-  calls_rest:
+  calls_httpget:
     - getBlock
     - getTransaction
   calls_jsonrpc:
@@ -81,18 +81,16 @@ rpc:
   gss_transaction_history: true
   grpf_percentile: true
   request_channel_capacity: 4096
-  upstream_rest:
+  upstream_httpget:
     endpoint: http://127.0.0.1:8899
     user_agent: alpamayo/v0.1.0
     version: HTTP/1.1
-    retries_max: 3
-    retries_backoff_init: 100ms
+    timeout: 30s
   upstream_jsonrpc:
     endpoint: http://127.0.0.1:8899
     user_agent: alpamayo/v0.1.0
     version: HTTP/1.1
-    retries_max: 3
-    retries_backoff_init: 100ms
+    timeout: 30s
   workers:
     threads: 8 # default is number of CPUs
     affinity: 7-14 # no affinity by default

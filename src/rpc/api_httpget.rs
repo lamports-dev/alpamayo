@@ -1,9 +1,9 @@
 use {
     crate::{
-        config::{ConfigRpc, ConfigRpcCallRest},
+        config::{ConfigRpc, ConfigRpcCallHttpGet},
         rpc::{
             api::{X_ERROR, X_SLOT, check_call_support},
-            upstream::RpcClientRest,
+            upstream::RpcClientHttpget,
         },
         storage::{
             read::{ReadRequest, ReadResultBlock, ReadResultTransaction},
@@ -42,12 +42,12 @@ struct SupportedCalls {
 }
 
 impl SupportedCalls {
-    fn new(calls: &[ConfigRpcCallRest]) -> anyhow::Result<Self> {
+    fn new(calls: &[ConfigRpcCallHttpGet]) -> anyhow::Result<Self> {
         Ok(Self {
-            get_block: check_call_support(calls, ConfigRpcCallRest::GetBlock)?
+            get_block: check_call_support(calls, ConfigRpcCallHttpGet::GetBlock)?
                 .then(|| Regex::new(r"^/block/(\d{1,9})/?$"))
                 .transpose()?,
-            get_transaction: check_call_support(calls, ConfigRpcCallRest::GetTransaction)?
+            get_transaction: check_call_support(calls, ConfigRpcCallHttpGet::GetTransaction)?
                 .then(|| Regex::new(r"^/tx/([1-9A-HJ-NP-Za-km-z]{64,88})/?$"))
                 .transpose()?,
         })
@@ -60,7 +60,7 @@ pub struct State {
     request_timeout: Duration,
     supported_calls: SupportedCalls,
     requests_tx: mpsc::Sender<ReadRequest>,
-    upstream: Option<RpcClientRest>,
+    upstream: Option<RpcClientHttpget>,
 }
 
 impl State {
@@ -72,12 +72,12 @@ impl State {
         Ok(Self {
             stored_slots,
             request_timeout: config.request_timeout,
-            supported_calls: SupportedCalls::new(&config.calls_rest)?,
+            supported_calls: SupportedCalls::new(&config.calls_httpget)?,
             requests_tx,
             upstream: config
-                .upstream_rest
+                .upstream_httpget
                 .clone()
-                .map(RpcClientRest::new)
+                .map(RpcClientHttpget::new)
                 .transpose()?,
         })
     }

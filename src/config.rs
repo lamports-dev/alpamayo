@@ -284,9 +284,9 @@ pub struct ConfigRpc {
         with = "humantime_serde"
     )]
     pub request_timeout: Duration,
-    /// Supported Rest (GET) methods
+    /// Supported Http/Get methods
     #[serde(default)]
-    pub calls_rest: Vec<ConfigRpcCallRest>,
+    pub calls_httpget: Vec<ConfigRpcCallHttpGet>,
     /// Supported JSON-RPC calls
     #[serde(default)]
     pub calls_jsonrpc: Vec<ConfigRpcCallJson>,
@@ -310,7 +310,7 @@ pub struct ConfigRpc {
     pub request_channel_capacity: usize,
     /// In case of removed data upstream would be used to fetch data
     #[serde(default)]
-    pub upstream_rest: Option<ConfigRpcUpstream>,
+    pub upstream_httpget: Option<ConfigRpcUpstream>,
     /// In case of removed data upstream would be used to fetch data
     #[serde(default)]
     pub upstream_jsonrpc: Option<ConfigRpcUpstream>,
@@ -347,7 +347,7 @@ impl ConfigRpc {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub enum ConfigRpcCallRest {
+pub enum ConfigRpcCallHttpGet {
     GetBlock,
     GetTransaction,
 }
