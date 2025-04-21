@@ -177,7 +177,7 @@ impl StreamSource {
         let mut connection = config.config.connect().await?;
 
         let version = connection.get_version().await?;
-        info!(version = version.version, "connected to Stream");
+        info!(version = version.version, "connected to stream");
 
         let stream = match config.source {
             ConfigSourceStreamKind::DragonsMouth => connection
