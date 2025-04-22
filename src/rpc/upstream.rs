@@ -278,6 +278,33 @@ impl RpcClientJsonrpc {
         .await
     }
 
+    pub async fn get_first_available_block(
+        &self,
+        x_subscription_id: Arc<str>,
+        deadline: Instant,
+        id: &Id<'static>,
+    ) -> RpcClientJsonrpcResult {
+        counter!(
+            RPC_UPSTREAM_REQUESTS_TOTAL,
+            "x_subscription_id" => Arc::clone(&x_subscription_id),
+            "method" => "getFirstAvailableBlock",
+        )
+        .increment(1);
+
+        self.call_with_timeout(
+            x_subscription_id.as_ref(),
+            json!({
+                "jsonrpc": "2.0",
+                "method": "getFirstAvailableBlock",
+                "id": id,
+                "params": []
+            })
+            .to_string(),
+            deadline,
+        )
+        .await
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub async fn get_signatures_for_address(
         &self,

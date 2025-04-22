@@ -16,6 +16,12 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Breaking
 
+## [0.4.0] - 2025-04-22
+
+### Features
+
+- rpc: add `getFirstAvailableBlock` support ([#31](https://github.com/lamports-dev/alpamayo/pull/31))
+
 ## [0.3.0] - 2025-04-21
 
 ### Features

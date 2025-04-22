@@ -39,7 +39,7 @@ storage:
     rpc_getblock_max_concurrency: 15
     files:
       - id: 0
-        path: ./db/storage0
+        path: ./db/alpamayo/storage0
         size: 8gb
   rocksdb:
     path: ./db/alpamayo/rocksdb
@@ -69,6 +69,7 @@ rpc:
     - getBlocks
     - getBlocksWithLimit
     - getBlockTime
+    - getFirstAvailableBlock
     - getLatestBlockhash
     - getRecentPrioritizationFees
     - getSignaturesForAddress

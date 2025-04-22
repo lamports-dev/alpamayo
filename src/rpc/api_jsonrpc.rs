@@ -137,6 +137,12 @@ pub fn create_request_processor(
     if check_call_support(calls, ConfigRpcCallJson::GetBlockTime)? {
         processor.add_handler("getBlockTime", Box::new(RpcRequestBlockTime::handle));
     }
+    if check_call_support(calls, ConfigRpcCallJson::GetFirstAvailableBlock)? {
+        processor.add_handler(
+            "getFirstAvailableBlock",
+            Box::new(RpcRequestFirstAvailableBlock::handle),
+        );
+    }
     if check_call_support(calls, ConfigRpcCallJson::GetLatestBlockhash)? {
         processor.add_handler(
             "getLatestBlockhash",
@@ -222,6 +228,31 @@ where
             payload: ResponsePayload::error(error),
             id: request.id,
         }),
+    }
+}
+
+fn no_params_expected(
+    request: Request<'_>,
+) -> Result<Request<'_>, Response<'_, serde_json::Value>> {
+    if let Some(error) = match serde_json::from_str::<serde_json::Value>(
+        request.params.as_ref().map(|p| p.get()).unwrap_or("null"),
+    ) {
+        Ok(value) => match value {
+            serde_json::Value::Null => None,
+            serde_json::Value::Array(vec) if vec.is_empty() => None,
+            value => Some(jsonrpc_error_invalid_params(
+                "No parameters were expected",
+                Some(value.to_string()),
+            )),
+        },
+        Err(error) => Some(jsonrpc_error_invalid_params(
+            INVALID_PARAMS_MSG,
+            Some(error.to_string()),
+        )),
+    } {
+        Err(jsonrpc_response_error(request.id, error))
+    } else {
+        Ok(request)
     }
 }
 
@@ -958,6 +989,49 @@ impl RpcRequestBlockTime {
             Ok(jsonrpc_response_success(
                 self.id,
                 serde_json::json!(None::<()>),
+            ))
+        }
+    }
+}
+
+#[derive(Debug)]
+struct RpcRequestFirstAvailableBlock {
+    state: Arc<State>,
+    x_subscription_id: Arc<str>,
+    upstream_disabled: bool,
+    id: Id<'static>,
+}
+
+impl RpcRequestHandler for RpcRequestFirstAvailableBlock {
+    fn parse(
+        state: Arc<State>,
+        x_subscription_id: Arc<str>,
+        upstream_disabled: bool,
+        request: Request<'_>,
+    ) -> Result<Self, Response<'_, serde_json::Value>> {
+        let request = no_params_expected(request)?;
+        Ok(Self {
+            state,
+            x_subscription_id,
+            upstream_disabled,
+            id: request.id.into_owned(),
+        })
+    }
+
+    async fn process(self) -> RpcRequestResult<'static> {
+        let deadline = Instant::now() + self.state.request_timeout;
+
+        if let Some(upstream) = (!self.upstream_disabled)
+            .then_some(self.state.upstream.as_ref())
+            .flatten()
+        {
+            upstream
+                .get_first_available_block(self.x_subscription_id, deadline, &self.id)
+                .await
+        } else {
+            Ok(jsonrpc_response_success(
+                self.id,
+                serde_json::json!(self.state.stored_slots.first_available_load()),
             ))
         }
     }
@@ -1793,33 +1867,15 @@ impl RpcRequestHandler for RpcRequestVersion {
         _upstream_disabled: bool,
         request: Request<'_>,
     ) -> Result<Self, Response<'_, serde_json::Value>> {
-        if let Some(error) = match serde_json::from_str::<serde_json::Value>(
-            request.params.as_ref().map(|p| p.get()).unwrap_or("null"),
-        ) {
-            Ok(value) => match value {
-                serde_json::Value::Null => None,
-                serde_json::Value::Array(vec) if vec.is_empty() => None,
-                value => Some(jsonrpc_error_invalid_params(
-                    "No parameters were expected",
-                    Some(value.to_string()),
-                )),
-            },
-            Err(error) => Some(jsonrpc_error_invalid_params(
-                INVALID_PARAMS_MSG,
-                Some(error.to_string()),
-            )),
-        } {
-            Err(jsonrpc_response_error(request.id, error))
-        } else {
-            let version = solana_version::Version::default();
-            Err(jsonrpc_response_success(
-                request.id,
-                serde_json::json!(RpcVersionInfo {
-                    solana_core: version.to_string(),
-                    feature_set: Some(version.feature_set),
-                }),
-            ))
-        }
+        let request = no_params_expected(request)?;
+        let version = solana_version::Version::default();
+        Err(jsonrpc_response_success(
+            request.id,
+            serde_json::json!(RpcVersionInfo {
+                solana_core: version.to_string(),
+                feature_set: Some(version.feature_set),
+            }),
+        ))
     }
 }
 

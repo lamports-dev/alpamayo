@@ -360,6 +360,7 @@ pub enum ConfigRpcCallJson {
     GetBlocks,
     GetBlocksWithLimit,
     GetBlockTime,
+    GetFirstAvailableBlock,
     GetLatestBlockhash,
     GetRecentPrioritizationFees,
     GetSignaturesForAddress,
