@@ -102,8 +102,3 @@ pub async fn spawn_server(
     .await
     .map_err(Into::into)
 }
-
-#[inline]
-pub fn duration_to_seconds(d: Duration) -> f64 {
-    d.as_secs() as f64 + d.subsec_nanos() as f64 / 1e9
-}

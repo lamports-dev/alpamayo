@@ -132,7 +132,6 @@ dependencies = [
  "hyper 1.6.0",
  "hyper-util",
  "json5",
- "jsonrpc-core",
  "jsonrpsee-types",
  "libc",
  "maplit",

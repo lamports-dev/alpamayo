@@ -27,7 +27,6 @@ humantime-serde = "1.1.1"
 hyper = "1.6.0"
 hyper-util = { version = "0.1.10", features = ["server-auto", "server-graceful"] }
 json5 = "0.4.1"
-jsonrpc-core = "18.0.0"
 jsonrpsee-types = "0.24.8"
 libc = "0.2.170"
 maplit = "1.0.2"

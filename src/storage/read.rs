@@ -1,6 +1,6 @@
 use {
     crate::{
-        metrics::{READ_DISK_SECONDS_TOTAL, duration_to_seconds},
+        metrics::READ_DISK_SECONDS_TOTAL,
         rpc::api_jsonrpc::RpcRequestBlocksUntil,
         source::{block::BlockWithBinary, fees::TransactionsFees},
         storage::{
@@ -18,6 +18,7 @@ use {
         stream::{FuturesUnordered, StreamExt},
     },
     metrics::gauge,
+    richat_shared::metrics::duration_to_seconds,
     solana_rpc_client_api::response::{
         RpcConfirmedTransactionStatusWithSignature, RpcPrioritizationFee,
     },

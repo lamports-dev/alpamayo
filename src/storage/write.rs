@@ -1,7 +1,7 @@
 use {
     crate::{
         config::ConfigStorage,
-        metrics::{WRITE_BLOCK_SYNC_SECONDS, duration_to_seconds},
+        metrics::WRITE_BLOCK_SYNC_SECONDS,
         source::{
             block::BlockWithBinary,
             rpc::GetBlockError,
@@ -30,7 +30,7 @@ use {
         ThreadPoolBuilder,
         iter::{IntoParallelIterator, ParallelIterator},
     },
-    richat_shared::shutdown::Shutdown,
+    richat_shared::{metrics::duration_to_seconds, shutdown::Shutdown},
     solana_sdk::clock::Slot,
     solana_storage_proto::convert::generated,
     solana_transaction_status::ConfirmedBlock,
