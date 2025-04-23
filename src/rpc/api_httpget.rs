@@ -2,7 +2,7 @@ use {
     crate::{
         config::{ConfigRpc, ConfigRpcCallHttpGet},
         rpc::{
-            api::{X_ERROR, X_SLOT, check_call_support},
+            api::{X_ERROR, X_SLOT},
             upstream::RpcClientHttpget,
         },
         storage::{
@@ -28,6 +28,7 @@ use {
     },
     solana_sdk::{clock::Slot, signature::Signature},
     std::{
+        collections::HashSet,
         str::FromStr,
         sync::Arc,
         time::{Duration, Instant},
@@ -42,12 +43,14 @@ struct SupportedCalls {
 }
 
 impl SupportedCalls {
-    fn new(calls: &[ConfigRpcCallHttpGet]) -> anyhow::Result<Self> {
+    fn new(calls: &HashSet<ConfigRpcCallHttpGet>) -> anyhow::Result<Self> {
         Ok(Self {
-            get_block: check_call_support(calls, ConfigRpcCallHttpGet::GetBlock)?
+            get_block: calls
+                .contains(&ConfigRpcCallHttpGet::GetBlock)
                 .then(|| Regex::new(r"^/block/(\d{1,9})/?$"))
                 .transpose()?,
-            get_transaction: check_call_support(calls, ConfigRpcCallHttpGet::GetTransaction)?
+            get_transaction: calls
+                .contains(&ConfigRpcCallHttpGet::GetTransaction)
                 .then(|| Regex::new(r"^/tx/([1-9A-HJ-NP-Za-km-z]{64,88})/?$"))
                 .transpose()?,
         })

@@ -11,6 +11,7 @@ use {
     },
     solana_rpc_client_api::request::MAX_GET_CONFIRMED_SIGNATURES_FOR_ADDRESS2_LIMIT,
     std::{
+        collections::HashSet,
         fs::read_to_string as read_to_string_sync,
         net::{IpAddr, Ipv4Addr, SocketAddr},
         path::{Path, PathBuf},
@@ -286,10 +287,10 @@ pub struct ConfigRpc {
     pub request_timeout: Duration,
     /// Supported Http/Get methods
     #[serde(default)]
-    pub calls_httpget: Vec<ConfigRpcCallHttpGet>,
+    pub calls_httpget: HashSet<ConfigRpcCallHttpGet>,
     /// Supported JSON-RPC calls
     #[serde(default)]
-    pub calls_jsonrpc: Vec<ConfigRpcCallJson>,
+    pub calls_jsonrpc: HashSet<ConfigRpcCallJson>,
     /// Maximum number of Signatures in getSignaturesForAddress
     #[serde(
         default = "ConfigRpc::default_gsfa_limit",
@@ -302,6 +303,9 @@ pub struct ConfigRpc {
     /// Enable `percentile` in getRecentPrioritizationFees
     #[serde(default = "ConfigRpc::default_grpf_percentile")]
     pub grpf_percentile: bool,
+    /// TTL of cached methods
+    #[serde(default = "ConfigRpc::default_cache_ttl", with = "humantime_serde")]
+    pub cache_ttl: Duration,
     /// Max number of requests in the queue
     #[serde(
         default = "ConfigRpc::default_request_channel_capacity",
@@ -340,19 +344,23 @@ impl ConfigRpc {
         true
     }
 
+    const fn default_cache_ttl() -> Duration {
+        Duration::from_secs(1)
+    }
+
     const fn default_request_channel_capacity() -> usize {
         4096
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub enum ConfigRpcCallHttpGet {
     GetBlock,
     GetTransaction,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub enum ConfigRpcCallJson {
     GetBlock,
@@ -360,6 +368,7 @@ pub enum ConfigRpcCallJson {
     GetBlocks,
     GetBlocksWithLimit,
     GetBlockTime,
+    GetClusterNodes,
     GetFirstAvailableBlock,
     GetLatestBlockhash,
     GetRecentPrioritizationFees,

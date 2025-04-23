@@ -69,6 +69,7 @@ rpc:
     - getBlocks
     - getBlocksWithLimit
     - getBlockTime
+    - getClusterNodes
     - getFirstAvailableBlock
     - getLatestBlockhash
     - getRecentPrioritizationFees
@@ -81,6 +82,7 @@ rpc:
   gsfa_limit: 1000
   gss_transaction_history: true
   grpf_percentile: true
+  cache_ttl: 1s
   request_channel_capacity: 4096
   upstream_httpget:
     endpoint: http://127.0.0.1:8899
