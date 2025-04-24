@@ -514,6 +514,7 @@ impl RpcClientJsonrpc {
                 locked.insert(epoch, fut.clone());
                 fut
             });
+        drop(locked);
 
         let payload = match timeout_at(deadline.into(), request).await {
             Ok(result) => result,
@@ -682,7 +683,7 @@ impl<T: Clone> CachedRequest<T> {
         Self {
             ttl,
             ts: QInstant::now().checked_sub(ttl * 2).unwrap(),
-            request: async move { Err(Cow::Borrowed("")) }.boxed().shared(),
+            request: async move { Err(Cow::Borrowed("uninit")) }.boxed().shared(),
         }
     }
 
