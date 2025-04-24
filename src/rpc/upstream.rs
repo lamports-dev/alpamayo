@@ -6,6 +6,7 @@ use {
             api::{X_ERROR, X_SLOT},
             api_jsonrpc::RpcRequestBlocksUntil,
         },
+        util::HashMap,
     },
     futures::future::{BoxFuture, FutureExt, Shared},
     http_body_util::{BodyExt, Full as BodyFull},
@@ -17,11 +18,12 @@ use {
     richat_shared::jsonrpc::helpers::{RpcResponse, X_SUBSCRIPTION_ID, jsonrpc_response_success},
     serde_json::json,
     solana_rpc_client_api::config::{
-        RpcBlockConfig, RpcSignatureStatusConfig, RpcSignaturesForAddressConfig,
-        RpcTransactionConfig,
+        RpcBlockConfig, RpcLeaderScheduleConfig, RpcLeaderScheduleConfigWrapper,
+        RpcSignatureStatusConfig, RpcSignaturesForAddressConfig, RpcTransactionConfig,
     },
     solana_sdk::{
-        clock::Slot, commitment_config::CommitmentConfig, pubkey::Pubkey, signature::Signature,
+        clock::Slot, commitment_config::CommitmentConfig, epoch_schedule::Epoch, pubkey::Pubkey,
+        signature::Signature,
     },
     solana_transaction_status::{BlockEncodingOptions, UiTransactionEncoding},
     std::{
@@ -232,10 +234,14 @@ impl RpcClientJsonrpcInner {
     }
 }
 
+type CachedEpochSchedule =
+    Shared<BoxFuture<'static, Result<Arc<serde_json::Value>, Cow<'static, str>>>>;
+
 #[derive(Debug)]
 pub struct RpcClientJsonrpc {
     inner: Arc<RpcClientJsonrpcInner>,
     cache: CachedRequests,
+    cache_epoch_schedule: Arc<Mutex<HashMap<Epoch, CachedEpochSchedule>>>,
 }
 
 impl RpcClientJsonrpc {
@@ -252,6 +258,7 @@ impl RpcClientJsonrpc {
                 version: config.version,
             }),
             cache: CachedRequests::new(cache_ttl),
+            cache_epoch_schedule: Arc::default(),
         })
     }
 
@@ -421,6 +428,119 @@ impl RpcClientJsonrpc {
             )
             .await
             .map_err(|error| anyhow::anyhow!(error))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn get_leader_schedule(
+        &self,
+        x_subscription_id: Arc<str>,
+        deadline: Instant,
+        id: Id<'static>,
+        epoch: Epoch,
+        slot: Slot,
+        is_processed: bool,
+        identity: Option<String>,
+    ) -> RpcClientJsonrpcResult {
+        if is_processed {
+            counter!(
+                RPC_UPSTREAM_REQUESTS_TOTAL,
+                "x_subscription_id" => Arc::clone(&x_subscription_id),
+                "method" => "getLeaderSchedule",
+            )
+            .increment(1);
+
+            return self
+                .inner
+                .call_with_timeout(
+                    x_subscription_id.as_ref(),
+                    json!({
+                        "jsonrpc": "2.0",
+                        "method": "getLeaderSchedule",
+                        "id": id,
+                        "params": [
+                            RpcLeaderScheduleConfigWrapper::SlotOnly(Some(slot)),
+                            RpcLeaderScheduleConfig { identity, commitment: Some(CommitmentConfig::processed()) }
+                        ]
+                    })
+                    .to_string(),
+                    deadline,
+                )
+                .await
+                .map_err(|error| anyhow::anyhow!(error));
+        }
+
+        let mut locked = self.cache_epoch_schedule.lock().await;
+        let request = locked
+            .get(&epoch)
+            .and_then(|fut| {
+                if !fut.peek().map(|v| v.is_err()).unwrap_or_default() {
+                    Some(fut.clone())
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_else(|| {
+                let inner = Arc::clone(&self.inner);
+                let fut = async move {
+                    let result = inner
+                        .call_get_success(
+                            x_subscription_id.as_ref(),
+                            "getLeaderSchedule",
+                            json!([
+                                RpcLeaderScheduleConfigWrapper::SlotOnly(Some(slot)),
+                                RpcLeaderScheduleConfig {
+                                    identity: None,
+                                    commitment: Some(CommitmentConfig::confirmed())
+                                }
+                            ]),
+                        )
+                        .await
+                        .map(|value| Arc::new(value.into_owned()));
+                    counter!(
+                        RPC_UPSTREAM_REQUESTS_TOTAL,
+                        "x_subscription_id" => x_subscription_id,
+                        "method" => "getLeaderSchedule",
+                    )
+                    .increment(1);
+                    if let Ok(payload) = &result {
+                        if !payload.is_null() && !payload.is_object() {
+                            return Err(Cow::Borrowed("invalid response type"));
+                        }
+                    }
+                    result
+                }
+                .boxed()
+                .shared();
+                locked.insert(epoch, fut.clone());
+                fut
+            });
+
+        let payload = match timeout_at(deadline.into(), request).await {
+            Ok(result) => result,
+            Err(_timeout) => Err(Cow::Borrowed("upstream timeout")),
+        }
+        .map_err(|error| anyhow::anyhow!(error))?;
+
+        if let Some(identity) = identity {
+            if payload.is_null() {
+                return Ok(jsonrpc_response_success(id, serde_json::Value::Null));
+            }
+
+            let Some(map) = payload.as_object() else {
+                unreachable!()
+            };
+
+            if let Some(slots) = map.get(&identity) {
+                Ok(jsonrpc_response_success(
+                    id,
+                    json!({ identity.to_string(): slots }),
+                ))
+            } else {
+                Ok(jsonrpc_response_success(id, json!({})))
+            }
+        } else {
+            Ok(jsonrpc_response_success(id, payload.as_ref().clone()))
+        }
     }
 
     #[allow(clippy::too_many_arguments)]

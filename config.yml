@@ -72,6 +72,7 @@ rpc:
     - getClusterNodes
     - getFirstAvailableBlock
     - getLatestBlockhash
+    - getLeaderSchedule
     - getRecentPrioritizationFees
     - getSignaturesForAddress
     - getSignatureStatuses

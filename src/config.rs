@@ -371,6 +371,7 @@ pub enum ConfigRpcCallJson {
     GetClusterNodes,
     GetFirstAvailableBlock,
     GetLatestBlockhash,
+    GetLeaderSchedule,
     GetRecentPrioritizationFees,
     GetSignaturesForAddress,
     GetSignatureStatuses,
