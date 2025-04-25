@@ -13,6 +13,9 @@ source:
     concurrency: 10
   stream:
     source: richat # valid: richat, dragons_mouth
+    reconnect:
+      backoff_init: 100ms
+      backoff_max: 1s
     endpoint: http://127.0.0.1:10000
     ca_certificate: null
     connect_timeout: null

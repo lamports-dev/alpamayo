@@ -105,6 +105,8 @@ impl Default for ConfigSourceRpc {
 #[serde(deny_unknown_fields, default)]
 pub struct ConfigSourceStream {
     pub source: ConfigSourceStreamKind,
+    #[serde(default)]
+    pub reconnect: Option<ConfigSourceStreamReconnect>,
     #[serde(flatten)]
     pub config: ConfigGrpcClient,
 }
@@ -115,6 +117,24 @@ pub enum ConfigSourceStreamKind {
     DragonsMouth,
     #[default]
     Richat,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct ConfigSourceStreamReconnect {
+    #[serde(with = "humantime_serde")]
+    pub backoff_init: Duration,
+    #[serde(with = "humantime_serde")]
+    pub backoff_max: Duration,
+}
+
+impl Default for ConfigSourceStreamReconnect {
+    fn default() -> Self {
+        Self {
+            backoff_init: Duration::from_millis(100),
+            backoff_max: Duration::from_secs(1),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
