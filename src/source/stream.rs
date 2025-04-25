@@ -64,6 +64,7 @@ pub enum StreamSourceSlotStatus {
 
 #[derive(Debug)]
 pub enum StreamSourceMessage {
+    Start,
     Block {
         slot: Slot,
         block: BlockWithBinary,

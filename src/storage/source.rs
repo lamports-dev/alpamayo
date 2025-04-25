@@ -105,7 +105,12 @@ pub async fn start(
                 item = rpc_rx.recv() => handle_rpc(item, &rpc),
                 () = stream_start.notified() => {
                     stream = Some(StreamSource::new(config.stream.clone()).await?);
-                    false
+                    if stream_tx.send(StreamSourceMessage::Start).await.is_err() {
+                        error!("failed to send a message to the stream");
+                        true
+                    } else {
+                        false
+                    }
                 },
             }
         };

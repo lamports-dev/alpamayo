@@ -82,7 +82,6 @@ pub fn start(
                 )?;
                 let (mut storage_files, storage_files_read_sync_init) =
                     StorageFilesWrite::open(files, &blocks).await?;
-                let storage_memory = StorageMemory::default();
 
                 // load recent blocks
                 let ts = Instant::now();
@@ -164,7 +163,6 @@ pub fn start(
                     blocks,
                     db_write,
                     &mut storage_files,
-                    storage_memory,
                     sync_tx,
                     shutdown,
                 )
@@ -190,7 +188,6 @@ async fn start2(
     mut blocks: StoredBlocksWrite,
     db_write: RocksdbWrite,
     storage_files: &mut StorageFilesWrite,
-    mut storage_memory: StorageMemory,
     sync_tx: broadcast::Sender<ReadWriteSyncMessage>,
     shutdown: Shutdown,
 ) -> anyhow::Result<()> {
@@ -315,6 +312,8 @@ async fn start2(
     }
     stream_start.notify_one();
 
+    let mut storage_memory = StorageMemory::default();
+
     tokio::pin!(shutdown);
     loop {
         let rpc_requests_next = if rpc_requests.is_empty() {
@@ -345,6 +344,9 @@ async fn start2(
                 Some(message) => {
                     // add message
                     match message {
+                        StreamSourceMessage::Start => {
+                            storage_memory = StorageMemory::default();
+                        }
                         StreamSourceMessage::Block { slot, block } => {
                             let block = Arc::new(block);
                             storage_memory.add_processed(slot, Arc::clone(&block));
