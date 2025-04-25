@@ -103,8 +103,10 @@ impl StoredSlots {
     }
 
     fn finalized_store(&self, slot: Slot) {
-        self.finalized.store(slot, Ordering::Relaxed);
-        self.metrics.finalized.set(slot as f64);
+        if slot >= self.first_available_load() {
+            self.finalized.store(slot, Ordering::Relaxed);
+            self.metrics.finalized.set(slot as f64);
+        }
     }
 
     pub fn first_available_load(&self) -> Slot {

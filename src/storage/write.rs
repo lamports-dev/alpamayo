@@ -249,7 +249,7 @@ async fn start2(
 
         loop {
             // update confirmed slot every 3s
-            if next_confirmed_slot_last_update.elapsed() > Duration::from_secs(3) {
+            if next_confirmed_slot_last_update.elapsed() > Duration::from_secs(2) {
                 next_confirmed_slot = load_confirmed_slot(&rpc, &stored_slots, &sync_tx).await?;
                 next_confirmed_slot_last_update = Instant::now();
                 info!(
@@ -367,15 +367,6 @@ async fn start2(
                         }
 
                         if block.get_slot() > next_confirmed_slot {
-                            if block.get_slot() - next_confirmed_slot > rpc_getblock_max_concurrency as u64 {
-                                return Err(anyhow::anyhow!(
-                                    "backfill is too big: slot {} / next_confirmed_slot {} / rpc_getblock_max_concurrency {}",
-                                    block.get_slot(),
-                                    next_confirmed_slot,
-                                    rpc_getblock_max_concurrency,
-                                ))
-                            }
-
                             for slot in next_confirmed_slot..block.get_slot() {
                                 get_confirmed_block(&mut rpc_requests, slot);
                             }

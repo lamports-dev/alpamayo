@@ -287,6 +287,16 @@ impl Stream for StreamSource {
                                     _ => break,
                                 }
                             }
+
+                            return Poll::Ready(Some(if let Some(parent) = parent {
+                                Ok(StreamSourceMessage::SlotStatus {
+                                    slot,
+                                    parent,
+                                    status: StreamSourceSlotStatus::Finalized,
+                                })
+                            } else {
+                                Err(RecvError::MissedParent(slot))
+                            }));
                         }
 
                         // create slot info
@@ -329,14 +339,6 @@ impl Stream for StreamSource {
                                 SlotStatusProto::SlotConfirmed,
                             ) => {
                                 slot_info.status = SlotStatusProto::SlotConfirmed;
-                                parent
-                            }
-                            (
-                                Some(parent),
-                                SlotStatusProto::SlotConfirmed,
-                                SlotStatusProto::SlotFinalized,
-                            ) => {
-                                slot_info.status = SlotStatusProto::SlotFinalized;
                                 parent
                             }
                             _ => {

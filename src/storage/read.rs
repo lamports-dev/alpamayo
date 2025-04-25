@@ -387,12 +387,10 @@ impl StorageProcessed {
     }
 
     fn set_finalized(&mut self, slot: Slot) {
-        self.finalized_slot = slot;
-        self.finalized_height = self
-            .recent_blocks
-            .get(&slot)
-            .map(|rb| rb.block_height)
-            .unwrap_or(self.finalized_height);
+        if let Some(block) = self.recent_blocks.get(&slot) {
+            self.finalized_slot = slot;
+            self.finalized_height = block.block_height;
+        }
     }
 
     fn is_ready(&self) -> bool {
