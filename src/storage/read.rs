@@ -270,10 +270,10 @@ struct StorageProcessed {
     confirmed_height: Slot,
     finalized_slot: Slot,
     finalized_height: Slot,
-    blocks: BTreeMap<Slot, Option<Arc<BlockWithBinary>>>,
-    signature_statuses: HashMap<Signature, SignatureStatus>,
-    recent_blocks: BTreeMap<Slot, RecentBlock>,
-    block_heights: HashMap<String, Slot>,
+    blocks: BTreeMap<Slot, Option<Arc<BlockWithBinary>>>, // only processed
+    signature_statuses: HashMap<Signature, SignatureStatus>, // from MAX_RECENT_BLOCKHASHES
+    recent_blocks: BTreeMap<Slot, RecentBlock>,           // MAX_RECENT_BLOCKHASHES
+    block_heights: HashMap<String, Slot>,                 // MAX_RECENT_BLOCKHASHES
 }
 
 impl StorageProcessed {
