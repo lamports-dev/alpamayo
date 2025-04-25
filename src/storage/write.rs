@@ -232,7 +232,6 @@ async fn start2(
 
     // queue of confirmed blocks
     let mut queued_slots = HashMap::<Slot, Option<Arc<BlockWithBinary>>>::default();
-    let mut queued_slots_backfilled = false;
 
     // fill the gap between stored and new
     let mut next_confirmed_slot = match rpc.get_slot_confirmed().await {
@@ -329,7 +328,9 @@ async fn start2(
             // insert block requested from rpc
             message = rpc_requests_next => match message {
                 Some(Ok(Ok((slot, block)))) => {
-                    queued_slots.insert(slot, block.map(Arc::new));
+                    if slot >= next_confirmed_slot {
+                        queued_slots.insert(slot, block.map(Arc::new));
+                    }
                 },
                 Some(Ok(Err(error))) => {
                     return Err(error).context("failed to get confirmed block");
@@ -380,9 +381,7 @@ async fn start2(
                             continue;
                         }
 
-                        if !queued_slots_backfilled && block.get_slot() > next_confirmed_slot {
-                            queued_slots_backfilled = true;
-
+                        if block.get_slot() > next_confirmed_slot {
                             if block.get_slot() - next_confirmed_slot > rpc_getblock_max_concurrency as u64 {
                                 return Err(anyhow::anyhow!(
                                     "backfill is too big: slot {} / next_confirmed_slot {} / rpc_getblock_max_concurrency {}",
