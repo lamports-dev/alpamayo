@@ -159,7 +159,10 @@ async fn start2(
             // sync update
             message = sync_rx.recv() => match message {
                 Ok(ReadWriteSyncMessage::Init { .. }) => anyhow::bail!("unexpected second init"),
-                Ok(ReadWriteSyncMessage::BlockNew { slot, block }) => storage_processed.add_processed_block(slot, block),
+                Ok(ReadWriteSyncMessage::BlockNew { slot, block }) => {
+                    stored_slots_read.set_processed(index, slot);
+                    storage_processed.add_processed_block(slot, block);
+                },
                 Ok(ReadWriteSyncMessage::BlockDead { slot }) => storage_processed.mark_dead(slot),
                 Ok(ReadWriteSyncMessage::BlockConfirmed { slot, block }) => {
                     stored_slots_read.set_confirmed(index, slot);

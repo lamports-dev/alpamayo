@@ -125,6 +125,7 @@ impl StoredSlots {
 #[derive(Debug, Clone)]
 pub struct StoredSlotsRead {
     stored_slots: StoredSlots,
+    slots_processed: Arc<Mutex<HashMap<Slot, HashSet<usize>>>>,
     slots_confirmed: Arc<Mutex<HashMap<Slot, HashSet<usize>>>>,
     slots_finalized: Arc<Mutex<HashMap<Slot, HashSet<usize>>>>,
     max_recent_blockhashes: Arc<Mutex<usize>>,
@@ -136,6 +137,7 @@ impl StoredSlotsRead {
     pub fn new(stored_slots: StoredSlots, total_readers: usize) -> Self {
         Self {
             stored_slots,
+            slots_processed: Arc::default(),
             slots_confirmed: Arc::default(),
             slots_finalized: Arc::default(),
             max_recent_blockhashes: Arc::default(),
@@ -160,6 +162,12 @@ impl StoredSlotsRead {
             true
         } else {
             false
+        }
+    }
+
+    pub fn set_processed(&self, index: usize, slot: Slot) {
+        if self.set(&self.slots_processed, index, slot) {
+            self.stored_slots.processed_store(slot);
         }
     }
 

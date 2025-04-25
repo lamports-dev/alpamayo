@@ -348,7 +348,6 @@ async fn start2(
                             let block = Arc::new(block);
                             storage_memory.add_processed(slot, Arc::clone(&block));
                             let _ = sync_tx.send(ReadWriteSyncMessage::BlockNew { slot, block });
-                            stored_slots.processed_store(slot);
                         }
                         StreamSourceMessage::SlotStatus { slot, status, .. } => {
                             match status {
