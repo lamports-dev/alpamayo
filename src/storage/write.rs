@@ -230,27 +230,8 @@ async fn start2(
     // queue of confirmed blocks
     let mut queued_slots = HashMap::<Slot, Option<Arc<BlockWithBinary>>>::default();
 
-    // set finalized slot
-    if stored_slots.first_available_load() != u64::MAX {
-        let ts = Instant::now();
-        match rpc.get_slot_finalized().await {
-            Ok(slot) => {
-                if slot >= stored_slots.first_available_load() {
-                    let _ = sync_tx.send(ReadWriteSyncMessage::SlotFinalized { slot });
-                }
-            }
-            Err(error) => return Err(error.into()),
-        };
-        info!(elapsed = ?ts.elapsed(), "load finalized slot");
-    }
-
     // fill the gap between stored and new
-    let ts = Instant::now();
-    let mut next_confirmed_slot = match rpc.get_slot_confirmed().await {
-        Ok(slot) => slot,
-        Err(error) => return Err(error.into()),
-    };
-    info!(elapsed = ?ts.elapsed(), slot = next_confirmed_slot, "load confirmed slot");
+    let mut next_confirmed_slot = load_confirmed_slot(&rpc, &stored_slots, &sync_tx).await?;
     if let Some(slot) = blocks.get_latest_slot() {
         let mut next_confirmed_slot_last_update = Instant::now();
         let mut next_rpc_request_slot = slot + 1;
@@ -269,10 +250,7 @@ async fn start2(
         loop {
             // update confirmed slot every 3s
             if next_confirmed_slot_last_update.elapsed() > Duration::from_secs(3) {
-                next_confirmed_slot = match rpc.get_slot_confirmed().await {
-                    Ok(slot) => slot,
-                    Err(error) => return Err(error.into()),
-                };
+                next_confirmed_slot = load_confirmed_slot(&rpc, &stored_slots, &sync_tx).await?;
                 next_confirmed_slot_last_update = Instant::now();
                 info!(
                     slot_db = next_database_slot,
@@ -380,17 +358,6 @@ async fn start2(
                                 },
                             }
                         }
-                        StreamSourceMessage::SlotStatusInit { slot, status } => {
-                            if slot >= stored_slots.first_available_load() {
-                                match status {
-                                    StreamSourceSlotStatus::Confirmed => stored_slots.confirmed_store(slot),
-                                    StreamSourceSlotStatus::Finalized => {
-                                        let _ = sync_tx.send(ReadWriteSyncMessage::SlotFinalized { slot });
-                                    }
-                                    _ => unreachable!(),
-                                }
-                            }
-                        }
                     }
 
                     // get confirmed and push to the queue
@@ -448,4 +415,21 @@ async fn start2(
             next_confirmed_slot += 1;
         }
     }
+}
+
+async fn load_confirmed_slot(
+    rpc: &RpcSourceConnected,
+    stored_slots: &StoredSlots,
+    sync_tx: &broadcast::Sender<ReadWriteSyncMessage>,
+) -> anyhow::Result<Slot> {
+    let ts = Instant::now();
+    let (finalized_slot, confirmed_slot) = rpc.get_slots().await?;
+    // set finalized slot
+    if finalized_slot >= stored_slots.first_available_load() {
+        let _ = sync_tx.send(ReadWriteSyncMessage::SlotFinalized {
+            slot: finalized_slot,
+        });
+    }
+    info!(elapsed = ?ts.elapsed(), finalized_slot, confirmed_slot, "load finalized & confirmed slots");
+    Ok(confirmed_slot)
 }

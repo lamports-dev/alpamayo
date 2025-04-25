@@ -19,11 +19,8 @@ use {
 
 #[derive(Debug)]
 pub enum RpcRequest {
-    ConfirmedSlot {
-        tx: oneshot::Sender<Result<Slot, ClientError>>,
-    },
-    FinalizedSlot {
-        tx: oneshot::Sender<Result<Slot, ClientError>>,
+    Slots {
+        tx: oneshot::Sender<Result<(Slot, Slot), ClientError>>,
     },
     Block {
         slot: Slot,
@@ -69,14 +66,9 @@ impl RpcSourceConnected {
         }
     }
 
-    pub async fn get_slot_confirmed(&self) -> RpcSourceConnectedResult<Slot, ClientError> {
+    pub async fn get_slots(&self) -> RpcSourceConnectedResult<(Slot, Slot), ClientError> {
         let (tx, rx) = oneshot::channel();
-        self.send(RpcRequest::ConfirmedSlot { tx }, rx).await
-    }
-
-    pub async fn get_slot_finalized(&self) -> RpcSourceConnectedResult<Slot, ClientError> {
-        let (tx, rx) = oneshot::channel();
-        self.send(RpcRequest::FinalizedSlot { tx }, rx).await
+        self.send(RpcRequest::Slots { tx }, rx).await
     }
 
     pub async fn get_block(
@@ -134,12 +126,9 @@ fn handle_rpc(item: Option<RpcRequest>, rpc: &Arc<RpcSource>) -> bool {
             let rpc = Arc::clone(rpc);
             tokio::spawn(async move {
                 match request {
-                    RpcRequest::ConfirmedSlot { tx } => {
-                        let result = rpc.get_confirmed_slot().await;
-                        let _ = tx.send(result);
-                    }
-                    RpcRequest::FinalizedSlot { tx } => {
-                        let result = rpc.get_finalized_slot().await;
+                    RpcRequest::Slots { tx } => {
+                        let result =
+                            tokio::try_join!(rpc.get_finalized_slot(), rpc.get_confirmed_slot());
                         let _ = tx.send(result);
                     }
                     RpcRequest::Block { slot, tx } => {
