@@ -185,7 +185,7 @@ impl ConfigStorageBlocks {
     }
 
     const fn default_rpc_getblock_max_concurrency() -> usize {
-        15
+        10
     }
 }
 

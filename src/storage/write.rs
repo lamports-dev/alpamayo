@@ -206,6 +206,9 @@ async fn start2(
                 match rpc.get_block(slot).await {
                     Ok(block) => return Ok((slot, Some(block))),
                     Err(error) => {
+                        if matches!(error, RpcSourceConnectedError::SendError) {
+                            return Err(error);
+                        }
                         if matches!(
                             error,
                             RpcSourceConnectedError::Error(GetBlockError::SlotSkipped(_))
@@ -215,7 +218,7 @@ async fn start2(
                         if max_retries == 0 {
                             return Err(error);
                         }
-                        warn!(?error, slot, "failed to get confirmed block");
+                        warn!(?error, slot, max_retries, "failed to get confirmed block");
                         max_retries -= 1;
                         sleep(backoff_wait).await;
                         backoff_wait *= 2;
@@ -277,8 +280,11 @@ async fn start2(
             // push block into the queue
             match rpc_requests.next().await {
                 Some(Ok(Ok((slot, block)))) => {
-                    queued_slots.insert(slot, block.map(Arc::new));
+                    if slot >= next_database_slot {
+                        queued_slots.insert(slot, block.map(Arc::new));
+                    }
                 }
+                Some(Ok(Err(RpcSourceConnectedError::SendError))) => return Ok(()),
                 Some(Ok(Err(error))) => {
                     return Err(error).context("failed to get confirmed block");
                 }
@@ -325,6 +331,7 @@ async fn start2(
                         queued_slots.insert(slot, block.map(Arc::new));
                     }
                 },
+                Some(Ok(Err(RpcSourceConnectedError::SendError))) => return Ok(()),
                 Some(Ok(Err(error))) => {
                     return Err(error).context("failed to get confirmed block");
                 },
