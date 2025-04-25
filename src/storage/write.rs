@@ -230,11 +230,27 @@ async fn start2(
     // queue of confirmed blocks
     let mut queued_slots = HashMap::<Slot, Option<Arc<BlockWithBinary>>>::default();
 
+    // set finalized slot
+    if stored_slots.first_available_load() != u64::MAX {
+        let ts = Instant::now();
+        match rpc.get_slot_finalized().await {
+            Ok(slot) => {
+                if slot >= stored_slots.first_available_load() {
+                    let _ = sync_tx.send(ReadWriteSyncMessage::SlotFinalized { slot });
+                }
+            }
+            Err(error) => return Err(error.into()),
+        };
+        info!(elapsed = ?ts.elapsed(), "load finalized slot");
+    }
+
     // fill the gap between stored and new
+    let ts = Instant::now();
     let mut next_confirmed_slot = match rpc.get_slot_confirmed().await {
         Ok(slot) => slot,
         Err(error) => return Err(error.into()),
     };
+    info!(elapsed = ?ts.elapsed(), slot = next_confirmed_slot, "load confirmed slot");
     if let Some(slot) = blocks.get_latest_slot() {
         let mut next_confirmed_slot_last_update = Instant::now();
         let mut next_rpc_request_slot = slot + 1;

@@ -22,6 +22,9 @@ pub enum RpcRequest {
     ConfirmedSlot {
         tx: oneshot::Sender<Result<Slot, ClientError>>,
     },
+    FinalizedSlot {
+        tx: oneshot::Sender<Result<Slot, ClientError>>,
+    },
     Block {
         slot: Slot,
         tx: oneshot::Sender<Result<BlockWithBinary, GetBlockError>>,
@@ -69,6 +72,11 @@ impl RpcSourceConnected {
     pub async fn get_slot_confirmed(&self) -> RpcSourceConnectedResult<Slot, ClientError> {
         let (tx, rx) = oneshot::channel();
         self.send(RpcRequest::ConfirmedSlot { tx }, rx).await
+    }
+
+    pub async fn get_slot_finalized(&self) -> RpcSourceConnectedResult<Slot, ClientError> {
+        let (tx, rx) = oneshot::channel();
+        self.send(RpcRequest::FinalizedSlot { tx }, rx).await
     }
 
     pub async fn get_block(
@@ -128,6 +136,10 @@ fn handle_rpc(item: Option<RpcRequest>, rpc: &Arc<RpcSource>) -> bool {
                 match request {
                     RpcRequest::ConfirmedSlot { tx } => {
                         let result = rpc.get_confirmed_slot().await;
+                        let _ = tx.send(result);
+                    }
+                    RpcRequest::FinalizedSlot { tx } => {
+                        let result = rpc.get_finalized_slot().await;
                         let _ = tx.send(result);
                     }
                     RpcRequest::Block { slot, tx } => {

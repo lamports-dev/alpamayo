@@ -106,6 +106,13 @@ impl RpcSource {
             .await
     }
 
+    pub async fn get_finalized_slot(&self) -> Result<Slot, ClientError> {
+        let _permit = self.semaphore.acquire().await.expect("unclosed");
+        self.client
+            .get_slot_with_commitment(CommitmentConfig::finalized())
+            .await
+    }
+
     pub async fn get_block(&self, slot: Slot) -> Result<BlockWithBinary, GetBlockError> {
         let config = RpcBlockConfig {
             encoding: Some(UiTransactionEncoding::Base64),
