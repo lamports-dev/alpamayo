@@ -101,7 +101,7 @@ pub async fn start(
         finished = tokio::select! {
             () = &mut shutdown => true,
             item = rpc_rx.recv() => handle_rpc(item, &rpc),
-            item = &mut stream => return item
+            result = &mut stream => return result,
         };
     }
     shutdown.shutdown();
@@ -126,7 +126,7 @@ async fn start_stream(
                     if let Some(sleep_duration) = backoff_duration {
                         error!(?error, "failed to connect to gRPC stream");
                         sleep(sleep_duration).await;
-                        backoff_duration = Some(backoff_max.max(sleep_duration * 2));
+                        backoff_duration = Some(backoff_max.min(sleep_duration * 2));
                     } else {
                         return Err(error.into());
                     }
