@@ -25,7 +25,7 @@ use {
         clock::Slot, commitment_config::CommitmentConfig, epoch_schedule::Epoch, pubkey::Pubkey,
         signature::Signature,
     },
-    solana_transaction_status::{BlockEncodingOptions, UiTransactionEncoding},
+    solana_transaction_status::{BlockEncodingOptions, UiConfirmedBlock, UiTransactionEncoding},
     std::{
         borrow::Cow,
         sync::Arc,
@@ -303,6 +303,47 @@ impl RpcClientJsonrpc {
             .map_err(|error| anyhow::anyhow!(error))
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub async fn get_block_rewards(
+        &self,
+        x_subscription_id: Arc<str>,
+        deadline: Instant,
+        id: &Id<'static>,
+        slot: Slot,
+    ) -> anyhow::Result<
+        Result<Option<UiConfirmedBlock>, jsonrpsee_types::Response<'static, serde_json::Value>>,
+    > {
+        counter!(
+            RPC_UPSTREAM_REQUESTS_TOTAL,
+            "x_subscription_id" => Arc::clone(&x_subscription_id),
+            "method" => "getBlock",
+        )
+        .increment(1);
+
+        let result = self.inner
+            .call_with_timeout(
+                x_subscription_id.as_ref(),
+                json!({
+                    "jsonrpc": "2.0",
+                    "method": "getBlock",
+                    "id": id,
+                    "params": [slot, RpcBlockConfig::rewards_with_commitment(Some(CommitmentConfig::confirmed()))]
+                })
+                .to_string(),
+                deadline,
+            )
+            .await
+            .map_err(|error| anyhow::anyhow!(error))?;
+
+        let ResponsePayload::Success(value) = result.payload else {
+            return Ok(Err(result));
+        };
+
+        serde_json::from_value(value.into_owned())
+            .map(Ok)
+            .map_err(|error| anyhow::anyhow!("failed to parse response: {error:?}"))
+    }
+
     pub async fn get_blocks(
         &self,
         x_subscription_id: Arc<str>,
@@ -340,6 +381,47 @@ impl RpcClientJsonrpc {
         )
         .await
         .map_err(|error| anyhow::anyhow!(error))
+    }
+
+    pub async fn get_blocks_parsed(
+        &self,
+        x_subscription_id: Arc<str>,
+        deadline: Instant,
+        id: &Id<'static>,
+        start_slot: Slot,
+        limit: usize,
+    ) -> anyhow::Result<Result<Vec<Slot>, jsonrpsee_types::Response<'static, serde_json::Value>>>
+    {
+        counter!(
+            RPC_UPSTREAM_REQUESTS_TOTAL,
+            "x_subscription_id" => Arc::clone(&x_subscription_id),
+            "method" => "getBlocksWithLimit",
+        )
+        .increment(1);
+
+        let result = self
+            .inner
+            .call_with_timeout(
+                x_subscription_id.as_ref(),
+                json!({
+                    "jsonrpc": "2.0",
+                    "method": "getBlocksWithLimit",
+                    "id": id,
+                    "params": json!([start_slot, limit, "confirmed"]),
+                })
+                .to_string(),
+                deadline,
+            )
+            .await
+            .map_err(|error| anyhow::anyhow!(error))?;
+
+        let ResponsePayload::Success(value) = result.payload else {
+            return Ok(Err(result));
+        };
+
+        serde_json::from_value(value.into_owned())
+            .map(Ok)
+            .map_err(|error| anyhow::anyhow!("failed to parse response: {error:?}"))
     }
 
     pub async fn get_block_time(

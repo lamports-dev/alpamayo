@@ -465,7 +465,7 @@ pub enum ReadResultBlock {
 #[derive(Debug)]
 pub enum ReadResultBlockHeight {
     Timeout,
-    BlockHeight(Slot),
+    BlockHeight { block_height: Slot, slot: Slot },
     ReadError(anyhow::Error),
 }
 
@@ -729,6 +729,7 @@ impl ReadRequest {
 
                 if commitment.is_processed() {
                     block_height = Some(storage_processed.processed_height);
+                    commitment_slot = Some(storage_processed.processed_slot);
                 }
 
                 if commitment.is_confirmed() {
@@ -737,10 +738,7 @@ impl ReadRequest {
                     {
                         block_height = confirmed_in_process_block.block_height;
                     }
-
-                    if block_height.is_none() {
-                        commitment_slot = Some(storage_processed.confirmed_slot);
-                    }
+                    commitment_slot = Some(storage_processed.confirmed_slot);
                 }
 
                 if commitment.is_finalized() {
@@ -774,15 +772,17 @@ impl ReadRequest {
                     }
                 }
 
-                let _ = tx.send(
-                    block_height
-                        .map(ReadResultBlockHeight::BlockHeight)
-                        .unwrap_or_else(|| {
-                            ReadResultBlockHeight::ReadError(anyhow::anyhow!(
-                                "failed to get block height"
-                            ))
-                        }),
-                );
+                let result = block_height
+                    .map(|block_height| ReadResultBlockHeight::BlockHeight {
+                        block_height,
+                        slot: commitment_slot.expect("should be defined"),
+                    })
+                    .unwrap_or_else(|| {
+                        ReadResultBlockHeight::ReadError(anyhow::anyhow!(
+                            "failed to get block height"
+                        ))
+                    });
+                let _ = tx.send(result);
                 None
             }
             Self::Blocks {

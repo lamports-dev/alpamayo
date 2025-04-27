@@ -29,6 +29,7 @@ Please use issues only for reporting bugs or discussing feature-related topics. 
 #### Smart cache
 
 - [x] `getClusterNodes`
+- [x] `getInflationReward`
 - [x] `getLeaderSchedule`
 
 #### Static

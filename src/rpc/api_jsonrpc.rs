@@ -12,6 +12,7 @@ use {
             },
             slots::StoredSlots,
         },
+        util::HashMap,
     },
     anyhow::Context,
     crossbeam::channel::{Sender, TrySendError},
@@ -43,13 +44,14 @@ use {
         custom_error::RpcCustomError,
         request::{MAX_GET_CONFIRMED_BLOCKS_RANGE, MAX_GET_SIGNATURE_STATUSES_QUERY_ITEMS},
         response::{
-            RpcBlockhash, RpcConfirmedTransactionStatusWithSignature, RpcResponseContext,
-            RpcVersionInfo,
+            RpcBlockhash, RpcConfirmedTransactionStatusWithSignature, RpcInflationReward,
+            RpcResponseContext, RpcVersionInfo,
         },
     },
     solana_sdk::{
         clock::{Epoch, Slot, UnixTimestamp},
         commitment_config::{CommitmentConfig, CommitmentLevel},
+        epoch_rewards_hasher::EpochRewardsHasher,
         epoch_schedule::EpochSchedule,
         hash::Hash,
         pubkey::Pubkey,
@@ -58,8 +60,9 @@ use {
     },
     solana_storage_proto::convert::generated,
     solana_transaction_status::{
-        BlockEncodingOptions, ConfirmedBlock, ConfirmedTransactionWithStatusMeta,
-        TransactionStatus, TransactionWithStatusMeta, UiTransactionEncoding,
+        BlockEncodingOptions, ConfirmedBlock, ConfirmedTransactionWithStatusMeta, Reward,
+        RewardType, TransactionDetails, TransactionStatus, TransactionWithStatusMeta,
+        UiConfirmedBlock, UiTransactionEncoding,
     },
     std::{
         collections::HashSet,
@@ -456,7 +459,7 @@ impl RpcRequestHandler for RpcRequestBlock {
             CommitmentLevel::Finalized => self.state.stored_slots.finalized_load(),
         };
         if self.slot > slot_tip {
-            return Self::error_not_available(self.id, self.slot);
+            return Ok(Self::error_not_available(self.id, self.slot));
         }
         if self.slot <= self.state.stored_slots.first_available_load() {
             return self.fetch_upstream(deadline).await;
@@ -486,10 +489,10 @@ impl RpcRequestHandler for RpcRequestBlock {
                 return self.fetch_upstream(deadline).await;
             }
             ReadResultBlock::Dead => {
-                return Self::error_skipped(self.id, self.slot);
+                return Ok(Self::error_skipped(self.id, self.slot));
             }
             ReadResultBlock::NotAvailable => {
-                return Self::error_not_available(self.id, self.slot);
+                return Ok(Self::error_not_available(self.id, self.slot));
             }
             ReadResultBlock::Block(bytes) => bytes,
             ReadResultBlock::ReadError(error) => anyhow::bail!("read error: {error}"),
@@ -523,29 +526,23 @@ impl RpcRequestBlock {
                 )
                 .await
         } else {
-            Self::error_skipped_long_term_storage(self.id, self.slot)
+            Ok(Self::error_skipped_long_term_storage(self.id, self.slot))
         }
     }
 
-    fn error_not_available(id: Id<'static>, slot: Slot) -> RpcRequestResult<'static> {
-        Ok(jsonrpc_response_error_custom(
-            id,
-            RpcCustomError::BlockNotAvailable { slot },
-        ))
+    fn error_not_available(id: Id<'static>, slot: Slot) -> Response<'static, serde_json::Value> {
+        jsonrpc_response_error_custom(id, RpcCustomError::BlockNotAvailable { slot })
     }
 
-    fn error_skipped(id: Id<'static>, slot: Slot) -> RpcRequestResult<'static> {
-        Ok(jsonrpc_response_error_custom(
-            id,
-            RpcCustomError::SlotSkipped { slot },
-        ))
+    fn error_skipped(id: Id<'static>, slot: Slot) -> Response<'static, serde_json::Value> {
+        jsonrpc_response_error_custom(id, RpcCustomError::SlotSkipped { slot })
     }
 
-    fn error_skipped_long_term_storage(id: Id<'static>, slot: Slot) -> RpcRequestResult<'static> {
-        Ok(jsonrpc_response_error_custom(
-            id,
-            RpcCustomError::LongTermStorageSlotSkipped { slot },
-        ))
+    fn error_skipped_long_term_storage(
+        id: Id<'static>,
+        slot: Slot,
+    ) -> Response<'static, serde_json::Value> {
+        jsonrpc_response_error_custom(id, RpcCustomError::LongTermStorageSlotSkipped { slot })
     }
 }
 
@@ -607,8 +604,24 @@ impl RpcRequestBlockWorkRequest {
         encoding: UiTransactionEncoding,
         encoding_options: BlockEncodingOptions,
     ) -> RpcRequestResult<'static> {
+        // parse and encode
+        let block = Self::parse_and_encode(&bytes, &id, slot, encoding, encoding_options)?;
+
+        // serialize
+        let data = serde_json::to_value(&block).expect("json serialization never fail");
+
+        Ok(jsonrpc_response_success(id, data))
+    }
+
+    fn parse_and_encode(
+        bytes: &[u8],
+        id: &Id<'static>,
+        slot: Slot,
+        encoding: UiTransactionEncoding,
+        encoding_options: BlockEncodingOptions,
+    ) -> anyhow::Result<Result<UiConfirmedBlock, Response<'static, serde_json::Value>>> {
         // parse
-        let block = match generated::ConfirmedBlock::decode(bytes.as_ref()) {
+        let block = match generated::ConfirmedBlock::decode(bytes) {
             Ok(block) => match ConfirmedBlock::try_from(block) {
                 Ok(block) => block,
                 Err(error) => {
@@ -623,20 +636,14 @@ impl RpcRequestBlockWorkRequest {
         };
 
         // encode
-        let block = match block.encode_with_options(encoding, encoding_options) {
-            Ok(block) => block,
-            Err(error) => {
-                return Ok(jsonrpc_response_error_custom(
-                    id,
-                    RpcCustomError::from(error),
-                ));
-            }
+        let result = match block.encode_with_options(encoding, encoding_options) {
+            Ok(block) => Ok(block),
+            Err(error) => Err(jsonrpc_response_error_custom(
+                id.clone(),
+                RpcCustomError::from(error),
+            )),
         };
-
-        // serialize
-        let data = serde_json::to_value(&block).expect("json serialization never fail");
-
-        Ok(jsonrpc_response_success(id, data))
+        Ok(result)
     }
 }
 
@@ -698,7 +705,7 @@ impl RpcRequestHandler for RpcRequestBlockHeight {
         };
         let block_height = match result {
             ReadResultBlockHeight::Timeout => anyhow::bail!("timeout"),
-            ReadResultBlockHeight::BlockHeight(block_height) => block_height,
+            ReadResultBlockHeight::BlockHeight { block_height, .. } => block_height,
             ReadResultBlockHeight::ReadError(error) => anyhow::bail!("read error: {error}"),
         };
         Ok(jsonrpc_response_success(self.id, json!(block_height)))
@@ -1116,8 +1123,10 @@ struct RpcRequestInflationReward {
     x_subscription_id: Arc<str>,
     upstream_disabled: bool,
     id: Id<'static>,
+    commitment: CommitmentConfig,
     epoch: Epoch,
-    addresses: Vec<Pubkey>,
+    address_strs: Vec<String>,
+    address_pks: Vec<Pubkey>,
 }
 
 impl RpcRequestHandler for RpcRequestInflationReward {
@@ -1142,10 +1151,10 @@ impl RpcRequestHandler for RpcRequestInflationReward {
                 config,
             },
         ) = parse_params(request)?;
-        let mut addresses = Vec::with_capacity(address_strs.len());
-        for address_str in address_strs {
-            match verify_pubkey(&address_str) {
-                Ok(address) => addresses.push(address),
+        let mut address_pks = Vec::with_capacity(address_strs.len());
+        for address_str in address_strs.iter() {
+            match verify_pubkey(address_str) {
+                Ok(pubkey) => address_pks.push(pubkey),
                 Err(error) => return Err(jsonrpc_response_error(id, error)),
             }
         }
@@ -1154,10 +1163,10 @@ impl RpcRequestHandler for RpcRequestInflationReward {
             commitment,
             min_context_slot,
         } = config.unwrap_or_default();
+        let commitment = commitment.unwrap_or_default();
         let (id, epoch) = match epoch {
             Some(epoch) => (id, epoch),
             None => {
-                let commitment = commitment.unwrap_or_default();
                 let (id, slot) = min_context_check(id, min_context_slot, commitment, &state)?;
                 let slot = slot.unwrap_or_else(|| match commitment.commitment {
                     CommitmentLevel::Processed => state.stored_slots.processed_load(),
@@ -1173,54 +1182,387 @@ impl RpcRequestHandler for RpcRequestInflationReward {
             x_subscription_id,
             upstream_disabled,
             id: id.into_owned(),
+            commitment,
             epoch,
-            addresses,
+            address_strs,
+            address_pks,
         })
     }
 
-    async fn process(self) -> RpcRequestResult<'static> {
-        todo!()
-        // let deadline = Instant::now() + self.state.request_timeout;
+    async fn process(mut self) -> RpcRequestResult<'static> {
+        let deadline = Instant::now() + self.state.request_timeout;
 
-        // // request
-        // let (tx, rx) = oneshot::channel();
-        // anyhow::ensure!(
-        //     self.state
-        //         .requests_tx
-        //         .send(ReadRequest::LatestBlockhash {
-        //             deadline,
-        //             commitment: self.commitment,
-        //             tx
-        //         })
-        //         .await
-        //         .is_ok(),
-        //     "request channel is closed"
-        // );
-        // let Ok(result) = rx.await else {
-        //     anyhow::bail!("rx channel is closed");
-        // };
+        let mut reward_map = HashMap::default();
 
-        // match result {
-        //     ReadResultLatestBlockhash::Timeout => anyhow::bail!("timeout"),
-        //     ReadResultLatestBlockhash::LatestBlockhash {
-        //         slot,
-        //         blockhash,
-        //         last_valid_block_height,
-        //     } => {
-        //         let data = serde_json::to_value(&solana_rpc_client_api::response::Response {
-        //             context: RpcResponseContext::new(slot),
-        //             value: RpcBlockhash {
-        //                 blockhash,
-        //                 last_valid_block_height,
-        //             },
-        //         })
-        //         .expect("json serialization never fail");
-        //         Ok(jsonrpc_response_success(self.id, data))
-        //     }
-        //     ReadResultLatestBlockhash::ReadError(error) => {
-        //         anyhow::bail!("read error: {error}")
-        //     }
-        // }
+        let address_strs = self.address_strs.drain(..).collect();
+        let address_pks = self.address_pks.drain(..).collect();
+
+        if let Err(error) = self
+            .get_inflation_reward(deadline, address_strs, address_pks, &mut reward_map)
+            .await?
+        {
+            return Ok(error);
+        }
+
+        // serialize
+        let data = serde_json::to_value(&reward_map).expect("json serialization never fail");
+        Ok(jsonrpc_response_success(self.id, data))
+    }
+}
+
+impl RpcRequestInflationReward {
+    async fn get_inflation_reward(
+        &self,
+        deadline: Instant,
+        // pass `epoch_boundary_block` ?
+        address_strs: Vec<String>,
+        address_pks: Vec<Pubkey>,
+        reward_map: &mut HashMap<String, RpcInflationReward>,
+    ) -> anyhow::Result<Result<(), Response<'static, serde_json::Value>>> {
+        // get first slot in epoch
+        let first_slot_in_epoch = self
+            .state
+            .epoch_schedule
+            .get_first_slot_in_epoch(self.epoch.saturating_add(1));
+        if first_slot_in_epoch > self.state.stored_slots.confirmed_load() {
+            return Ok(Err(RpcRequestBlock::error_not_available(
+                self.id.clone(),
+                first_slot_in_epoch,
+            )));
+        }
+        let first_confirmed_block_in_epoch = match self
+            .get_blocks_with_limit(deadline, first_slot_in_epoch, 1)
+            .await?
+            .map(|vec| vec.first().copied())
+        {
+            Ok(Some(slot)) => slot,
+            Ok(None) => {
+                return Ok(Err(RpcRequestBlock::error_not_available(
+                    self.id.clone(),
+                    first_slot_in_epoch,
+                )));
+            }
+            Err(error) => return Ok(Err(error)),
+        };
+        let epoch_boundary_block = match self
+            .get_block_with_rewards(deadline, first_confirmed_block_in_epoch)
+            .await?
+        {
+            Ok(block) => block,
+            Err(error) => return Ok(Err(error)),
+        };
+
+        // collect rewards from epoch boundary slot
+        let epoch_has_partitioned_rewards = epoch_boundary_block.num_reward_partitions.is_some();
+        let epoch_reward_map = self.filter_rewards(
+            first_confirmed_block_in_epoch,
+            epoch_boundary_block.rewards,
+            &|reward_type| {
+                reward_type == RewardType::Voting
+                    || (!epoch_has_partitioned_rewards && reward_type == RewardType::Staking)
+            },
+        );
+        for address in address_strs.iter() {
+            if let Some(reward) = epoch_reward_map.get(address) {
+                reward_map.insert(address.clone(), reward.clone());
+            }
+        }
+        // TODO: send to writer
+
+        // append stake account rewards from partitions
+        if let Some(num_partitions) = epoch_boundary_block.num_reward_partitions {
+            let num_partitions = usize::try_from(num_partitions)
+                .expect("num_partitions should never exceed usize::MAX");
+
+            // fetch blocks with rewards
+            let block_list = match self
+                .get_blocks_with_limit(deadline, first_confirmed_block_in_epoch + 1, num_partitions)
+                .await?
+            {
+                Ok(blocks) => blocks,
+                Err(error) => return Ok(Err(error)),
+            };
+
+            // calculate partitions for addresses
+            let hasher = EpochRewardsHasher::new(
+                num_partitions,
+                &Hash::from_str(&epoch_boundary_block.previous_blockhash)
+                    .expect("UiConfirmedBlock::previous_blockhash should be properly formed"),
+            );
+            let mut partition_index_addresses: HashMap<usize, Vec<String>> = HashMap::default();
+            for (address_str, address_pk) in address_strs.into_iter().zip(address_pks.iter()) {
+                // Skip this address if (Voting) rewards were already found in
+                // the first block of the epoch
+                if !epoch_reward_map.contains_key(&address_str) {
+                    let partition_index = hasher.clone().hash_address_to_partition(address_pk);
+                    partition_index_addresses
+                        .entry(partition_index)
+                        .or_insert_with(|| Vec::with_capacity(4))
+                        .push(address_str);
+                }
+            }
+
+            // fetch blocks with rewards
+            for (partition_index, address_strs) in partition_index_addresses {
+                let Some(slot) = block_list.get(partition_index).copied() else {
+                    // If block_list.len() too short to contain
+                    // partition_index, the epoch rewards period must be
+                    // currently active.
+                    let rewards_complete_block_height = epoch_boundary_block
+                        .block_height
+                        .map(|block_height| {
+                            block_height
+                                .saturating_add(num_partitions as u64)
+                                .saturating_add(1)
+                        })
+                        .expect(
+                            "every block after partitioned_epoch_reward_enabled should have a \
+                                populated block_height",
+                        );
+
+                    return self
+                        .error_epoch_rewards_period_active(deadline, rewards_complete_block_height)
+                        .await
+                        .map(Err);
+                };
+
+                // fetch block
+                let block = match self.get_block_with_rewards(deadline, slot).await? {
+                    Ok(block) => block,
+                    Err(error) => return Ok(Err(error)),
+                };
+
+                // collect for addresses
+                let parititon_reward_map =
+                    self.filter_rewards(slot, block.rewards, &|reward_type| {
+                        reward_type == RewardType::Staking
+                    });
+                for address in address_strs.iter() {
+                    if let Some(reward) = parititon_reward_map.get(address) {
+                        reward_map.insert(address.clone(), reward.clone());
+                    }
+                }
+                // TODO: send to writer
+            }
+        }
+
+        Ok(Ok(()))
+    }
+
+    async fn get_blocks_with_limit(
+        &self,
+        deadline: Instant,
+        start_slot: Slot,
+        limit: usize,
+    ) -> anyhow::Result<Result<Vec<Slot>, Response<'static, serde_json::Value>>> {
+        // some slot will be removed while we pass request, send to upstream
+        let first_available_slot = self.state.stored_slots.first_available_load() + 150;
+        if start_slot < first_available_slot {
+            if let Some(upstream) = (!self.upstream_disabled)
+                .then_some(self.state.upstream.as_ref())
+                .flatten()
+            {
+                return upstream
+                    .get_blocks_parsed(
+                        Arc::clone(&self.x_subscription_id),
+                        deadline,
+                        &self.id,
+                        start_slot,
+                        limit,
+                    )
+                    .await
+                    .map_err(|error| anyhow::anyhow!(error));
+            }
+        }
+
+        // request
+        let (tx, rx) = oneshot::channel();
+        anyhow::ensure!(
+            self.state
+                .requests_tx
+                .send(ReadRequest::Blocks {
+                    deadline,
+                    start_slot,
+                    until: RpcRequestBlocksUntil::Limit(limit),
+                    commitment: CommitmentConfig::confirmed(),
+                    tx
+                })
+                .await
+                .is_ok(),
+            "request channel is closed"
+        );
+        let Ok(result) = rx.await else {
+            anyhow::bail!("rx channel is closed");
+        };
+
+        match result {
+            ReadResultBlocks::Timeout => anyhow::bail!("timeout"),
+            ReadResultBlocks::Blocks(blocks) => Ok(Ok(blocks)),
+            ReadResultBlocks::ReadError(error) => anyhow::bail!("read error: {error}"),
+        }
+    }
+
+    async fn get_block_with_rewards(
+        &self,
+        deadline: Instant,
+        slot: Slot,
+    ) -> anyhow::Result<Result<UiConfirmedBlock, Response<'static, serde_json::Value>>> {
+        if slot <= self.state.stored_slots.first_available_load() {
+            return self.get_block_with_rewards_upstream(deadline, slot).await;
+        }
+
+        // request
+        let (tx, rx) = oneshot::channel();
+        anyhow::ensure!(
+            self.state
+                .requests_tx
+                .send(ReadRequest::Block {
+                    deadline,
+                    slot,
+                    tx,
+                    x_subscription_id: Arc::clone(&self.x_subscription_id),
+                })
+                .await
+                .is_ok(),
+            "request channel is closed"
+        );
+        let Ok(result) = rx.await else {
+            anyhow::bail!("rx channel is closed");
+        };
+        let bytes = match result {
+            ReadResultBlock::Timeout => anyhow::bail!("timeout"),
+            ReadResultBlock::Removed => {
+                return self.get_block_with_rewards_upstream(deadline, slot).await;
+            }
+            ReadResultBlock::Dead => {
+                return Ok(Err(RpcRequestBlock::error_skipped(self.id.clone(), slot)));
+            }
+            ReadResultBlock::NotAvailable => {
+                return Ok(Err(RpcRequestBlock::error_not_available(
+                    self.id.clone(),
+                    slot,
+                )));
+            }
+            ReadResultBlock::Block(bytes) => bytes,
+            ReadResultBlock::ReadError(error) => anyhow::bail!("read error: {error}"),
+        };
+
+        // verify that we still have data for that block (i.e. we read correct data)
+        if slot <= self.state.stored_slots.first_available_load() {
+            return self.get_block_with_rewards_upstream(deadline, slot).await;
+        }
+
+        // parse and encode
+        RpcRequestBlockWorkRequest::parse_and_encode(
+            &bytes,
+            &self.id,
+            slot,
+            UiTransactionEncoding::Base58,
+            BlockEncodingOptions {
+                transaction_details: TransactionDetails::None,
+                show_rewards: true,
+                max_supported_transaction_version: None,
+            },
+        )
+    }
+
+    async fn get_block_with_rewards_upstream(
+        &self,
+        deadline: Instant,
+        slot: Slot,
+    ) -> anyhow::Result<Result<UiConfirmedBlock, Response<'static, serde_json::Value>>> {
+        if let Some(upstream) = (!self.upstream_disabled)
+            .then_some(self.state.upstream.as_ref())
+            .flatten()
+        {
+            match upstream
+                .get_block_rewards(
+                    Arc::clone(&self.x_subscription_id),
+                    deadline,
+                    &self.id,
+                    slot,
+                )
+                .await
+            {
+                Ok(Ok(Some(block))) => Ok(Ok(block)),
+                Ok(Ok(None)) => Ok(Err(RpcRequestBlock::error_not_available(
+                    self.id.clone(),
+                    slot,
+                ))),
+                Ok(Err(error)) => Ok(Err(error)),
+                Err(error) => anyhow::bail!(error),
+            }
+        } else {
+            Ok(Err(RpcRequestBlock::error_skipped_long_term_storage(
+                self.id.clone(),
+                slot,
+            )))
+        }
+    }
+
+    fn filter_rewards<F>(
+        &self,
+        slot: Slot,
+        rewards: Option<Vec<Reward>>,
+        reward_type_filter: &F,
+    ) -> HashMap<String, RpcInflationReward>
+    where
+        F: Fn(RewardType) -> bool,
+    {
+        rewards
+            .into_iter()
+            .flatten()
+            .filter_map(move |reward| {
+                reward.reward_type.is_some_and(reward_type_filter).then(|| {
+                    let inflation_reward = RpcInflationReward {
+                        epoch: self.epoch,
+                        effective_slot: slot,
+                        amount: reward.lamports.unsigned_abs(),
+                        post_balance: reward.post_balance,
+                        commission: reward.commission,
+                    };
+                    (reward.pubkey, inflation_reward)
+                })
+            })
+            .collect()
+    }
+
+    async fn error_epoch_rewards_period_active(
+        &self,
+        deadline: Instant,
+        rewards_complete_block_height: Slot,
+    ) -> RpcRequestResult<'static> {
+        // request
+        let (tx, rx) = oneshot::channel();
+        anyhow::ensure!(
+            self.state
+                .requests_tx
+                .send(ReadRequest::BlockHeight {
+                    deadline,
+                    commitment: self.commitment,
+                    tx
+                })
+                .await
+                .is_ok(),
+            "request channel is closed"
+        );
+        let Ok(result) = rx.await else {
+            anyhow::bail!("rx channel is closed");
+        };
+        match result {
+            ReadResultBlockHeight::Timeout => anyhow::bail!("timeout"),
+            ReadResultBlockHeight::BlockHeight { block_height, slot } => {
+                Ok(jsonrpc_response_error_custom(
+                    self.id.clone(),
+                    RpcCustomError::EpochRewardsPeriodActive {
+                        slot,
+                        current_block_height: block_height,
+                        rewards_complete_block_height,
+                    },
+                ))
+            }
+            ReadResultBlockHeight::ReadError(error) => anyhow::bail!("read error: {error}"),
+        }
     }
 }
 
