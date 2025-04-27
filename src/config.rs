@@ -323,9 +323,9 @@ pub struct ConfigRpc {
     /// Enable `percentile` in getRecentPrioritizationFees
     #[serde(default = "ConfigRpc::default_grpf_percentile")]
     pub grpf_percentile: bool,
-    /// TTL of cached methods
-    #[serde(default = "ConfigRpc::default_cache_ttl", with = "humantime_serde")]
-    pub cache_ttl: Duration,
+    /// TTL of getClusterNodes
+    #[serde(default = "ConfigRpc::default_gcn_cache_ttl", with = "humantime_serde")]
+    pub gcn_cache_ttl: Duration,
     /// Max number of requests in the queue
     #[serde(
         default = "ConfigRpc::default_request_channel_capacity",
@@ -364,7 +364,7 @@ impl ConfigRpc {
         true
     }
 
-    const fn default_cache_ttl() -> Duration {
+    const fn default_gcn_cache_ttl() -> Duration {
         Duration::from_secs(1)
     }
 
@@ -390,6 +390,7 @@ pub enum ConfigRpcCallJson {
     GetBlockTime,
     GetClusterNodes,
     GetFirstAvailableBlock,
+    GetInflationReward,
     GetLatestBlockhash,
     GetLeaderSchedule,
     GetRecentPrioritizationFees,

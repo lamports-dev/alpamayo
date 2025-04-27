@@ -37,8 +37,8 @@ use {
     solana_rpc_client_api::{
         config::{
             RpcBlockConfig, RpcBlocksConfigWrapper, RpcContextConfig, RpcEncodingConfigWrapper,
-            RpcLeaderScheduleConfig, RpcLeaderScheduleConfigWrapper, RpcSignatureStatusConfig,
-            RpcSignaturesForAddressConfig, RpcTransactionConfig,
+            RpcEpochConfig, RpcLeaderScheduleConfig, RpcLeaderScheduleConfigWrapper,
+            RpcSignatureStatusConfig, RpcSignaturesForAddressConfig, RpcTransactionConfig,
         },
         custom_error::RpcCustomError,
         request::{MAX_GET_CONFIRMED_BLOCKS_RANGE, MAX_GET_SIGNATURE_STATUSES_QUERY_ITEMS},
@@ -48,7 +48,7 @@ use {
         },
     },
     solana_sdk::{
-        clock::{Slot, UnixTimestamp},
+        clock::{Epoch, Slot, UnixTimestamp},
         commitment_config::{CommitmentConfig, CommitmentLevel},
         epoch_schedule::EpochSchedule,
         hash::Hash,
@@ -103,7 +103,7 @@ impl State {
     ) -> anyhow::Result<Self> {
         let upstream = config
             .upstream_jsonrpc
-            .map(|config_upstream| RpcClientJsonrpc::new(config_upstream, config.cache_ttl))
+            .map(|config_upstream| RpcClientJsonrpc::new(config_upstream, config.gcn_cache_ttl))
             .transpose()?;
 
         if config
@@ -170,6 +170,12 @@ pub fn create_request_processor(
         processor.add_handler(
             "getFirstAvailableBlock",
             Box::new(RpcRequestFirstAvailableBlock::handle),
+        );
+    }
+    if calls.contains(&ConfigRpcCallJson::GetInflationReward) {
+        processor.add_handler(
+            "getInflationReward",
+            Box::new(RpcRequestInflationReward::handle),
         );
     }
     if calls.contains(&ConfigRpcCallJson::GetLatestBlockhash) {
@@ -306,7 +312,7 @@ fn min_context_check<'a>(
     min_context_slot: Option<Slot>,
     commitment: CommitmentConfig,
     state: &State,
-) -> Result<Id<'a>, Response<'a, serde_json::Value>> {
+) -> Result<(Id<'a>, Option<Slot>), Response<'a, serde_json::Value>> {
     if let Some(min_context_slot) = min_context_slot {
         let context_slot = match commitment.commitment {
             CommitmentLevel::Processed => state.stored_slots.processed_load(),
@@ -315,13 +321,16 @@ fn min_context_check<'a>(
         };
 
         if context_slot < min_context_slot {
-            return Err(jsonrpc_response_error_custom(
+            Err(jsonrpc_response_error_custom(
                 id,
                 RpcCustomError::MinContextSlotNotReached { context_slot },
-            ));
+            ))
+        } else {
+            Ok((id, Some(context_slot)))
         }
+    } else {
+        Ok((id, None))
     }
-    Ok(id)
 }
 
 fn verify_signature(input: &str) -> Result<Signature, ErrorObjectOwned> {
@@ -658,7 +667,7 @@ impl RpcRequestHandler for RpcRequestBlockHeight {
         } = config.unwrap_or_default();
         let commitment = commitment.unwrap_or_default();
 
-        let id = min_context_check(id, min_context_slot, commitment, &state)?;
+        let (id, _slot) = min_context_check(id, min_context_slot, commitment, &state)?;
 
         Ok(Self {
             state,
@@ -1102,6 +1111,120 @@ impl RpcRequestHandler for RpcRequestFirstAvailableBlock {
 }
 
 #[derive(Debug)]
+struct RpcRequestInflationReward {
+    state: Arc<State>,
+    x_subscription_id: Arc<str>,
+    upstream_disabled: bool,
+    id: Id<'static>,
+    epoch: Epoch,
+    addresses: Vec<Pubkey>,
+}
+
+impl RpcRequestHandler for RpcRequestInflationReward {
+    fn parse(
+        state: Arc<State>,
+        x_subscription_id: Arc<str>,
+        upstream_disabled: bool,
+        request: Request<'_>,
+    ) -> Result<Self, Response<'_, serde_json::Value>> {
+        #[derive(Debug, Deserialize)]
+        struct ReqParams {
+            #[serde(default)]
+            address_strs: Vec<String>,
+            #[serde(default)]
+            config: Option<RpcEpochConfig>,
+        }
+
+        let (
+            id,
+            ReqParams {
+                address_strs,
+                config,
+            },
+        ) = parse_params(request)?;
+        let mut addresses = Vec::with_capacity(address_strs.len());
+        for address_str in address_strs {
+            match verify_pubkey(&address_str) {
+                Ok(address) => addresses.push(address),
+                Err(error) => return Err(jsonrpc_response_error(id, error)),
+            }
+        }
+        let RpcEpochConfig {
+            epoch,
+            commitment,
+            min_context_slot,
+        } = config.unwrap_or_default();
+        let (id, epoch) = match epoch {
+            Some(epoch) => (id, epoch),
+            None => {
+                let commitment = commitment.unwrap_or_default();
+                let (id, slot) = min_context_check(id, min_context_slot, commitment, &state)?;
+                let slot = slot.unwrap_or_else(|| match commitment.commitment {
+                    CommitmentLevel::Processed => state.stored_slots.processed_load(),
+                    CommitmentLevel::Confirmed => state.stored_slots.confirmed_load(),
+                    CommitmentLevel::Finalized => state.stored_slots.finalized_load(),
+                });
+                (id, state.epoch_schedule.get_epoch(slot).saturating_sub(1))
+            }
+        };
+
+        Ok(Self {
+            state,
+            x_subscription_id,
+            upstream_disabled,
+            id: id.into_owned(),
+            epoch,
+            addresses,
+        })
+    }
+
+    async fn process(self) -> RpcRequestResult<'static> {
+        todo!()
+        // let deadline = Instant::now() + self.state.request_timeout;
+
+        // // request
+        // let (tx, rx) = oneshot::channel();
+        // anyhow::ensure!(
+        //     self.state
+        //         .requests_tx
+        //         .send(ReadRequest::LatestBlockhash {
+        //             deadline,
+        //             commitment: self.commitment,
+        //             tx
+        //         })
+        //         .await
+        //         .is_ok(),
+        //     "request channel is closed"
+        // );
+        // let Ok(result) = rx.await else {
+        //     anyhow::bail!("rx channel is closed");
+        // };
+
+        // match result {
+        //     ReadResultLatestBlockhash::Timeout => anyhow::bail!("timeout"),
+        //     ReadResultLatestBlockhash::LatestBlockhash {
+        //         slot,
+        //         blockhash,
+        //         last_valid_block_height,
+        //     } => {
+        //         let data = serde_json::to_value(&solana_rpc_client_api::response::Response {
+        //             context: RpcResponseContext::new(slot),
+        //             value: RpcBlockhash {
+        //                 blockhash,
+        //                 last_valid_block_height,
+        //             },
+        //         })
+        //         .expect("json serialization never fail");
+        //         Ok(jsonrpc_response_success(self.id, data))
+        //     }
+        //     ReadResultLatestBlockhash::ReadError(error) => {
+        //         anyhow::bail!("read error: {error}")
+        //     }
+        // }
+    }
+}
+
+#[derive(Debug)]
 struct RpcRequestLatestBlockhash {
     state: Arc<State>,
     id: Id<'static>,
@@ -1128,7 +1251,7 @@ impl RpcRequestHandler for RpcRequestLatestBlockhash {
         } = config.unwrap_or_default();
         let commitment = commitment.unwrap_or_default();
 
-        let id = min_context_check(id, min_context_slot, commitment, &state)?;
+        let (id, _slot) = min_context_check(id, min_context_slot, commitment, &state)?;
 
         Ok(Self {
             state,
@@ -1425,7 +1548,7 @@ impl RpcRequestHandler for RpcRequestSignaturesForAddress {
             return Err(jsonrpc_response_error(id, error));
         }
 
-        let id = min_context_check(id, min_context_slot, commitment, &state)?;
+        let (id, _slot) = min_context_check(id, min_context_slot, commitment, &state)?;
 
         Ok(Self {
             state,
@@ -2050,7 +2173,7 @@ impl RpcRequestHandler for RpcRequestIsBlockhashValid {
         } = config.unwrap_or_default();
         let commitment = commitment.unwrap_or_default();
 
-        let id = min_context_check(id, min_context_slot, commitment, &state)?;
+        let (id, _slot) = min_context_check(id, min_context_slot, commitment, &state)?;
 
         if let Err(error) = Hash::from_str(&blockhash) {
             return Err(jsonrpc_response_error(

@@ -16,6 +16,12 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Breaking
 
+## [0.6.0] - 2025-04-??
+
+### Features
+
+- rpc: add `getInflationReward` ([#36](https://github.com/lamports-dev/alpamayo/pull/36))
+
 ## [0.5.0] - 2025-04-26
 
 ### Features
