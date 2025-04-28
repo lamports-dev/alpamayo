@@ -489,6 +489,29 @@ impl InflationRewardAddressValue {
             buf.put_u8(comission);
         }
     }
+
+    fn decode(mut slice: &[u8]) -> anyhow::Result<Self> {
+        let epoch = decode_varint(&mut slice).context("failed to decode epoch")?;
+        let effective_slot =
+            decode_varint(&mut slice).context("failed to decode effective_slot")?;
+        let amount = decode_varint(&mut slice).context("failed to decode amount")?;
+        let post_balance = decode_varint(&mut slice).context("failed to decode post_balance")?;
+        let commission = if slice.is_empty() {
+            None
+        } else {
+            Some(slice[0])
+        };
+
+        Ok(Self {
+            reward: RpcInflationReward {
+                epoch,
+                effective_slot,
+                amount,
+                post_balance,
+                commission,
+            },
+        })
+    }
 }
 
 #[derive(Debug, Clone)]
