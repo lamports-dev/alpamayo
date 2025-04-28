@@ -2,7 +2,7 @@ use {
     crate::{
         config::ConfigRpc,
         rpc::{api_httpget, api_jsonrpc, workers},
-        storage::{read::ReadRequest, slots::StoredSlots},
+        storage::{read::ReadRequest, rocksdb::RocksdbWriteInflationReward, slots::StoredSlots},
     },
     futures::future::{TryFutureExt, ready},
     http_body_util::{BodyExt, Empty as BodyEmpty},
@@ -21,6 +21,7 @@ pub async fn spawn(
     config: ConfigRpc,
     stored_slots: StoredSlots,
     requests_tx: mpsc::Sender<ReadRequest>,
+    db_write_inflation_reward: RocksdbWriteInflationReward,
     shutdown: Shutdown,
 ) -> anyhow::Result<impl Future<Output = Result<(), JoinError>>> {
     let (workers_tx, workers_jhs) = workers::start(config.workers.clone(), shutdown.clone())?;
@@ -37,6 +38,7 @@ pub async fn spawn(
         config,
         stored_slots,
         requests_tx,
+        db_write_inflation_reward,
         workers_tx,
     )?);
 

@@ -10,6 +10,7 @@ use {
                 ReadResultRecentPrioritizationFees, ReadResultSignatureStatuses,
                 ReadResultSignaturesForAddress, ReadResultTransaction,
             },
+            rocksdb::RocksdbWriteInflationReward,
             slots::StoredSlots,
         },
         util::HashMap,
@@ -93,6 +94,7 @@ pub struct State {
     gss_transaction_history: bool,
     grpf_percentile: bool,
     requests_tx: mpsc::Sender<ReadRequest>,
+    db_write_inflation_reward: RocksdbWriteInflationReward,
     upstream: Option<RpcClientJsonrpc>,
     workers: Sender<WorkRequest>,
 }
@@ -102,6 +104,7 @@ impl State {
         config: ConfigRpc,
         stored_slots: StoredSlots,
         requests_tx: mpsc::Sender<ReadRequest>,
+        db_write_inflation_reward: RocksdbWriteInflationReward,
         workers: Sender<WorkRequest>,
     ) -> anyhow::Result<Self> {
         let upstream = config
@@ -132,6 +135,7 @@ impl State {
             gss_transaction_history: config.gss_transaction_history,
             grpf_percentile: config.grpf_percentile,
             requests_tx,
+            db_write_inflation_reward,
             upstream,
             workers,
         })
@@ -142,9 +146,16 @@ pub fn create_request_processor(
     config: ConfigRpc,
     stored_slots: StoredSlots,
     requests_tx: mpsc::Sender<ReadRequest>,
+    db_write_inflation_reward: RocksdbWriteInflationReward,
     workers: Sender<WorkRequest>,
 ) -> anyhow::Result<RpcRequestsProcessor<Arc<State>>> {
-    let state = State::new(config.clone(), stored_slots, requests_tx, workers)?;
+    let state = State::new(
+        config.clone(),
+        stored_slots,
+        requests_tx,
+        db_write_inflation_reward,
+        workers,
+    )?;
     let mut processor = RpcRequestsProcessor::new(config.body_limit, Arc::new(state));
 
     let calls = &config.calls_jsonrpc;
@@ -1251,6 +1262,8 @@ impl RpcRequestInflationReward {
             Ok(block) => block,
             Err(error) => return Ok(Err(error)),
         };
+        let previous_blockhash = Hash::from_str(&epoch_boundary_block.previous_blockhash)
+            .expect("UiConfirmedBlock::previous_blockhash should be properly formed");
 
         // collect rewards from epoch boundary slot
         let epoch_has_partitioned_rewards = epoch_boundary_block.num_reward_partitions.is_some();
@@ -1261,13 +1274,21 @@ impl RpcRequestInflationReward {
                 reward_type == RewardType::Voting
                     || (!epoch_has_partitioned_rewards && reward_type == RewardType::Staking)
             },
-        );
-        for address in address_strs.iter() {
-            if let Some(reward) = epoch_reward_map.get(address) {
-                reward_map.insert(address.clone(), reward.clone());
+        )?;
+        for (address_str, pubkey) in address_strs.iter().zip(address_pks.iter()) {
+            if let Some(reward) = epoch_reward_map.get(pubkey) {
+                reward_map.insert(address_str.clone(), reward.clone());
             }
         }
-        // TODO: send to writer
+
+        // send to writer
+        self.state.db_write_inflation_reward.push_base(
+            self.epoch,
+            first_confirmed_block_in_epoch,
+            previous_blockhash,
+            epoch_boundary_block.num_reward_partitions,
+            epoch_reward_map.clone(),
+        );
 
         // append stake account rewards from partitions
         if let Some(num_partitions) = epoch_boundary_block.num_reward_partitions {
@@ -1284,26 +1305,23 @@ impl RpcRequestInflationReward {
             };
 
             // calculate partitions for addresses
-            let hasher = EpochRewardsHasher::new(
-                num_partitions,
-                &Hash::from_str(&epoch_boundary_block.previous_blockhash)
-                    .expect("UiConfirmedBlock::previous_blockhash should be properly formed"),
-            );
-            let mut partition_index_addresses: HashMap<usize, Vec<String>> = HashMap::default();
-            for (address_str, address_pk) in address_strs.into_iter().zip(address_pks.iter()) {
+            let hasher = EpochRewardsHasher::new(num_partitions, &previous_blockhash);
+            let mut partition_index_addresses: HashMap<usize, Vec<(String, Pubkey)>> =
+                HashMap::default();
+            for (address_str, address_pk) in address_strs.into_iter().zip(address_pks.into_iter()) {
                 // Skip this address if (Voting) rewards were already found in
                 // the first block of the epoch
-                if !epoch_reward_map.contains_key(&address_str) {
-                    let partition_index = hasher.clone().hash_address_to_partition(address_pk);
+                if !epoch_reward_map.contains_key(&address_pk) {
+                    let partition_index = hasher.clone().hash_address_to_partition(&address_pk);
                     partition_index_addresses
                         .entry(partition_index)
                         .or_insert_with(|| Vec::with_capacity(4))
-                        .push(address_str);
+                        .push((address_str, address_pk));
                 }
             }
 
             // fetch blocks with rewards
-            for (partition_index, address_strs) in partition_index_addresses {
+            for (partition_index, addresses) in partition_index_addresses {
                 let Some(slot) = block_list.get(partition_index).copied() else {
                     // If block_list.len() too short to contain
                     // partition_index, the epoch rewards period must be
@@ -1336,13 +1354,19 @@ impl RpcRequestInflationReward {
                 let parititon_reward_map =
                     self.filter_rewards(slot, block.rewards, &|reward_type| {
                         reward_type == RewardType::Staking
-                    });
-                for address in address_strs.iter() {
-                    if let Some(reward) = parititon_reward_map.get(address) {
-                        reward_map.insert(address.clone(), reward.clone());
+                    })?;
+                for (address, pubkey) in addresses {
+                    if let Some(reward) = parititon_reward_map.get(&pubkey) {
+                        reward_map.insert(address, reward.clone());
                     }
                 }
-                // TODO: send to writer
+
+                // send to writer
+                self.state.db_write_inflation_reward.push_partition(
+                    self.epoch,
+                    partition_index,
+                    parititon_reward_map,
+                );
             }
         }
 
@@ -1505,7 +1529,7 @@ impl RpcRequestInflationReward {
         slot: Slot,
         rewards: Option<Vec<Reward>>,
         reward_type_filter: &F,
-    ) -> HashMap<String, RpcInflationReward>
+    ) -> anyhow::Result<HashMap<Pubkey, RpcInflationReward>>
     where
         F: Fn(RewardType) -> bool,
     {
@@ -1514,6 +1538,10 @@ impl RpcRequestInflationReward {
             .flatten()
             .filter_map(move |reward| {
                 reward.reward_type.is_some_and(reward_type_filter).then(|| {
+                    let pubkey = reward
+                        .pubkey
+                        .parse()
+                        .map_err(|_| anyhow::anyhow!("failed to parse {}", reward.pubkey))?;
                     let inflation_reward = RpcInflationReward {
                         epoch: self.epoch,
                         effective_slot: slot,
@@ -1521,7 +1549,7 @@ impl RpcRequestInflationReward {
                         post_balance: reward.post_balance,
                         commission: reward.commission,
                     };
-                    (reward.pubkey, inflation_reward)
+                    Ok((pubkey, inflation_reward))
                 })
             })
             .collect()

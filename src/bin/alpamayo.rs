@@ -64,7 +64,7 @@ fn main() -> anyhow::Result<()> {
 
     // Open Rocksdb for slots and indexes
     let ts = Instant::now();
-    let (db_write, db_read, db_threads) =
+    let (db_write, db_write_inflation_reward, db_read, db_threads) =
         storage::rocksdb::Rocksdb::open(config.storage.rocksdb.clone(), sync_tx.clone())?;
     info!(elapsed = ?ts.elapsed(), "rocksdb opened");
     threads.extend(db_threads);
@@ -149,9 +149,15 @@ fn main() -> anyhow::Result<()> {
         move || {
             let runtime = config.rpc.tokio.clone().build_runtime("alpRpcRt")?;
             runtime.block_on(async move {
-                rpc::server::spawn(config.rpc, stored_slots, read_requests_tx, shutdown.clone())
-                    .await?
-                    .await?;
+                rpc::server::spawn(
+                    config.rpc,
+                    stored_slots,
+                    read_requests_tx,
+                    db_write_inflation_reward,
+                    shutdown.clone(),
+                )
+                .await?
+                .await?;
                 Ok::<(), anyhow::Error>(())
             })
         }

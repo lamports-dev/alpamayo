@@ -7,13 +7,15 @@ use {
             files::{StorageFilesWrite, StorageId},
             sync::ReadWriteSyncMessage,
         },
+        util::HashMap,
     },
     anyhow::Context,
     bitflags::bitflags,
+    bitvec::vec::BitVec,
     foldhash::quality::SeedableRandomState,
     futures::future::BoxFuture,
     prost::{
-        bytes::Buf,
+        bytes::{Buf, BufMut},
         encoding::{decode_varint, encode_varint},
     },
     quanta::Instant,
@@ -21,9 +23,12 @@ use {
         ColumnFamily, ColumnFamilyDescriptor, DB, DBCompressionType, Direction, IteratorMode,
         Options, WriteBatch,
     },
-    solana_rpc_client_api::response::RpcConfirmedTransactionStatusWithSignature,
+    solana_rpc_client_api::response::{
+        RpcConfirmedTransactionStatusWithSignature, RpcInflationReward,
+    },
     solana_sdk::{
-        clock::{Slot, UnixTimestamp},
+        clock::{Epoch, Slot, UnixTimestamp},
+        hash::{HASH_BYTES, Hash},
         pubkey::Pubkey,
         signature::Signature,
         transaction::TransactionError,
@@ -35,7 +40,7 @@ use {
         thread::{Builder, JoinHandle},
     },
     tokio::sync::{broadcast, oneshot},
-    tracing::info,
+    tracing::{error, info},
 };
 
 thread_local! {
@@ -389,6 +394,86 @@ bitflags! {
     }
 }
 
+#[derive(Debug)]
+pub struct InflationRewardIndex;
+
+impl ColumnName for InflationRewardIndex {
+    const NAME: &'static str = "ir_index";
+}
+
+impl InflationRewardIndex {
+    const fn encode_base(epoch: Epoch) -> [u8; 8] {
+        epoch.to_be_bytes()
+    }
+
+    fn encode_reward(epoch: Epoch, pubkey: Pubkey) -> [u8; 40] {
+        let mut key = [0u8; 40];
+        key.copy_from_slice(&epoch.to_be_bytes());
+        key[8..].copy_from_slice(pubkey.as_ref());
+        key
+    }
+}
+
+#[derive(Debug)]
+pub struct InflationRewardBaseValue {
+    slot: Slot,
+    previous_blockhash: Hash,
+    partitions: BitVec<u8>,
+}
+
+impl InflationRewardBaseValue {
+    fn new(slot: Slot, previous_blockhash: Hash, num_reward_partitions: Option<u64>) -> Self {
+        Self {
+            slot,
+            previous_blockhash,
+            partitions: BitVec::repeat(false, num_reward_partitions.unwrap_or(0) as usize),
+        }
+    }
+
+    fn encode(self, buf: &mut Vec<u8>) {
+        encode_varint(self.slot, buf);
+        buf.extend_from_slice(self.previous_blockhash.as_ref());
+        let vec = self.partitions.into_vec();
+        encode_varint(vec.len() as u64, buf);
+        buf.extend_from_slice(vec.as_ref());
+    }
+
+    fn decode(mut slice: &[u8]) -> anyhow::Result<Self> {
+        let slot = decode_varint(&mut slice).context("failed to decode slot")?;
+        anyhow::ensure!(
+            slice.remaining() >= HASH_BYTES,
+            "not enough bytes for previous blockhash"
+        );
+        let previous_blockhash = Hash::new_from_array(slice[0..HASH_BYTES].try_into().unwrap());
+        slice.advance(HASH_BYTES);
+        let len = decode_varint(&mut slice).context("failed to decode partitions len")? as usize;
+        anyhow::ensure!(slice.remaining() >= len, "not enough bytes for partitions");
+        let vec = slice[0..len].to_vec();
+        Ok(Self {
+            slot,
+            previous_blockhash,
+            partitions: BitVec::from_vec(vec),
+        })
+    }
+}
+
+#[derive(Debug)]
+pub struct InflationRewardAddressValue {
+    reward: RpcInflationReward,
+}
+
+impl InflationRewardAddressValue {
+    fn encode(&self, buf: &mut Vec<u8>) {
+        encode_varint(self.reward.epoch, buf);
+        encode_varint(self.reward.effective_slot, buf);
+        encode_varint(self.reward.amount, buf);
+        encode_varint(self.reward.post_balance, buf);
+        if let Some(comission) = self.reward.commission {
+            buf.put_u8(comission);
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Rocksdb;
 
@@ -399,6 +484,7 @@ impl Rocksdb {
         sync_tx: broadcast::Sender<ReadWriteSyncMessage>,
     ) -> anyhow::Result<(
         RocksdbWrite,
+        RocksdbWriteInflationReward,
         RocksdbRead,
         Vec<(String, Option<JoinHandle<anyhow::Result<()>>>)>,
     )> {
@@ -441,9 +527,10 @@ impl Rocksdb {
 
         Ok((
             RocksdbWrite {
-                req_tx: write_tx,
+                req_tx: write_tx.clone(),
                 sync_tx,
             },
+            RocksdbWriteInflationReward { req_tx: write_tx },
             RocksdbRead { req_tx: read_tx },
             threads,
         ))
@@ -501,6 +588,7 @@ impl Rocksdb {
             Self::cf_descriptor::<SlotExtraIndex>(index_slot_compression),
             Self::cf_descriptor::<TransactionIndex>(DBCompressionType::None),
             Self::cf_descriptor::<SfaIndex>(index_sfa_compression),
+            Self::cf_descriptor::<InflationRewardIndex>(DBCompressionType::None),
         ]
     }
 
@@ -530,6 +618,18 @@ enum WriteRequest {
         slot: Slot,
         dead: bool,
         tx: oneshot::Sender<anyhow::Result<()>>,
+    },
+    InflationRewardBase {
+        epoch: Epoch,
+        slot: Slot,
+        previous_blockhash: Hash,
+        num_reward_partitions: Option<u64>,
+        reward_map: HashMap<Pubkey, RpcInflationReward>,
+    },
+    InflationRewardPartition {
+        epoch: Epoch,
+        partition_index: usize,
+        reward_map: HashMap<Pubkey, RpcInflationReward>,
     },
 }
 
@@ -622,6 +722,47 @@ impl RocksdbWrite {
                         break;
                     }
                 }
+                WriteRequest::InflationRewardBase {
+                    epoch,
+                    slot,
+                    previous_blockhash,
+                    num_reward_partitions,
+                    reward_map,
+                } => {
+                    let base = InflationRewardBaseValue::new(
+                        slot,
+                        previous_blockhash,
+                        num_reward_partitions,
+                    );
+
+                    if let Err(error) =
+                        Self::spawn_push_reward(&db, epoch, base, reward_map, &mut buf)
+                    {
+                        error!(?error, epoch, "failed to savebase  inflation reward");
+                    } else {
+                        info!(epoch, "save base inflation reward");
+                    }
+                }
+                WriteRequest::InflationRewardPartition {
+                    epoch,
+                    partition_index,
+                    reward_map,
+                } => {
+                    if let Err(error) = Self::spawn_push_partition_reward(
+                        &db,
+                        epoch,
+                        partition_index,
+                        reward_map,
+                        &mut buf,
+                    ) {
+                        error!(
+                            ?error,
+                            epoch, partition_index, "failed to save partition inflation reward"
+                        );
+                    } else {
+                        info!(epoch, partition_index, "save partition inflation reward");
+                    }
+                }
             }
         }
     }
@@ -659,6 +800,60 @@ impl RocksdbWrite {
         }
 
         db.write(batch).map_err(Into::into)
+    }
+
+    fn spawn_push_partition_reward(
+        db: &DB,
+        epoch: Epoch,
+        partition_index: usize,
+        reward_map: HashMap<Pubkey, RpcInflationReward>,
+        buf: &mut Vec<u8>,
+    ) -> anyhow::Result<()> {
+        let value = db
+            .get_pinned_cf(
+                Rocksdb::cf_handle::<InflationRewardIndex>(db),
+                InflationRewardIndex::encode_base(epoch),
+            )
+            .context("failed to get existed epoch reward")?
+            .ok_or_else(|| anyhow::anyhow!("existed epoch {epoch} not found"))?;
+        let mut base = InflationRewardBaseValue::decode(&value)?;
+        anyhow::ensure!(
+            base.partitions.len() >= partition_index,
+            "not enough partitions"
+        );
+        base.partitions.set(partition_index, true);
+
+        Self::spawn_push_reward(db, epoch, base, reward_map, buf).map_err(Into::into)
+    }
+
+    fn spawn_push_reward(
+        db: &DB,
+        epoch: Epoch,
+        base: InflationRewardBaseValue,
+        reward_map: HashMap<Pubkey, RpcInflationReward>,
+        buf: &mut Vec<u8>,
+    ) -> Result<(), rocksdb::Error> {
+        let mut batch = WriteBatch::with_capacity_bytes(2 * 1024 * 1024); // 2MiB
+
+        buf.clear();
+        base.encode(buf);
+        batch.put_cf(
+            Rocksdb::cf_handle::<InflationRewardIndex>(db),
+            InflationRewardIndex::encode_base(epoch),
+            &buf,
+        );
+
+        for (pubkey, reward) in reward_map {
+            buf.clear();
+            InflationRewardAddressValue { reward }.encode(buf);
+            batch.put_cf(
+                Rocksdb::cf_handle::<InflationRewardIndex>(db),
+                InflationRewardIndex::encode_reward(epoch, pubkey),
+                &buf,
+            );
+        }
+
+        db.write(batch)
     }
 
     pub async fn push_block(
@@ -781,6 +976,53 @@ impl RocksdbWrite {
             Ok(())
         } else {
             files.pop_block(block)
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct RocksdbWriteInflationReward {
+    req_tx: mpsc::SyncSender<WriteRequest>,
+}
+
+impl RocksdbWriteInflationReward {
+    pub fn push_base(
+        &self,
+        epoch: Epoch,
+        slot: Slot,
+        previous_blockhash: Hash,
+        num_reward_partitions: Option<u64>,
+        reward_map: HashMap<Pubkey, RpcInflationReward>,
+    ) {
+        if let Err(error) = self.req_tx.send(WriteRequest::InflationRewardBase {
+            epoch,
+            slot,
+            previous_blockhash,
+            num_reward_partitions,
+            reward_map,
+        }) {
+            error!(
+                ?error,
+                epoch, epoch, "failed to send inflation reward base write request"
+            );
+        }
+    }
+
+    pub fn push_partition(
+        &self,
+        epoch: Epoch,
+        partition_index: usize,
+        reward_map: HashMap<Pubkey, RpcInflationReward>,
+    ) {
+        if let Err(error) = self.req_tx.send(WriteRequest::InflationRewardPartition {
+            epoch,
+            partition_index,
+            reward_map,
+        }) {
+            error!(
+                ?error,
+                epoch, epoch, "failed to send inflation reward partition write request"
+            );
         }
     }
 }
