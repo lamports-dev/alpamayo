@@ -419,14 +419,21 @@ pub struct InflationRewardBaseValue {
     slot: Slot,
     previous_blockhash: Hash,
     partitions: BitVec<u8>,
+    block_height: Option<Slot>,
 }
 
 impl InflationRewardBaseValue {
-    fn new(slot: Slot, previous_blockhash: Hash, num_reward_partitions: Option<u64>) -> Self {
+    fn new(
+        slot: Slot,
+        previous_blockhash: Hash,
+        num_reward_partitions: Option<u64>,
+        block_height: Option<Slot>,
+    ) -> Self {
         Self {
             slot,
             previous_blockhash,
             partitions: BitVec::repeat(false, num_reward_partitions.unwrap_or(0) as usize),
+            block_height,
         }
     }
 
@@ -436,6 +443,9 @@ impl InflationRewardBaseValue {
         let vec = self.partitions.into_vec();
         encode_varint(vec.len() as u64, buf);
         buf.extend_from_slice(vec.as_ref());
+        if let Some(block_height) = self.block_height {
+            encode_varint(block_height, buf);
+        }
     }
 
     fn decode(mut slice: &[u8]) -> anyhow::Result<Self> {
@@ -449,10 +459,17 @@ impl InflationRewardBaseValue {
         let len = decode_varint(&mut slice).context("failed to decode partitions len")? as usize;
         anyhow::ensure!(slice.remaining() >= len, "not enough bytes for partitions");
         let vec = slice[0..len].to_vec();
+        slice.advance(len);
+        let block_height = if slice.is_empty() {
+            None
+        } else {
+            Some(decode_varint(&mut slice).context("failed to decode block height")?)
+        };
         Ok(Self {
             slot,
             previous_blockhash,
             partitions: BitVec::from_vec(vec),
+            block_height,
         })
     }
 }
@@ -624,6 +641,7 @@ enum WriteRequest {
         slot: Slot,
         previous_blockhash: Hash,
         num_reward_partitions: Option<u64>,
+        block_height: Option<Slot>,
         reward_map: HashMap<Pubkey, RpcInflationReward>,
     },
     InflationRewardPartition {
@@ -727,6 +745,7 @@ impl RocksdbWrite {
                     slot,
                     previous_blockhash,
                     num_reward_partitions,
+                    block_height,
                     reward_map,
                 } => {
                     let ts = Instant::now();
@@ -737,6 +756,7 @@ impl RocksdbWrite {
                             slot,
                             previous_blockhash,
                             num_reward_partitions,
+                            block_height,
                         ),
                         reward_map,
                         &mut buf,
@@ -993,6 +1013,7 @@ impl RocksdbWriteInflationReward {
         slot: Slot,
         previous_blockhash: Hash,
         num_reward_partitions: Option<u64>,
+        block_height: Option<Slot>,
         reward_map: HashMap<Pubkey, RpcInflationReward>,
     ) {
         if let Err(error) = self.req_tx.send(WriteRequest::InflationRewardBase {
@@ -1000,6 +1021,7 @@ impl RocksdbWriteInflationReward {
             slot,
             previous_blockhash,
             num_reward_partitions,
+            block_height,
             reward_map,
         }) {
             error!(

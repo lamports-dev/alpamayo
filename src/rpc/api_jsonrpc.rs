@@ -1287,6 +1287,7 @@ impl RpcRequestInflationReward {
             first_confirmed_block_in_epoch,
             previous_blockhash,
             epoch_boundary_block.num_reward_partitions,
+            epoch_boundary_block.block_height,
             epoch_reward_map.clone(),
         );
 
