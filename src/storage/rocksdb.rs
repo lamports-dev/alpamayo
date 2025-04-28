@@ -408,7 +408,7 @@ impl InflationRewardIndex {
 
     fn encode_reward(epoch: Epoch, pubkey: Pubkey) -> [u8; 40] {
         let mut key = [0u8; 40];
-        key.copy_from_slice(&epoch.to_be_bytes());
+        key[0..8].copy_from_slice(&epoch.to_be_bytes());
         key[8..].copy_from_slice(pubkey.as_ref());
         key
     }
@@ -729,18 +729,21 @@ impl RocksdbWrite {
                     num_reward_partitions,
                     reward_map,
                 } => {
-                    let base = InflationRewardBaseValue::new(
-                        slot,
-                        previous_blockhash,
-                        num_reward_partitions,
-                    );
-
-                    if let Err(error) =
-                        Self::spawn_push_reward(&db, epoch, base, reward_map, &mut buf)
-                    {
-                        error!(?error, epoch, "failed to savebase  inflation reward");
+                    let ts = Instant::now();
+                    if let Err(error) = Self::spawn_push_reward(
+                        &db,
+                        epoch,
+                        InflationRewardBaseValue::new(
+                            slot,
+                            previous_blockhash,
+                            num_reward_partitions,
+                        ),
+                        reward_map,
+                        &mut buf,
+                    ) {
+                        error!(?error, epoch, elapsed = ?ts.elapsed(), "failed to savebase  inflation reward");
                     } else {
-                        info!(epoch, "save base inflation reward");
+                        info!(epoch, elapsed = ?ts.elapsed(), "save base inflation reward");
                     }
                 }
                 WriteRequest::InflationRewardPartition {
@@ -748,6 +751,7 @@ impl RocksdbWrite {
                     partition_index,
                     reward_map,
                 } => {
+                    let ts = Instant::now();
                     if let Err(error) = Self::spawn_push_partition_reward(
                         &db,
                         epoch,
@@ -755,12 +759,9 @@ impl RocksdbWrite {
                         reward_map,
                         &mut buf,
                     ) {
-                        error!(
-                            ?error,
-                            epoch, partition_index, "failed to save partition inflation reward"
-                        );
+                        error!(?error, epoch, partition_index, elapsed = ?ts.elapsed(), "failed to save partition inflation reward");
                     } else {
-                        info!(epoch, partition_index, "save partition inflation reward");
+                        info!(epoch, partition_index, elapsed = ?ts.elapsed(), "save partition inflation reward");
                     }
                 }
             }

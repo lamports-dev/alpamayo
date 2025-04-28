@@ -407,7 +407,7 @@ impl RpcClientJsonrpc {
                     "jsonrpc": "2.0",
                     "method": "getBlocksWithLimit",
                     "id": id,
-                    "params": json!([start_slot, limit, "confirmed"]),
+                    "params": json!([start_slot, limit, CommitmentConfig::confirmed()]),
                 })
                 .to_string(),
                 deadline,
