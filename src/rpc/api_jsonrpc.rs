@@ -1136,8 +1136,8 @@ struct RpcRequestInflationReward {
     id: Id<'static>,
     commitment: CommitmentConfig,
     epoch: Epoch,
-    address_strs: Vec<String>,
     address_pks: Vec<Pubkey>,
+    rewards: Vec<Option<RpcInflationReward>>,
 }
 
 impl RpcRequestHandler for RpcRequestInflationReward {
@@ -1169,6 +1169,7 @@ impl RpcRequestHandler for RpcRequestInflationReward {
                 Err(error) => return Err(jsonrpc_response_error(id, error)),
             }
         }
+        let rewards = std::iter::repeat_n(None, address_strs.len()).collect();
         let RpcEpochConfig {
             epoch,
             commitment,
@@ -1195,40 +1196,32 @@ impl RpcRequestHandler for RpcRequestInflationReward {
             id: id.into_owned(),
             commitment,
             epoch,
-            address_strs,
             address_pks,
+            rewards,
         })
     }
 
     async fn process(mut self) -> RpcRequestResult<'static> {
         let deadline = Instant::now() + self.state.request_timeout;
 
-        let mut reward_map = HashMap::default();
-
-        let address_strs = self.address_strs.drain(..).collect();
         let address_pks = self.address_pks.drain(..).collect();
 
-        if let Err(error) = self
-            .get_inflation_reward(deadline, address_strs, address_pks, &mut reward_map)
-            .await?
-        {
+        if let Err(error) = self.get_inflation_reward(deadline, address_pks).await? {
             return Ok(error);
         }
 
         // serialize
-        let data = serde_json::to_value(&reward_map).expect("json serialization never fail");
+        let data = serde_json::to_value(&self.rewards).expect("json serialization never fail");
         Ok(jsonrpc_response_success(self.id, data))
     }
 }
 
 impl RpcRequestInflationReward {
     async fn get_inflation_reward(
-        &self,
+        &mut self,
         deadline: Instant,
         // pass `epoch_boundary_block` ?
-        address_strs: Vec<String>,
         address_pks: Vec<Pubkey>,
-        reward_map: &mut HashMap<String, RpcInflationReward>,
     ) -> anyhow::Result<Result<(), Response<'static, serde_json::Value>>> {
         // get first slot in epoch
         let first_slot_in_epoch = self
@@ -1275,9 +1268,9 @@ impl RpcRequestInflationReward {
                     || (!epoch_has_partitioned_rewards && reward_type == RewardType::Staking)
             },
         )?;
-        for (address_str, pubkey) in address_strs.iter().zip(address_pks.iter()) {
+        for (index, pubkey) in address_pks.iter().enumerate() {
             if let Some(reward) = epoch_reward_map.get(pubkey) {
-                reward_map.insert(address_str.clone(), reward.clone());
+                self.rewards[index] = Some(reward.clone());
             }
         }
 
@@ -1307,9 +1300,9 @@ impl RpcRequestInflationReward {
 
             // calculate partitions for addresses
             let hasher = EpochRewardsHasher::new(num_partitions, &previous_blockhash);
-            let mut partition_index_addresses: HashMap<usize, Vec<(String, Pubkey)>> =
+            let mut partition_index_addresses: HashMap<usize, Vec<(usize, Pubkey)>> =
                 HashMap::default();
-            for (address_str, address_pk) in address_strs.into_iter().zip(address_pks.into_iter()) {
+            for (index, address_pk) in address_pks.into_iter().enumerate() {
                 // Skip this address if (Voting) rewards were already found in
                 // the first block of the epoch
                 if !epoch_reward_map.contains_key(&address_pk) {
@@ -1317,7 +1310,7 @@ impl RpcRequestInflationReward {
                     partition_index_addresses
                         .entry(partition_index)
                         .or_insert_with(|| Vec::with_capacity(4))
-                        .push((address_str, address_pk));
+                        .push((index, address_pk));
                 }
             }
 
@@ -1356,9 +1349,9 @@ impl RpcRequestInflationReward {
                     self.filter_rewards(slot, block.rewards, &|reward_type| {
                         reward_type == RewardType::Staking
                     })?;
-                for (address, pubkey) in addresses {
+                for (index, pubkey) in addresses.into_iter() {
                     if let Some(reward) = parititon_reward_map.get(&pubkey) {
-                        reward_map.insert(address, reward.clone());
+                        self.rewards[index] = Some(reward.clone());
                     }
                 }
 
