@@ -6,7 +6,7 @@ use {
         storage::{
             blocks::{StorageBlockLocationResult, StoredBlocksRead},
             files::StorageFilesRead,
-            rocksdb::{RocksdbRead, TransactionIndexValue},
+            rocksdb::{ReadRequestResultInflationReward, RocksdbRead, TransactionIndexValue},
             slots::StoredSlotsRead,
             sync::ReadWriteSyncMessage,
         },
@@ -23,7 +23,7 @@ use {
         RpcConfirmedTransactionStatusWithSignature, RpcPrioritizationFee,
     },
     solana_sdk::{
-        clock::{MAX_PROCESSING_AGE, MAX_RECENT_BLOCKHASHES, Slot, UnixTimestamp},
+        clock::{Epoch, MAX_PROCESSING_AGE, MAX_RECENT_BLOCKHASHES, Slot, UnixTimestamp},
         commitment_config::{CommitmentConfig, CommitmentLevel},
         pubkey::Pubkey,
         signature::Signature,
@@ -487,6 +487,13 @@ pub enum ReadResultBlockTime {
 }
 
 #[derive(Debug)]
+pub enum ReadResultInflationReward {
+    Timeout,
+    Reward(ReadRequestResultInflationReward),
+    ReadError(anyhow::Error),
+}
+
+#[derive(Debug)]
 pub enum ReadResultLatestBlockhash {
     Timeout,
     LatestBlockhash {
@@ -564,6 +571,13 @@ pub enum ReadRequest {
         deadline: Instant,
         slot: Slot,
         tx: oneshot::Sender<ReadResultBlockTime>,
+    },
+    InflationReward {
+        deadline: Instant,
+        epoch: Epoch,
+        addresses: Vec<Pubkey>,
+        tx: oneshot::Sender<ReadResultInflationReward>,
+        x_subscription_id: Arc<str>,
     },
     LatestBlockhash {
         deadline: Instant,
@@ -846,6 +860,46 @@ impl ReadRequest {
 
                 let _ = tx.send(result);
                 None
+            }
+            Self::InflationReward {
+                deadline,
+                epoch,
+                addresses,
+                tx,
+                x_subscription_id,
+            } => {
+                if deadline < Instant::now() {
+                    let _ = tx.send(ReadResultInflationReward::Timeout);
+                    return None;
+                }
+
+                let read_fut = match db_read.read_inflation_reward(epoch, addresses) {
+                    Ok(fut) => fut,
+                    Err(error) => {
+                        let _ = tx.send(ReadResultInflationReward::ReadError(error));
+                        return None;
+                    }
+                };
+
+                let ts = quanta::Instant::now();
+                Some(Box::pin(async move {
+                    let result = timeout_at(deadline.into(), read_fut).await;
+                    gauge!(
+                        READ_DISK_SECONDS_TOTAL,
+                        "x_subscription_id" => Arc::clone(&x_subscription_id),
+                        "type" => "index_ir",
+                    )
+                    .increment(duration_to_seconds(ts.elapsed()));
+
+                    let result = match result {
+                        Ok(Ok(result)) => ReadResultInflationReward::Reward(result),
+                        Ok(Err(error)) => ReadResultInflationReward::ReadError(error),
+                        Err(_error) => ReadResultInflationReward::Timeout,
+                    };
+
+                    let _ = tx.send(result);
+                    None
+                }))
             }
             Self::LatestBlockhash {
                 deadline,

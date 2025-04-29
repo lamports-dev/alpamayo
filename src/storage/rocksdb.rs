@@ -416,60 +416,84 @@ impl InflationRewardIndex {
 
 #[derive(Debug)]
 pub struct InflationRewardBaseValue {
-    slot: Slot,
-    previous_blockhash: Hash,
+    pub slot: Slot,
+    pub block_height: Option<Slot>,
+    pub previous_blockhash: Hash,
+    pub num_reward_partitions: Option<u64>,
     partitions: BitVec<u8>,
-    block_height: Option<Slot>,
 }
 
 impl InflationRewardBaseValue {
-    fn new(
+    pub fn new(
         slot: Slot,
+        block_height: Option<Slot>,
         previous_blockhash: Hash,
         num_reward_partitions: Option<u64>,
-        block_height: Option<Slot>,
     ) -> Self {
         Self {
             slot,
-            previous_blockhash,
-            partitions: BitVec::repeat(false, num_reward_partitions.unwrap_or(0) as usize),
             block_height,
+            previous_blockhash,
+            num_reward_partitions,
+            partitions: BitVec::repeat(false, num_reward_partitions.unwrap_or(0) as usize),
         }
     }
 
     fn encode(self, buf: &mut Vec<u8>) {
+        let mut flags = 0u8;
+        if self.block_height.is_some() {
+            flags |= 0b01;
+        }
+        if self.num_reward_partitions.is_some() {
+            flags |= 0b10;
+        }
+        buf.put_u8(flags);
+
         encode_varint(self.slot, buf);
-        buf.extend_from_slice(self.previous_blockhash.as_ref());
-        let vec = self.partitions.into_vec();
-        encode_varint(vec.len() as u64, buf);
-        buf.extend_from_slice(vec.as_ref());
         if let Some(block_height) = self.block_height {
             encode_varint(block_height, buf);
         }
+        buf.extend_from_slice(self.previous_blockhash.as_ref());
+        if let Some(num_reward_partitions) = self.num_reward_partitions {
+            encode_varint(num_reward_partitions, buf);
+        }
+        let vec = self.partitions.into_vec();
+        encode_varint(vec.len() as u64, buf);
+        buf.extend_from_slice(vec.as_ref());
     }
 
     fn decode(mut slice: &[u8]) -> anyhow::Result<Self> {
+        anyhow::ensure!(slice.remaining() >= 1, "not enough bytes for flags");
+        let flags = slice[0];
+        slice.advance(1);
+
         let slot = decode_varint(&mut slice).context("failed to decode slot")?;
+        let block_height = if (flags & 0b01) > 0 {
+            Some(decode_varint(&mut slice).context("failed to decode block height")?)
+        } else {
+            None
+        };
         anyhow::ensure!(
             slice.remaining() >= HASH_BYTES,
             "not enough bytes for previous blockhash"
         );
         let previous_blockhash = Hash::new_from_array(slice[0..HASH_BYTES].try_into().unwrap());
         slice.advance(HASH_BYTES);
+        let num_reward_partitions = if (flags & 0b10) > 0 {
+            Some(decode_varint(&mut slice).context("failed to decode num reward partitions")?)
+        } else {
+            None
+        };
         let len = decode_varint(&mut slice).context("failed to decode partitions len")? as usize;
         anyhow::ensure!(slice.remaining() >= len, "not enough bytes for partitions");
         let vec = slice[0..len].to_vec();
-        slice.advance(len);
-        let block_height = if slice.is_empty() {
-            None
-        } else {
-            Some(decode_varint(&mut slice).context("failed to decode block height")?)
-        };
+
         Ok(Self {
             slot,
-            previous_blockhash,
-            partitions: BitVec::from_vec(vec),
             block_height,
+            previous_blockhash,
+            num_reward_partitions,
+            partitions: BitVec::from_vec(vec),
         })
     }
 }
@@ -662,9 +686,9 @@ enum WriteRequest {
     InflationRewardBase {
         epoch: Epoch,
         slot: Slot,
+        block_height: Option<Slot>,
         previous_blockhash: Hash,
         num_reward_partitions: Option<u64>,
-        block_height: Option<Slot>,
         reward_map: HashMap<Pubkey, RpcInflationReward>,
     },
     InflationRewardPartition {
@@ -766,9 +790,9 @@ impl RocksdbWrite {
                 WriteRequest::InflationRewardBase {
                     epoch,
                     slot,
+                    block_height,
                     previous_blockhash,
                     num_reward_partitions,
-                    block_height,
                     reward_map,
                 } => {
                     let ts = Instant::now();
@@ -777,9 +801,9 @@ impl RocksdbWrite {
                         epoch,
                         InflationRewardBaseValue::new(
                             slot,
+                            block_height,
                             previous_blockhash,
                             num_reward_partitions,
-                            block_height,
                         ),
                         reward_map,
                         &mut buf,
@@ -1034,17 +1058,17 @@ impl RocksdbWriteInflationReward {
         &self,
         epoch: Epoch,
         slot: Slot,
+        block_height: Option<Slot>,
         previous_blockhash: Hash,
         num_reward_partitions: Option<u64>,
-        block_height: Option<Slot>,
         reward_map: HashMap<Pubkey, RpcInflationReward>,
     ) {
         if let Err(error) = self.req_tx.send(WriteRequest::InflationRewardBase {
             epoch,
             slot,
+            block_height,
             previous_blockhash,
             num_reward_partitions,
-            block_height,
             reward_map,
         }) {
             error!(
@@ -1074,6 +1098,14 @@ impl RocksdbWriteInflationReward {
 }
 
 #[derive(Debug)]
+pub struct ReadRequestResultInflationReward {
+    pub addresses: Vec<Pubkey>,
+    pub rewards: Vec<Option<RpcInflationReward>>,
+    pub missed: Vec<usize>,
+    pub base: Option<InflationRewardBaseValue>,
+}
+
+#[derive(Debug)]
 enum ReadRequest {
     Slots {
         tx: oneshot::Sender<anyhow::Result<Vec<StoredBlock>>>,
@@ -1095,6 +1127,11 @@ enum ReadRequest {
     SignatureStatuses {
         signatures: Vec<Signature>,
         tx: oneshot::Sender<anyhow::Result<Vec<(Signature, TransactionIndexValue<'static>)>>>,
+    },
+    InflationReward {
+        epoch: Epoch,
+        addresses: Vec<Pubkey>,
+        tx: oneshot::Sender<anyhow::Result<ReadRequestResultInflationReward>>,
     },
 }
 
@@ -1154,6 +1191,18 @@ impl RocksdbRead {
                 ReadRequest::SignatureStatuses { signatures, tx } => {
                     if tx
                         .send(Self::spawn_signatire_statuses(&db, signatures))
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+                ReadRequest::InflationReward {
+                    epoch,
+                    addresses,
+                    tx,
+                } => {
+                    if tx
+                        .send(Self::spawn_inflation_reward(&db, epoch, addresses))
                         .is_err()
                     {
                         break;
@@ -1268,6 +1317,25 @@ impl RocksdbRead {
         Ok(values)
     }
 
+    fn spawn_inflation_reward(
+        db: &DB,
+        epoch: Epoch,
+        addresses: Vec<Pubkey>,
+    ) -> anyhow::Result<ReadRequestResultInflationReward> {
+        let rewards =
+            std::iter::repeat_n(None, addresses.len()).collect::<Vec<Option<RpcInflationReward>>>();
+        let missed = (0..addresses.len()).collect::<Vec<_>>();
+
+        // TODO
+
+        Ok(ReadRequestResultInflationReward {
+            addresses,
+            rewards,
+            missed,
+            base: None,
+        })
+    }
+
     pub fn read_slot_indexes(
         &self,
     ) -> anyhow::Result<BoxFuture<'static, anyhow::Result<Vec<StoredBlock>>>> {
@@ -1342,6 +1410,25 @@ impl RocksdbRead {
         Ok(Box::pin(async move {
             rx.await
                 .context("failed to get ReadRequest::SignatureStatuses request result")?
+        }))
+    }
+
+    pub fn read_inflation_reward(
+        &self,
+        epoch: Epoch,
+        addresses: Vec<Pubkey>,
+    ) -> anyhow::Result<BoxFuture<'static, anyhow::Result<ReadRequestResultInflationReward>>> {
+        let (tx, rx) = oneshot::channel();
+        self.req_tx
+            .send(ReadRequest::InflationReward {
+                epoch,
+                addresses,
+                tx,
+            })
+            .context("failed to send ReadRequest::InflationReward request")?;
+        Ok(Box::pin(async move {
+            rx.await
+                .context("failed to get ReadRequest::InflationReward request result")?
         }))
     }
 }

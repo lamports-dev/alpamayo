@@ -6,11 +6,14 @@ use {
         storage::{
             read::{
                 ReadRequest, ReadResultBlock, ReadResultBlockHeight, ReadResultBlockTime,
-                ReadResultBlockhashValid, ReadResultBlocks, ReadResultLatestBlockhash,
-                ReadResultRecentPrioritizationFees, ReadResultSignatureStatuses,
-                ReadResultSignaturesForAddress, ReadResultTransaction,
+                ReadResultBlockhashValid, ReadResultBlocks, ReadResultInflationReward,
+                ReadResultLatestBlockhash, ReadResultRecentPrioritizationFees,
+                ReadResultSignatureStatuses, ReadResultSignaturesForAddress, ReadResultTransaction,
             },
-            rocksdb::RocksdbWriteInflationReward,
+            rocksdb::{
+                InflationRewardBaseValue, ReadRequestResultInflationReward,
+                RocksdbWriteInflationReward,
+            },
             slots::StoredSlots,
         },
         util::HashMap,
@@ -1136,8 +1139,7 @@ struct RpcRequestInflationReward {
     id: Id<'static>,
     commitment: CommitmentConfig,
     epoch: Epoch,
-    address_pks: Vec<Pubkey>,
-    rewards: Vec<Option<RpcInflationReward>>,
+    addresses: Vec<Pubkey>,
 }
 
 impl RpcRequestHandler for RpcRequestInflationReward {
@@ -1162,14 +1164,13 @@ impl RpcRequestHandler for RpcRequestInflationReward {
                 config,
             },
         ) = parse_params(request)?;
-        let mut address_pks = Vec::with_capacity(address_strs.len());
+        let mut addresses = Vec::with_capacity(address_strs.len());
         for address_str in address_strs.iter() {
             match verify_pubkey(address_str) {
-                Ok(pubkey) => address_pks.push(pubkey),
+                Ok(pubkey) => addresses.push(pubkey),
                 Err(error) => return Err(jsonrpc_response_error(id, error)),
             }
         }
-        let rewards = std::iter::repeat_n(None, address_strs.len()).collect();
         let RpcEpochConfig {
             epoch,
             commitment,
@@ -1196,22 +1197,56 @@ impl RpcRequestHandler for RpcRequestInflationReward {
             id: id.into_owned(),
             commitment,
             epoch,
-            address_pks,
-            rewards,
+            addresses,
         })
     }
 
     async fn process(mut self) -> RpcRequestResult<'static> {
         let deadline = Instant::now() + self.state.request_timeout;
 
-        let address_pks = self.address_pks.drain(..).collect();
+        // request
+        let (tx, rx) = oneshot::channel();
+        anyhow::ensure!(
+            self.state
+                .requests_tx
+                .send(ReadRequest::InflationReward {
+                    deadline,
+                    epoch: self.epoch,
+                    addresses: std::mem::take(&mut self.addresses),
+                    tx,
+                    x_subscription_id: Arc::clone(&self.x_subscription_id),
+                })
+                .await
+                .is_ok(),
+            "request channel is closed"
+        );
+        let Ok(result) = rx.await else {
+            anyhow::bail!("rx channel is closed");
+        };
 
-        if let Err(error) = self.get_inflation_reward(deadline, address_pks).await? {
-            return Ok(error);
-        }
+        let rewards = match result {
+            ReadResultInflationReward::Timeout => anyhow::bail!("timeout"),
+            ReadResultInflationReward::Reward(ReadRequestResultInflationReward {
+                addresses,
+                mut rewards,
+                missed,
+                base,
+            }) => {
+                if !missed.is_empty() {
+                    if let Err(error) = self
+                        .get_inflation_reward(deadline, addresses, &mut rewards, missed, base)
+                        .await?
+                    {
+                        return Ok(error);
+                    }
+                }
+                rewards
+            }
+            ReadResultInflationReward::ReadError(error) => anyhow::bail!("read error: {error}"),
+        };
 
         // serialize
-        let data = serde_json::to_value(&self.rewards).expect("json serialization never fail");
+        let data = serde_json::to_value(&rewards).expect("json serialization never fail");
         Ok(jsonrpc_response_success(self.id, data))
     }
 }
@@ -1220,9 +1255,114 @@ impl RpcRequestInflationReward {
     async fn get_inflation_reward(
         &mut self,
         deadline: Instant,
-        // pass `epoch_boundary_block` ?
-        address_pks: Vec<Pubkey>,
+        addresses: Vec<Pubkey>,
+        rewards: &mut [Option<RpcInflationReward>],
+        mut missed: Vec<usize>,
+        base: Option<InflationRewardBaseValue>,
     ) -> anyhow::Result<Result<(), Response<'static, serde_json::Value>>> {
+        let epoch_boundary_block = match base {
+            Some(base) => base,
+            None => match self
+                .get_inflation_reward_base(deadline, &addresses, rewards, &mut missed)
+                .await?
+            {
+                Ok(base) => {
+                    if missed.is_empty() {
+                        return Ok(Ok(()));
+                    }
+                    base
+                }
+                Err(error) => return Ok(Err(error)),
+            },
+        };
+
+        // append stake account rewards from partitions
+        if let Some(num_partitions) = epoch_boundary_block.num_reward_partitions {
+            let num_partitions = usize::try_from(num_partitions)
+                .expect("num_partitions should never exceed usize::MAX");
+
+            // fetch blocks with rewards
+            let block_list = match self
+                .get_blocks_with_limit(deadline, epoch_boundary_block.slot + 1, num_partitions)
+                .await?
+            {
+                Ok(blocks) => blocks,
+                Err(error) => return Ok(Err(error)),
+            };
+
+            // calculate partitions for addresses
+            let hasher =
+                EpochRewardsHasher::new(num_partitions, &epoch_boundary_block.previous_blockhash);
+            let mut partition_index_addresses: HashMap<usize, Vec<usize>> = HashMap::default();
+            for index in missed {
+                let partition_index = hasher.clone().hash_address_to_partition(&addresses[index]);
+                partition_index_addresses
+                    .entry(partition_index)
+                    .or_insert_with(|| Vec::with_capacity(4))
+                    .push(index);
+            }
+
+            // fetch blocks with rewards
+            for (partition_index, missed) in partition_index_addresses {
+                let Some(slot) = block_list.get(partition_index).copied() else {
+                    // If block_list.len() too short to contain
+                    // partition_index, the epoch rewards period must be
+                    // currently active.
+                    let rewards_complete_block_height = epoch_boundary_block
+                        .block_height
+                        .map(|block_height| {
+                            block_height
+                                .saturating_add(num_partitions as u64)
+                                .saturating_add(1)
+                        })
+                        .expect(
+                            "every block after partitioned_epoch_reward_enabled should have a \
+                                populated block_height",
+                        );
+
+                    return self
+                        .error_epoch_rewards_period_active(deadline, rewards_complete_block_height)
+                        .await
+                        .map(Err);
+                };
+
+                // fetch block
+                let block = match self.get_block_with_rewards(deadline, slot).await? {
+                    Ok(block) => block,
+                    Err(error) => return Ok(Err(error)),
+                };
+
+                // collect for addresses
+                let parititon_reward_map =
+                    self.filter_rewards(slot, block.rewards, &|reward_type| {
+                        reward_type == RewardType::Staking
+                    })?;
+                for index in missed {
+                    if let Some(reward) = parititon_reward_map.get(&addresses[index]) {
+                        rewards[index] = Some(reward.clone());
+                    }
+                }
+
+                // send to writer
+                self.state.db_write_inflation_reward.push_partition(
+                    self.epoch,
+                    partition_index,
+                    parititon_reward_map,
+                );
+            }
+        }
+
+        Ok(Ok(()))
+    }
+
+    async fn get_inflation_reward_base(
+        &self,
+        deadline: Instant,
+        addresses: &[Pubkey],
+        rewards: &mut [Option<RpcInflationReward>],
+        missed: &mut Vec<usize>,
+    ) -> anyhow::Result<Result<InflationRewardBaseValue, Response<'static, serde_json::Value>>>
+    {
         // get first slot in epoch
         let first_slot_in_epoch = self
             .state
@@ -1268,103 +1408,31 @@ impl RpcRequestInflationReward {
                     || (!epoch_has_partitioned_rewards && reward_type == RewardType::Staking)
             },
         )?;
-        for (index, pubkey) in address_pks.iter().enumerate() {
-            if let Some(reward) = epoch_reward_map.get(pubkey) {
-                self.rewards[index] = Some(reward.clone());
+        missed.retain(|index| {
+            if let Some(reward) = epoch_reward_map.get(&addresses[*index]) {
+                rewards[*index] = Some(reward.clone());
+                false
+            } else {
+                true
             }
-        }
+        });
 
         // send to writer
         self.state.db_write_inflation_reward.push_base(
             self.epoch,
             first_confirmed_block_in_epoch,
+            epoch_boundary_block.block_height,
             previous_blockhash,
             epoch_boundary_block.num_reward_partitions,
-            epoch_boundary_block.block_height,
             epoch_reward_map.clone(),
         );
 
-        // append stake account rewards from partitions
-        if let Some(num_partitions) = epoch_boundary_block.num_reward_partitions {
-            let num_partitions = usize::try_from(num_partitions)
-                .expect("num_partitions should never exceed usize::MAX");
-
-            // fetch blocks with rewards
-            let block_list = match self
-                .get_blocks_with_limit(deadline, first_confirmed_block_in_epoch + 1, num_partitions)
-                .await?
-            {
-                Ok(blocks) => blocks,
-                Err(error) => return Ok(Err(error)),
-            };
-
-            // calculate partitions for addresses
-            let hasher = EpochRewardsHasher::new(num_partitions, &previous_blockhash);
-            let mut partition_index_addresses: HashMap<usize, Vec<(usize, Pubkey)>> =
-                HashMap::default();
-            for (index, address_pk) in address_pks.into_iter().enumerate() {
-                // Skip this address if (Voting) rewards were already found in
-                // the first block of the epoch
-                if !epoch_reward_map.contains_key(&address_pk) {
-                    let partition_index = hasher.clone().hash_address_to_partition(&address_pk);
-                    partition_index_addresses
-                        .entry(partition_index)
-                        .or_insert_with(|| Vec::with_capacity(4))
-                        .push((index, address_pk));
-                }
-            }
-
-            // fetch blocks with rewards
-            for (partition_index, addresses) in partition_index_addresses {
-                let Some(slot) = block_list.get(partition_index).copied() else {
-                    // If block_list.len() too short to contain
-                    // partition_index, the epoch rewards period must be
-                    // currently active.
-                    let rewards_complete_block_height = epoch_boundary_block
-                        .block_height
-                        .map(|block_height| {
-                            block_height
-                                .saturating_add(num_partitions as u64)
-                                .saturating_add(1)
-                        })
-                        .expect(
-                            "every block after partitioned_epoch_reward_enabled should have a \
-                                populated block_height",
-                        );
-
-                    return self
-                        .error_epoch_rewards_period_active(deadline, rewards_complete_block_height)
-                        .await
-                        .map(Err);
-                };
-
-                // fetch block
-                let block = match self.get_block_with_rewards(deadline, slot).await? {
-                    Ok(block) => block,
-                    Err(error) => return Ok(Err(error)),
-                };
-
-                // collect for addresses
-                let parititon_reward_map =
-                    self.filter_rewards(slot, block.rewards, &|reward_type| {
-                        reward_type == RewardType::Staking
-                    })?;
-                for (index, pubkey) in addresses.into_iter() {
-                    if let Some(reward) = parititon_reward_map.get(&pubkey) {
-                        self.rewards[index] = Some(reward.clone());
-                    }
-                }
-
-                // send to writer
-                self.state.db_write_inflation_reward.push_partition(
-                    self.epoch,
-                    partition_index,
-                    parititon_reward_map,
-                );
-            }
-        }
-
-        Ok(Ok(()))
+        Ok(Ok(InflationRewardBaseValue::new(
+            first_confirmed_block_in_epoch,
+            epoch_boundary_block.block_height,
+            previous_blockhash,
+            epoch_boundary_block.num_reward_partitions,
+        )))
     }
 
     async fn get_blocks_with_limit(
