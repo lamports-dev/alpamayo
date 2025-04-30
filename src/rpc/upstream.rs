@@ -306,23 +306,15 @@ impl RpcClientJsonrpc {
     #[allow(clippy::too_many_arguments)]
     pub async fn get_block_rewards(
         &self,
-        x_subscription_id: Arc<str>,
         deadline: Instant,
         id: &Id<'static>,
         slot: Slot,
     ) -> anyhow::Result<
         Result<Option<UiConfirmedBlock>, jsonrpsee_types::Response<'static, serde_json::Value>>,
     > {
-        counter!(
-            RPC_UPSTREAM_REQUESTS_TOTAL,
-            "x_subscription_id" => Arc::clone(&x_subscription_id),
-            "method" => "getBlock",
-        )
-        .increment(1);
-
         let result = self.inner
             .call_with_timeout(
-                x_subscription_id.as_ref(),
+                "",
                 json!({
                     "jsonrpc": "2.0",
                     "method": "getBlock",
@@ -385,24 +377,16 @@ impl RpcClientJsonrpc {
 
     pub async fn get_blocks_parsed(
         &self,
-        x_subscription_id: Arc<str>,
         deadline: Instant,
         id: &Id<'static>,
         start_slot: Slot,
         limit: usize,
     ) -> anyhow::Result<Result<Vec<Slot>, jsonrpsee_types::Response<'static, serde_json::Value>>>
     {
-        counter!(
-            RPC_UPSTREAM_REQUESTS_TOTAL,
-            "x_subscription_id" => Arc::clone(&x_subscription_id),
-            "method" => "getBlocksWithLimit",
-        )
-        .increment(1);
-
         let result = self
             .inner
             .call_with_timeout(
-                x_subscription_id.as_ref(),
+                "",
                 json!({
                     "jsonrpc": "2.0",
                     "method": "getBlocksWithLimit",

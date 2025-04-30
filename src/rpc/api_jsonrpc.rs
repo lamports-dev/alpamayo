@@ -1426,7 +1426,7 @@ impl RpcRequestInflationReward {
             epoch_boundary_block.block_height,
             previous_blockhash,
             epoch_boundary_block.num_reward_partitions,
-            epoch_reward_map.clone(),
+            epoch_reward_map,
         );
 
         Ok(Ok(InflationRewardBaseValue::new(
@@ -1451,13 +1451,7 @@ impl RpcRequestInflationReward {
                 .flatten()
             {
                 return upstream
-                    .get_blocks_parsed(
-                        Arc::clone(&self.x_subscription_id),
-                        deadline,
-                        &self.id,
-                        start_slot,
-                        limit,
-                    )
+                    .get_blocks_parsed(deadline, &self.id, start_slot, limit)
                     .await
                     .map_err(|error| anyhow::anyhow!(error));
             }
@@ -1563,15 +1557,7 @@ impl RpcRequestInflationReward {
             .then_some(self.state.upstream.as_ref())
             .flatten()
         {
-            match upstream
-                .get_block_rewards(
-                    Arc::clone(&self.x_subscription_id),
-                    deadline,
-                    &self.id,
-                    slot,
-                )
-                .await
-            {
+            match upstream.get_block_rewards(deadline, &self.id, slot).await {
                 Ok(Ok(Some(block))) => Ok(Ok(block)),
                 Ok(Ok(None)) => Ok(Err(RpcRequestBlock::error_not_available(
                     self.id.clone(),

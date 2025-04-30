@@ -809,7 +809,7 @@ impl RocksdbWrite {
                         reward_map,
                         &mut buf,
                     ) {
-                        error!(?error, epoch, elapsed = ?ts.elapsed(), "failed to savebase  inflation reward");
+                        error!(?error, epoch, elapsed = ?ts.elapsed(), "failed to savebase inflation reward");
                     } else {
                         info!(epoch, elapsed = ?ts.elapsed(), "save base inflation reward");
                     }
