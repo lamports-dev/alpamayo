@@ -28,6 +28,7 @@ use {
     },
     solana_sdk::{
         clock::{Epoch, Slot, UnixTimestamp},
+        epoch_rewards_hasher::EpochRewardsHasher,
         hash::{HASH_BYTES, Hash},
         pubkey::Pubkey,
         signature::Signature,
@@ -1322,11 +1323,57 @@ impl RocksdbRead {
         epoch: Epoch,
         addresses: Vec<Pubkey>,
     ) -> anyhow::Result<ReadRequestResultInflationReward> {
-        let rewards =
+        let mut rewards =
             std::iter::repeat_n(None, addresses.len()).collect::<Vec<Option<RpcInflationReward>>>();
-        let missed = (0..addresses.len()).collect::<Vec<_>>();
 
-        // TODO
+        let mut base_with_hasher = None;
+        let mut base_fetched = false;
+        let mut missed = Vec::with_capacity(addresses.len());
+        for (index, address) in addresses.iter().enumerate() {
+            if let Some(slice) = db.get_pinned_cf(
+                Rocksdb::cf_handle::<InflationRewardIndex>(db),
+                InflationRewardIndex::encode_reward(epoch, *address),
+            )? {
+                let value = InflationRewardAddressValue::decode(slice.as_ref())?;
+                rewards[index] = Some(value.reward);
+                continue;
+            }
+
+            if base_with_hasher.is_none() && !base_fetched {
+                base_fetched = true;
+                if let Some(slice) = db.get_pinned_cf(
+                    Rocksdb::cf_handle::<InflationRewardIndex>(db),
+                    InflationRewardIndex::encode_base(epoch),
+                )? {
+                    let base = InflationRewardBaseValue::decode(slice.as_ref())?;
+                    let num_partitions_hasher =
+                        if let Some(num_partitions) = base.num_reward_partitions {
+                            let num_partitions = num_partitions as usize;
+                            let hasher =
+                                EpochRewardsHasher::new(num_partitions, &base.previous_blockhash);
+                            Some((num_partitions, hasher))
+                        } else {
+                            None
+                        };
+                    base_with_hasher = Some((base, num_partitions_hasher));
+                }
+            }
+            if let Some((base, num_partitions_hasher)) = base_with_hasher.as_ref() {
+                if let Some((num_partitions, hasher)) = num_partitions_hasher {
+                    let partition_index =
+                        hasher.clone().hash_address_to_partition(&addresses[index]);
+                    if partition_index < *num_partitions
+                        && base.partitions.get(partition_index).as_deref() == Some(&true)
+                    {
+                        continue;
+                    }
+                } else {
+                    continue;
+                }
+            }
+
+            missed.push(index);
+        }
 
         Ok(ReadRequestResultInflationReward {
             addresses,
