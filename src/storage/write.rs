@@ -250,8 +250,10 @@ async fn start2(
             "node is outdated"
         );
 
+        let mut last_confirmed_slot = next_confirmed_slot;
+        let mut last_confirmed_slot_update_ts = Instant::now();
         loop {
-            // update confirmed slot every 3s
+            // update confirmed slot every 2s
             if next_confirmed_slot_last_update.elapsed() > Duration::from_secs(2) {
                 next_confirmed_slot = load_confirmed_slot(&rpc, &stored_slots, &sync_tx).await?;
                 next_confirmed_slot_last_update = Instant::now();
@@ -259,8 +261,12 @@ async fn start2(
                     slot_db = next_database_slot,
                     slot_node = next_confirmed_slot,
                     diff = next_confirmed_slot - next_database_slot,
+                    slots_per_sec = (next_confirmed_slot - last_confirmed_slot) as f64
+                        / last_confirmed_slot_update_ts.elapsed().as_secs() as f64,
                     "trying to catch-up the node"
                 );
+                last_confirmed_slot = next_confirmed_slot;
+                last_confirmed_slot_update_ts = Instant::now();
             }
 
             // break if we are close enough

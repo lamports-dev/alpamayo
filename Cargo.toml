@@ -11,7 +11,7 @@ keywords = ["solana", "rpc"]
 publish = false
 
 [dependencies]
-affinity-linux = "1.0.0"
+affinity-linux = "1.0.1"
 anyhow = "1.0.96"
 base64 = "0.22.1"
 bincode = "1.3.3"
