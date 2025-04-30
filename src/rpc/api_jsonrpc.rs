@@ -398,7 +398,7 @@ async fn process_with_workers(
             Ok(()) => break,
             Err(TrySendError::Full(value)) => {
                 request = value;
-                sleep(Duration::from_micros(100)).await;
+                sleep(Duration::from_micros(250)).await;
             }
             Err(TrySendError::Disconnected(_)) => anyhow::bail!("encode workers disconnected"),
         }
