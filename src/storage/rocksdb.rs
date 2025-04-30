@@ -1152,9 +1152,7 @@ impl RocksdbRead {
 
             match request {
                 ReadRequest::Slots { tx } => {
-                    if tx.send(Self::spawn_slots(&db)).is_err() {
-                        break;
-                    }
+                    let _ = tx.send(Self::spawn_slots(&db)).is_err();
                 }
                 ReadRequest::Transaction { signature, tx } => {
                     let result = match db.get_pinned_cf(
@@ -1168,9 +1166,7 @@ impl RocksdbRead {
                         Err(error) => Err(anyhow::anyhow!("failed to get tx location: {error:?}")),
                     };
 
-                    if tx.send(result).is_err() {
-                        break;
-                    }
+                    let _ = tx.send(result).is_err();
                 }
                 ReadRequest::SignaturesForAddress {
                     address,
@@ -1180,34 +1176,25 @@ impl RocksdbRead {
                     signatures,
                     tx,
                 } => {
-                    if tx
+                    let _ = tx
                         .send(Self::spawn_signatires_for_address(
                             &db, address, slot, before, until, signatures,
                         ))
-                        .is_err()
-                    {
-                        break;
-                    }
+                        .is_err();
                 }
                 ReadRequest::SignatureStatuses { signatures, tx } => {
-                    if tx
+                    let _ = tx
                         .send(Self::spawn_signatire_statuses(&db, signatures))
-                        .is_err()
-                    {
-                        break;
-                    }
+                        .is_err();
                 }
                 ReadRequest::InflationReward {
                     epoch,
                     addresses,
                     tx,
                 } => {
-                    if tx
+                    let _ = tx
                         .send(Self::spawn_inflation_reward(&db, epoch, addresses))
-                        .is_err()
-                    {
-                        break;
-                    }
+                        .is_err();
                 }
             }
         }
