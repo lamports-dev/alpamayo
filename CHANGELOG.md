@@ -16,6 +16,12 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Breaking
 
+## [0.6.1] - 2025-04-30
+
+### Fixes
+
+- rpc: ignore send result in read threads ([#37](https://github.com/lamports-dev/alpamayo/pull/37))
+
 ## [0.6.0] - 2025-04-29
 
 ### Features
