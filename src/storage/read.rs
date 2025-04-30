@@ -708,8 +708,8 @@ impl ReadRequest {
                 let read_fut =
                     storage_files.read(location.storage_id, location.offset, location.size);
 
-                let ts = quanta::Instant::now();
                 Some(Box::pin(async move {
+                    let ts = quanta::Instant::now();
                     let result = timeout_at(deadline.into(), read_fut).await;
                     gauge!(
                         READ_DISK_SECONDS_TOTAL,
@@ -881,8 +881,8 @@ impl ReadRequest {
                     }
                 };
 
-                let ts = quanta::Instant::now();
                 Some(Box::pin(async move {
+                    let ts = quanta::Instant::now();
                     let result = timeout_at(deadline.into(), read_fut).await;
                     gauge!(
                         READ_DISK_SECONDS_TOTAL,
@@ -1031,8 +1031,8 @@ impl ReadRequest {
                         }
                     };
 
-                    let ts = quanta::Instant::now();
                     Some(Box::pin(async move {
+                        let ts = quanta::Instant::now();
                         let result = timeout_at(deadline.into(), read_fut).await;
                         gauge!(
                             READ_DISK_SECONDS_TOTAL,
@@ -1113,8 +1113,8 @@ impl ReadRequest {
                         }
                     };
 
-                let ts = quanta::Instant::now();
                 Some(Box::pin(async move {
+                    let ts = quanta::Instant::now();
                     let result = timeout_at(deadline.into(), read_fut).await;
                     gauge!(
                         READ_DISK_SECONDS_TOTAL,
@@ -1253,8 +1253,8 @@ impl ReadRequest {
                 };
 
                 let finalized_slot = storage_processed.finalized_slot;
-                let ts = quanta::Instant::now();
                 Some(Box::pin(async move {
+                    let ts = quanta::Instant::now();
                     let result = timeout_at(deadline.into(), read_fut).await;
                     gauge!(
                         READ_DISK_SECONDS_TOTAL,
@@ -1325,8 +1325,8 @@ impl ReadRequest {
                     }
                 };
 
-                let ts = quanta::Instant::now();
                 Some(Box::pin(async move {
+                    let ts = quanta::Instant::now();
                     let result = timeout_at(deadline.into(), read_fut).await;
                     gauge!(
                         READ_DISK_SECONDS_TOTAL,
