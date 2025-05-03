@@ -18,7 +18,6 @@ use {
         },
         util::HashMap,
     },
-    anyhow::Context,
     crossbeam::channel::{Sender, TrySendError},
     futures::future::BoxFuture,
     jsonrpsee_types::{
@@ -31,7 +30,7 @@ use {
         jsonrpc::{
             helpers::{
                 jsonrpc_error_invalid_params, jsonrpc_response_error,
-                jsonrpc_response_error_custom, jsonrpc_response_success,
+                jsonrpc_response_error_custom, jsonrpc_response_success, to_vec,
             },
             requests::{RpcRequestResult, RpcRequestsProcessor},
         },
@@ -250,7 +249,7 @@ trait RpcRequestHandler: Sized {
         x_subscription_id: Arc<str>,
         upstream_disabled: bool,
         request: Request<'_>,
-    ) -> BoxFuture<'_, RpcRequestResult<'_>>
+    ) -> BoxFuture<'_, RpcRequestResult>
     where
         Self: Send,
     {
@@ -267,31 +266,29 @@ trait RpcRequestHandler: Sized {
         x_subscription_id: Arc<str>,
         upstream_disabled: bool,
         request: Request<'_>,
-    ) -> Result<Self, Response<'_, serde_json::Value>>;
+    ) -> Result<Self, Vec<u8>>;
 
-    fn process(self) -> impl Future<Output = RpcRequestResult<'static>> + Send {
+    fn process(self) -> impl Future<Output = RpcRequestResult> + Send {
         async { unimplemented!() }
     }
 }
 
-fn parse_params<'a, T>(request: Request<'a>) -> Result<(Id<'a>, T), Response<'a, serde_json::Value>>
+fn parse_params<'a, T>(request: Request<'a>) -> Result<(Id<'a>, T), Vec<u8>>
 where
     T: for<'de> de::Deserialize<'de>,
 {
     let params = Params::new(request.params.as_ref().map(|p| p.get()));
     match params.parse() {
         Ok(params) => Ok((request.id, params)),
-        Err(error) => Err(Response {
+        Err(error) => Err(to_vec(&Response {
             jsonrpc: Some(TwoPointZero),
-            payload: ResponsePayload::error(error),
+            payload: ResponsePayload::<()>::error(error),
             id: request.id,
-        }),
+        })),
     }
 }
 
-fn no_params_expected(
-    request: Request<'_>,
-) -> Result<Request<'_>, Response<'_, serde_json::Value>> {
+fn no_params_expected(request: Request<'_>) -> Result<Request<'_>, Vec<u8>> {
     if let Some(error) = match serde_json::from_str::<serde_json::Value>(
         request.params.as_ref().map(|p| p.get()).unwrap_or("null"),
     ) {
@@ -329,7 +326,7 @@ fn min_context_check<'a>(
     min_context_slot: Option<Slot>,
     commitment: CommitmentConfig,
     state: &State,
-) -> Result<(Id<'a>, Option<Slot>), Response<'a, serde_json::Value>> {
+) -> Result<(Id<'a>, Option<Slot>), Vec<u8>> {
     if let Some(min_context_slot) = min_context_slot {
         let context_slot = match commitment.commitment {
             CommitmentLevel::Processed => state.stored_slots.processed_load(),
@@ -387,12 +384,8 @@ fn verify_and_parse_signatures_for_address_params(
 }
 
 async fn process_with_workers(
-    (state, mut request, rx): (
-        Arc<State>,
-        WorkRequest,
-        oneshot::Receiver<RpcRequestResult<'static>>,
-    ),
-) -> RpcRequestResult<'static> {
+    (state, mut request, rx): (Arc<State>, WorkRequest, oneshot::Receiver<RpcRequestResult>),
+) -> RpcRequestResult {
     loop {
         match state.workers.try_send(request) {
             Ok(()) => break,
@@ -427,7 +420,7 @@ impl RpcRequestHandler for RpcRequestBlock {
         x_subscription_id: Arc<str>,
         upstream_disabled: bool,
         request: Request<'_>,
-    ) -> Result<Self, Response<'_, serde_json::Value>> {
+    ) -> Result<Self, Vec<u8>> {
         #[derive(Debug, Deserialize)]
         struct ReqParams {
             slot: Slot,
@@ -463,7 +456,7 @@ impl RpcRequestHandler for RpcRequestBlock {
         })
     }
 
-    async fn process(self) -> RpcRequestResult<'static> {
+    async fn process(self) -> RpcRequestResult {
         let deadline = Instant::now() + self.state.request_timeout;
 
         // check slot before sending request
@@ -523,7 +516,7 @@ impl RpcRequestHandler for RpcRequestBlock {
 }
 
 impl RpcRequestBlock {
-    async fn fetch_upstream(self, deadline: Instant) -> RpcRequestResult<'static> {
+    async fn fetch_upstream(self, deadline: Instant) -> RpcRequestResult {
         if let Some(upstream) = (!self.upstream_disabled)
             .then_some(self.state.upstream.as_ref())
             .flatten()
@@ -544,18 +537,15 @@ impl RpcRequestBlock {
         }
     }
 
-    fn error_not_available(id: Id<'static>, slot: Slot) -> Response<'static, serde_json::Value> {
+    fn error_not_available(id: Id<'static>, slot: Slot) -> Vec<u8> {
         jsonrpc_response_error_custom(id, RpcCustomError::BlockNotAvailable { slot })
     }
 
-    fn error_skipped(id: Id<'static>, slot: Slot) -> Response<'static, serde_json::Value> {
+    fn error_skipped(id: Id<'static>, slot: Slot) -> Vec<u8> {
         jsonrpc_response_error_custom(id, RpcCustomError::SlotSkipped { slot })
     }
 
-    fn error_skipped_long_term_storage(
-        id: Id<'static>,
-        slot: Slot,
-    ) -> Response<'static, serde_json::Value> {
+    fn error_skipped_long_term_storage(id: Id<'static>, slot: Slot) -> Vec<u8> {
         jsonrpc_response_error_custom(id, RpcCustomError::LongTermStorageSlotSkipped { slot })
     }
 }
@@ -567,18 +557,14 @@ pub struct RpcRequestBlockWorkRequest {
     encoding: UiTransactionEncoding,
     encoding_options: BlockEncodingOptions,
     bytes: Vec<u8>,
-    tx: Option<oneshot::Sender<RpcRequestResult<'static>>>,
+    tx: Option<oneshot::Sender<RpcRequestResult>>,
 }
 
 impl RpcRequestBlockWorkRequest {
     fn create(
         request: RpcRequestBlock,
         bytes: Vec<u8>,
-    ) -> (
-        Arc<State>,
-        WorkRequest,
-        oneshot::Receiver<RpcRequestResult<'static>>,
-    ) {
+    ) -> (Arc<State>, WorkRequest, oneshot::Receiver<RpcRequestResult>) {
         let (tx, rx) = oneshot::channel();
         let this = Self {
             x_subscription_id: request.x_subscription_id,
@@ -617,14 +603,12 @@ impl RpcRequestBlockWorkRequest {
         slot: Slot,
         encoding: UiTransactionEncoding,
         encoding_options: BlockEncodingOptions,
-    ) -> RpcRequestResult<'static> {
+    ) -> RpcRequestResult {
         // parse and encode
         let block = Self::parse_and_encode(&bytes, &id, slot, encoding, encoding_options)?;
 
         // serialize
-        let data = serde_json::to_value(&block).expect("json serialization never fail");
-
-        Ok(jsonrpc_response_success(id, data))
+        Ok(jsonrpc_response_success(id, &block))
     }
 
     fn parse_and_encode(
@@ -633,7 +617,7 @@ impl RpcRequestBlockWorkRequest {
         slot: Slot,
         encoding: UiTransactionEncoding,
         encoding_options: BlockEncodingOptions,
-    ) -> anyhow::Result<Result<UiConfirmedBlock, Response<'static, serde_json::Value>>> {
+    ) -> anyhow::Result<Result<UiConfirmedBlock, Vec<u8>>> {
         // parse
         let block = match generated::ConfirmedBlock::decode(bytes) {
             Ok(block) => match ConfirmedBlock::try_from(block) {
@@ -674,7 +658,7 @@ impl RpcRequestHandler for RpcRequestBlockHeight {
         _x_subscription_id: Arc<str>,
         _upstream_disabled: bool,
         request: Request<'_>,
-    ) -> Result<Self, Response<'_, serde_json::Value>> {
+    ) -> Result<Self, Vec<u8>> {
         #[derive(Debug, Deserialize)]
         struct ReqParams {
             #[serde(default)]
@@ -697,7 +681,7 @@ impl RpcRequestHandler for RpcRequestBlockHeight {
         })
     }
 
-    async fn process(self) -> RpcRequestResult<'static> {
+    async fn process(self) -> RpcRequestResult {
         let deadline = Instant::now() + self.state.request_timeout;
 
         // request
@@ -749,7 +733,7 @@ impl RpcRequestHandler for RpcRequestBlocks {
         x_subscription_id: Arc<str>,
         upstream_disabled: bool,
         request: Request<'_>,
-    ) -> Result<Self, Response<'_, serde_json::Value>> {
+    ) -> Result<Self, Vec<u8>> {
         #[derive(Debug, Deserialize)]
         struct ReqParams {
             start_slot: Slot,
@@ -818,7 +802,7 @@ impl RpcRequestHandler for RpcRequestBlocks {
         })
     }
 
-    async fn process(self) -> RpcRequestResult<'static> {
+    async fn process(self) -> RpcRequestResult {
         let deadline = Instant::now() + self.state.request_timeout;
 
         // some slot will be removed while we pass request, send to upstream
@@ -863,9 +847,7 @@ impl RpcRequestHandler for RpcRequestBlocks {
 
         match result {
             ReadResultBlocks::Timeout => anyhow::bail!("timeout"),
-            ReadResultBlocks::Blocks(blocks) => {
-                Ok(jsonrpc_response_success(self.id, blocks.into()))
-            }
+            ReadResultBlocks::Blocks(blocks) => Ok(jsonrpc_response_success(self.id, &blocks)),
             ReadResultBlocks::ReadError(error) => anyhow::bail!("read error: {error}"),
         }
     }
@@ -888,7 +870,7 @@ impl RpcRequestHandler for RpcRequestBlocksWithLimit {
         x_subscription_id: Arc<str>,
         upstream_disabled: bool,
         request: Request<'_>,
-    ) -> Result<Self, Response<'_, serde_json::Value>> {
+    ) -> Result<Self, Vec<u8>> {
         #[derive(Debug, Deserialize)]
         struct ReqParams {
             start_slot: Slot,
@@ -947,7 +929,7 @@ impl RpcRequestHandler for RpcRequestBlocksWithLimit {
         })
     }
 
-    async fn process(self) -> RpcRequestResult<'static> {
+    async fn process(self) -> RpcRequestResult {
         RpcRequestBlocks {
             state: self.state,
             x_subscription_id: self.x_subscription_id,
@@ -977,7 +959,7 @@ impl RpcRequestHandler for RpcRequestBlockTime {
         x_subscription_id: Arc<str>,
         upstream_disabled: bool,
         request: Request<'_>,
-    ) -> Result<Self, Response<'_, serde_json::Value>> {
+    ) -> Result<Self, Vec<u8>> {
         #[derive(Debug, Deserialize)]
         struct ReqParams {
             slot: Slot,
@@ -986,7 +968,7 @@ impl RpcRequestHandler for RpcRequestBlockTime {
         let (id, ReqParams { slot }) = parse_params(request)?;
 
         if slot == 0 {
-            Err(jsonrpc_response_success(id, 1584368940.into()))
+            Err(jsonrpc_response_success(id, 1584368940))
         } else {
             Ok(Self {
                 state,
@@ -998,7 +980,7 @@ impl RpcRequestHandler for RpcRequestBlockTime {
         }
     }
 
-    async fn process(self) -> RpcRequestResult<'static> {
+    async fn process(self) -> RpcRequestResult {
         let deadline = Instant::now() + self.state.request_timeout;
 
         // request
@@ -1027,7 +1009,7 @@ impl RpcRequestHandler for RpcRequestBlockTime {
             ReadResultBlockTime::NotAvailable => {
                 Err(RpcCustomError::BlockNotAvailable { slot: self.slot })
             }
-            ReadResultBlockTime::BlockTime(block_time) => Ok(block_time.into()),
+            ReadResultBlockTime::BlockTime(block_time) => Ok(block_time),
             ReadResultBlockTime::ReadError(error) => anyhow::bail!("read error: {error}"),
         };
 
@@ -1039,7 +1021,7 @@ impl RpcRequestHandler for RpcRequestBlockTime {
 }
 
 impl RpcRequestBlockTime {
-    async fn fetch_upstream(self, deadline: Instant) -> RpcRequestResult<'static> {
+    async fn fetch_upstream(self, deadline: Instant) -> RpcRequestResult {
         if let Some(upstream) = (!self.upstream_disabled)
             .then_some(self.state.upstream.as_ref())
             .flatten()
@@ -1066,7 +1048,7 @@ impl RpcRequestHandler for RpcRequestClusterNodes {
         x_subscription_id: Arc<str>,
         _upstream_disabled: bool,
         request: Request<'_>,
-    ) -> Result<Self, Response<'_, serde_json::Value>> {
+    ) -> Result<Self, Vec<u8>> {
         let request = no_params_expected(request)?;
         Ok(Self {
             state,
@@ -1075,7 +1057,7 @@ impl RpcRequestHandler for RpcRequestClusterNodes {
         })
     }
 
-    async fn process(self) -> RpcRequestResult<'static> {
+    async fn process(self) -> RpcRequestResult {
         let deadline = Instant::now() + self.state.request_timeout;
 
         let Some(upstream) = self.state.upstream.as_ref() else {
@@ -1102,7 +1084,7 @@ impl RpcRequestHandler for RpcRequestFirstAvailableBlock {
         x_subscription_id: Arc<str>,
         upstream_disabled: bool,
         request: Request<'_>,
-    ) -> Result<Self, Response<'_, serde_json::Value>> {
+    ) -> Result<Self, Vec<u8>> {
         let request = no_params_expected(request)?;
         Ok(Self {
             state,
@@ -1112,7 +1094,7 @@ impl RpcRequestHandler for RpcRequestFirstAvailableBlock {
         })
     }
 
-    async fn process(self) -> RpcRequestResult<'static> {
+    async fn process(self) -> RpcRequestResult {
         let deadline = Instant::now() + self.state.request_timeout;
 
         if let Some(upstream) = (!self.upstream_disabled)
@@ -1148,7 +1130,7 @@ impl RpcRequestHandler for RpcRequestInflationReward {
         x_subscription_id: Arc<str>,
         upstream_disabled: bool,
         request: Request<'_>,
-    ) -> Result<Self, Response<'_, serde_json::Value>> {
+    ) -> Result<Self, Vec<u8>> {
         #[derive(Debug, Deserialize)]
         struct ReqParams {
             #[serde(default)]
@@ -1201,7 +1183,7 @@ impl RpcRequestHandler for RpcRequestInflationReward {
         })
     }
 
-    async fn process(mut self) -> RpcRequestResult<'static> {
+    async fn process(mut self) -> RpcRequestResult {
         let deadline = Instant::now() + self.state.request_timeout;
 
         // request
@@ -1246,8 +1228,7 @@ impl RpcRequestHandler for RpcRequestInflationReward {
         };
 
         // serialize
-        let data = serde_json::to_value(&rewards).expect("json serialization never fail");
-        Ok(jsonrpc_response_success(self.id, data))
+        Ok(jsonrpc_response_success(self.id, &rewards))
     }
 }
 
@@ -1259,7 +1240,7 @@ impl RpcRequestInflationReward {
         rewards: &mut [Option<RpcInflationReward>],
         mut missed: Vec<usize>,
         base: Option<InflationRewardBaseValue>,
-    ) -> anyhow::Result<Result<(), Response<'static, serde_json::Value>>> {
+    ) -> anyhow::Result<Result<(), Vec<u8>>> {
         let epoch_boundary_block = match base {
             Some(base) => base,
             None => match self
@@ -1363,8 +1344,7 @@ impl RpcRequestInflationReward {
         addresses: &[Pubkey],
         rewards: &mut [Option<RpcInflationReward>],
         missed: &mut Vec<usize>,
-    ) -> anyhow::Result<Result<InflationRewardBaseValue, Response<'static, serde_json::Value>>>
-    {
+    ) -> anyhow::Result<Result<InflationRewardBaseValue, Vec<u8>>> {
         // get first slot in epoch
         let first_slot_in_epoch = self
             .state
@@ -1442,7 +1422,7 @@ impl RpcRequestInflationReward {
         deadline: Instant,
         start_slot: Slot,
         limit: usize,
-    ) -> anyhow::Result<Result<Vec<Slot>, Response<'static, serde_json::Value>>> {
+    ) -> anyhow::Result<Result<Vec<Slot>, Vec<u8>>> {
         // some slot will be removed while we pass request, send to upstream
         let first_available_slot = self.state.stored_slots.first_available_load() + 150;
         if start_slot < first_available_slot {
@@ -1488,7 +1468,7 @@ impl RpcRequestInflationReward {
         &self,
         deadline: Instant,
         slot: Slot,
-    ) -> anyhow::Result<Result<UiConfirmedBlock, Response<'static, serde_json::Value>>> {
+    ) -> anyhow::Result<Result<UiConfirmedBlock, Vec<u8>>> {
         if slot <= self.state.stored_slots.first_available_load() {
             return self.get_block_with_rewards_upstream(deadline, slot).await;
         }
@@ -1552,7 +1532,7 @@ impl RpcRequestInflationReward {
         &self,
         deadline: Instant,
         slot: Slot,
-    ) -> anyhow::Result<Result<UiConfirmedBlock, Response<'static, serde_json::Value>>> {
+    ) -> anyhow::Result<Result<UiConfirmedBlock, Vec<u8>>> {
         if let Some(upstream) = (!self.upstream_disabled)
             .then_some(self.state.upstream.as_ref())
             .flatten()
@@ -1609,7 +1589,7 @@ impl RpcRequestInflationReward {
         &self,
         deadline: Instant,
         rewards_complete_block_height: Slot,
-    ) -> RpcRequestResult<'static> {
+    ) -> RpcRequestResult {
         // request
         let (tx, rx) = oneshot::channel();
         anyhow::ensure!(
@@ -1657,7 +1637,7 @@ impl RpcRequestHandler for RpcRequestLatestBlockhash {
         _x_subscription_id: Arc<str>,
         _upstream_disabled: bool,
         request: Request<'_>,
-    ) -> Result<Self, Response<'_, serde_json::Value>> {
+    ) -> Result<Self, Vec<u8>> {
         #[derive(Debug, Deserialize)]
         struct ReqParams {
             #[serde(default)]
@@ -1680,7 +1660,7 @@ impl RpcRequestHandler for RpcRequestLatestBlockhash {
         })
     }
 
-    async fn process(self) -> RpcRequestResult<'static> {
+    async fn process(self) -> RpcRequestResult {
         let deadline = Instant::now() + self.state.request_timeout;
 
         // request
@@ -1708,15 +1688,14 @@ impl RpcRequestHandler for RpcRequestLatestBlockhash {
                 blockhash,
                 last_valid_block_height,
             } => {
-                let data = serde_json::to_value(&solana_rpc_client_api::response::Response {
+                let response = solana_rpc_client_api::response::Response {
                     context: RpcResponseContext::new(slot),
                     value: RpcBlockhash {
                         blockhash,
                         last_valid_block_height,
                     },
-                })
-                .expect("json serialization never fail");
-                Ok(jsonrpc_response_success(self.id, data))
+                };
+                Ok(jsonrpc_response_success(self.id, &response))
             }
             ReadResultLatestBlockhash::ReadError(error) => {
                 anyhow::bail!("read error: {error}")
@@ -1741,7 +1720,7 @@ impl RpcRequestHandler for RpcRequestLeaderSchedule {
         x_subscription_id: Arc<str>,
         _upstream_disabled: bool,
         request: Request<'_>,
-    ) -> Result<Self, Response<'_, serde_json::Value>> {
+    ) -> Result<Self, Vec<u8>> {
         #[derive(Debug, Deserialize)]
         struct ReqParams {
             #[serde(default)]
@@ -1784,7 +1763,7 @@ impl RpcRequestHandler for RpcRequestLeaderSchedule {
         })
     }
 
-    async fn process(self) -> RpcRequestResult<'static> {
+    async fn process(self) -> RpcRequestResult {
         let deadline = Instant::now() + self.state.request_timeout;
 
         let Some(upstream) = self.state.upstream.as_ref() else {
@@ -1820,7 +1799,7 @@ impl RpcRequestHandler for RpcRequestRecentPrioritizationFees {
         _x_subscription_id: Arc<str>,
         _upstream_disabled: bool,
         request: Request<'_>,
-    ) -> Result<Self, Response<'_, serde_json::Value>> {
+    ) -> Result<Self, Vec<u8>> {
         #[derive(Debug, Deserialize)]
         struct ReqParams {
             #[serde(default)]
@@ -1884,7 +1863,7 @@ impl RpcRequestHandler for RpcRequestRecentPrioritizationFees {
         })
     }
 
-    async fn process(self) -> RpcRequestResult<'static> {
+    async fn process(self) -> RpcRequestResult {
         let deadline = Instant::now() + self.state.request_timeout;
 
         // request
@@ -1909,8 +1888,7 @@ impl RpcRequestHandler for RpcRequestRecentPrioritizationFees {
         match result {
             ReadResultRecentPrioritizationFees::Timeout => anyhow::bail!("timeout"),
             ReadResultRecentPrioritizationFees::Fees(fees) => {
-                let data = serde_json::to_value(&fees).expect("json serialization never fail");
-                Ok(jsonrpc_response_success(self.id, data))
+                Ok(jsonrpc_response_success(self.id, &fees))
             }
         }
     }
@@ -1935,7 +1913,7 @@ impl RpcRequestHandler for RpcRequestSignaturesForAddress {
         x_subscription_id: Arc<str>,
         upstream_disabled: bool,
         request: Request<'_>,
-    ) -> Result<Self, Response<'_, serde_json::Value>> {
+    ) -> Result<Self, Vec<u8>> {
         #[derive(Debug, Deserialize)]
         struct ReqParams {
             address: String,
@@ -1983,7 +1961,7 @@ impl RpcRequestHandler for RpcRequestSignaturesForAddress {
         })
     }
 
-    async fn process(self) -> RpcRequestResult<'static> {
+    async fn process(self) -> RpcRequestResult {
         let deadline = Instant::now() + self.state.request_timeout;
 
         // request
@@ -2039,8 +2017,7 @@ impl RpcRequestHandler for RpcRequestSignaturesForAddress {
             self.id
         };
 
-        let data = serde_json::to_value(&signatures).expect("json serialization never fail");
-        Ok(jsonrpc_response_success(id, data))
+        Ok(jsonrpc_response_success(id, &signatures))
     }
 }
 
@@ -2051,13 +2028,10 @@ impl RpcRequestSignaturesForAddress {
         before: Option<Signature>,
         limit: usize,
     ) -> anyhow::Result<
-        Result<
-            (Id<'static>, Vec<RpcConfirmedTransactionStatusWithSignature>),
-            Response<'static, serde_json::Value>,
-        >,
+        Result<(Id<'static>, Vec<RpcConfirmedTransactionStatusWithSignature>), Vec<u8>>,
     > {
         if let Some(upstream) = self.state.upstream.as_ref() {
-            let response = upstream
+            let bytes = upstream
                 .get_signatures_for_address(
                     self.x_subscription_id,
                     deadline,
@@ -2070,14 +2044,16 @@ impl RpcRequestSignaturesForAddress {
                 )
                 .await?;
 
-            let value = match response.payload {
+            let result: Response<Vec<RpcConfirmedTransactionStatusWithSignature>> =
+                serde_json::from_slice(&bytes)
+                    .map_err(|_error| anyhow::anyhow!("failed to parse json from upstream"))?;
+
+            let value = match result.payload {
                 ResponsePayload::Success(value) => value,
-                ResponsePayload::Error(_) => return Ok(Err(response)),
+                ResponsePayload::Error(_) => return Ok(Err(bytes.to_vec())),
             };
 
-            serde_json::from_value(value.into_owned())
-                .context("failed to parse upstream response")
-                .map(|vec| Ok((self.id, vec)))
+            Ok(Ok((self.id, value.into_owned())))
         } else {
             Ok(Ok((self.id, vec![])))
         }
@@ -2100,7 +2076,7 @@ impl RpcRequestHandler for RpcRequestSignatureStatuses {
         x_subscription_id: Arc<str>,
         upstream_disabled: bool,
         request: Request<'_>,
-    ) -> Result<Self, Response<'_, serde_json::Value>> {
+    ) -> Result<Self, Vec<u8>> {
         #[derive(Debug, Deserialize)]
         struct ReqParams {
             signature_strs: Vec<String>,
@@ -2155,7 +2131,7 @@ impl RpcRequestHandler for RpcRequestSignatureStatuses {
         })
     }
 
-    async fn process(self) -> RpcRequestResult<'static> {
+    async fn process(self) -> RpcRequestResult {
         let deadline = Instant::now() + self.state.request_timeout;
 
         // request
@@ -2212,12 +2188,11 @@ impl RpcRequestHandler for RpcRequestSignatureStatuses {
             }
         }
 
-        let data = serde_json::to_value(&solana_rpc_client_api::response::Response {
+        let response = solana_rpc_client_api::response::Response {
             context: RpcResponseContext::new(self.state.stored_slots.processed_load()),
             value: statuses,
-        })
-        .expect("json serialization never fail");
-        Ok(jsonrpc_response_success(self.id, data))
+        };
+        Ok(jsonrpc_response_success(self.id, &response))
     }
 }
 
@@ -2226,10 +2201,9 @@ impl RpcRequestSignatureStatuses {
         &self,
         deadline: Instant,
         signatures: Vec<&Signature>,
-    ) -> anyhow::Result<Result<Vec<Option<TransactionStatus>>, Response<'static, serde_json::Value>>>
-    {
+    ) -> anyhow::Result<Result<Vec<Option<TransactionStatus>>, Vec<u8>>> {
         if let Some(upstream) = self.state.upstream.as_ref() {
-            let response = upstream
+            let bytes = upstream
                 .get_signature_statuses(
                     Arc::clone(&self.x_subscription_id),
                     deadline,
@@ -2238,16 +2212,18 @@ impl RpcRequestSignatureStatuses {
                 )
                 .await?;
 
-            if let ResponsePayload::Error(_) = &response.payload {
-                return Ok(Err(response));
+            let result: Response<Vec<Option<TransactionStatus>>> =
+                serde_json::from_slice(&bytes)
+                    .map_err(|_error| anyhow::anyhow!("failed to parse json from upstream"))?;
+
+            if let ResponsePayload::Error(_) = &result.payload {
+                return Ok(Err(bytes.to_vec()));
             }
 
-            let ResponsePayload::Success(value) = response.payload else {
+            let ResponsePayload::Success(value) = result.payload else {
                 unreachable!();
             };
-            serde_json::from_value(value.into_owned())
-                .context("failed to parse upstream response")
-                .map(Ok)
+            Ok(Ok(value.into_owned()))
         } else {
             Ok(Ok(vec![]))
         }
@@ -2263,7 +2239,7 @@ impl RpcRequestHandler for RpcRequestSlot {
         _x_subscription_id: Arc<str>,
         _upstream_disabled: bool,
         request: Request<'_>,
-    ) -> Result<Self, Response<'_, serde_json::Value>> {
+    ) -> Result<Self, Vec<u8>> {
         #[derive(Debug, Deserialize)]
         struct ReqParams {
             #[serde(default)]
@@ -2292,7 +2268,7 @@ impl RpcRequestHandler for RpcRequestSlot {
             }
         }
 
-        Err(jsonrpc_response_success(id, context_slot.into()))
+        Err(jsonrpc_response_success(id, context_slot))
     }
 }
 
@@ -2314,7 +2290,7 @@ impl RpcRequestHandler for RpcRequestTransaction {
         x_subscription_id: Arc<str>,
         upstream_disabled: bool,
         request: Request<'_>,
-    ) -> Result<Self, Response<'_, serde_json::Value>> {
+    ) -> Result<Self, Vec<u8>> {
         #[derive(Debug, Deserialize)]
         struct ReqParams {
             signature_str: String,
@@ -2357,7 +2333,7 @@ impl RpcRequestHandler for RpcRequestTransaction {
         })
     }
 
-    async fn process(self) -> RpcRequestResult<'static> {
+    async fn process(self) -> RpcRequestResult {
         let deadline = Instant::now() + self.state.request_timeout;
 
         // request
@@ -2410,7 +2386,7 @@ impl RpcRequestHandler for RpcRequestTransaction {
 }
 
 impl RpcRequestTransaction {
-    async fn fetch_upstream(self, deadline: Instant) -> RpcRequestResult<'static> {
+    async fn fetch_upstream(self, deadline: Instant) -> RpcRequestResult {
         if let Some(upstream) = (!self.upstream_disabled)
             .then_some(self.state.upstream.as_ref())
             .flatten()
@@ -2444,7 +2420,7 @@ pub struct RpcRequestTransactionWorkRequest {
     slot: Slot,
     block_time: Option<UnixTimestamp>,
     bytes: Vec<u8>,
-    tx: Option<oneshot::Sender<RpcRequestResult<'static>>>,
+    tx: Option<oneshot::Sender<RpcRequestResult>>,
 }
 
 impl RpcRequestTransactionWorkRequest {
@@ -2453,11 +2429,7 @@ impl RpcRequestTransactionWorkRequest {
         slot: Slot,
         block_time: Option<UnixTimestamp>,
         bytes: Vec<u8>,
-    ) -> (
-        Arc<State>,
-        WorkRequest,
-        oneshot::Receiver<RpcRequestResult<'static>>,
-    ) {
+    ) -> (Arc<State>, WorkRequest, oneshot::Receiver<RpcRequestResult>) {
         let (tx, rx) = oneshot::channel();
         let this = Self {
             x_subscription_id: request.x_subscription_id,
@@ -2499,7 +2471,7 @@ impl RpcRequestTransactionWorkRequest {
         id: Id<'static>,
         encoding: UiTransactionEncoding,
         max_supported_transaction_version: Option<u8>,
-    ) -> RpcRequestResult<'static> {
+    ) -> RpcRequestResult {
         // parse
         let tx_with_meta = match generated::ConfirmedTransaction::decode(bytes.as_ref()) {
             Ok(tx) => match TransactionWithStatusMeta::try_from(tx) {
@@ -2536,9 +2508,7 @@ impl RpcRequestTransactionWorkRequest {
         };
 
         // serialize
-        let data = serde_json::to_value(&tx).expect("json serialization never fail");
-
-        Ok(jsonrpc_response_success(id, data))
+        Ok(jsonrpc_response_success(id, &tx))
     }
 }
 
@@ -2551,7 +2521,7 @@ impl RpcRequestHandler for RpcRequestVersion {
         _x_subscription_id: Arc<str>,
         _upstream_disabled: bool,
         request: Request<'_>,
-    ) -> Result<Self, Response<'_, serde_json::Value>> {
+    ) -> Result<Self, Vec<u8>> {
         let request = no_params_expected(request)?;
         let version = solana_version::Version::default();
         Err(jsonrpc_response_success(
@@ -2578,7 +2548,7 @@ impl RpcRequestHandler for RpcRequestIsBlockhashValid {
         _x_subscription_id: Arc<str>,
         _upstream_disabled: bool,
         request: Request<'_>,
-    ) -> Result<Self, Response<'_, serde_json::Value>> {
+    ) -> Result<Self, Vec<u8>> {
         #[derive(Debug, Deserialize)]
         struct ReqParams {
             blockhash: String,
@@ -2610,7 +2580,7 @@ impl RpcRequestHandler for RpcRequestIsBlockhashValid {
         })
     }
 
-    async fn process(self) -> RpcRequestResult<'static> {
+    async fn process(self) -> RpcRequestResult {
         let deadline = Instant::now() + self.state.request_timeout;
 
         // request
@@ -2635,12 +2605,11 @@ impl RpcRequestHandler for RpcRequestIsBlockhashValid {
         match result {
             ReadResultBlockhashValid::Timeout => anyhow::bail!("timeout"),
             ReadResultBlockhashValid::Blockhash { slot, is_valid } => {
-                let data = serde_json::to_value(&solana_rpc_client_api::response::Response {
+                let response = solana_rpc_client_api::response::Response {
                     context: RpcResponseContext::new(slot),
                     value: is_valid,
-                })
-                .expect("json serialization never fail");
-                Ok(jsonrpc_response_success(self.id, data))
+                };
+                Ok(jsonrpc_response_success(self.id, &response))
             }
             ReadResultBlockhashValid::ReadError(error) => {
                 anyhow::bail!("read error: {error}")

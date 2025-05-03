@@ -3971,9 +3971,9 @@ dependencies = [
 
 [[package]]
 name = "richat-client"
-version = "2.5.0"
+version = "2.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e220a09d3874bdbf95256a30a90ca543278151f128f3d6bb65b32185380abe85"
+checksum = "d888816ee7939dff506e42958226d74cbf79b2919876cdcb9e00d9c1112f15ce"
 dependencies = [
  "anyhow",
  "bytes",
@@ -4013,9 +4013,9 @@ dependencies = [
 
 [[package]]
 name = "richat-shared"
-version = "2.8.0"
+version = "2.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f0d8e237069cd425949b15e87692f43e4bc10ef85ab6a0db9cc60b608ecef332"
+checksum = "1f46412a753eeaede050d6060d58e68331b1c423158ceabd9355218d9edc77e7"
 dependencies = [
  "affinity-linux",
  "anyhow",

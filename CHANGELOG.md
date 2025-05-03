@@ -14,6 +14,8 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Features
 
+- rpc: serialize to `Vec<u8>` instead of `serde_json::Value` ([#38](https://github.com/lamports-dev/alpamayo/pull/38))
+
 ### Breaking
 
 ## [0.6.1] - 2025-04-30

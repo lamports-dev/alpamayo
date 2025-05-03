@@ -10,16 +10,20 @@ use {
     },
     futures::future::{BoxFuture, FutureExt, Shared},
     http_body_util::{BodyExt, Full as BodyFull},
-    hyper::http::Result as HttpResult,
+    hyper::{body::Bytes, http::Result as HttpResult},
     jsonrpsee_types::{Id, Response, ResponsePayload},
     metrics::counter,
     quanta::Instant as QInstant,
     reqwest::{Client, StatusCode, Version, header::CONTENT_TYPE},
     richat_shared::jsonrpc::helpers::{RpcResponse, X_SUBSCRIPTION_ID, jsonrpc_response_success},
+    serde::de::DeserializeOwned,
     serde_json::json,
-    solana_rpc_client_api::config::{
-        RpcBlockConfig, RpcLeaderScheduleConfig, RpcLeaderScheduleConfigWrapper,
-        RpcSignatureStatusConfig, RpcSignaturesForAddressConfig, RpcTransactionConfig,
+    solana_rpc_client_api::{
+        config::{
+            RpcBlockConfig, RpcLeaderScheduleConfig, RpcLeaderScheduleConfigWrapper,
+            RpcSignatureStatusConfig, RpcSignaturesForAddressConfig, RpcTransactionConfig,
+        },
+        response::{RpcContactInfo, RpcLeaderSchedule},
     },
     solana_sdk::{
         clock::Slot, commitment_config::CommitmentConfig, epoch_schedule::Epoch, pubkey::Pubkey,
@@ -158,9 +162,8 @@ impl RpcClientHttpget {
     }
 }
 
-type RpcClientJsonrpcResult = anyhow::Result<jsonrpsee_types::Response<'static, serde_json::Value>>;
-type RpcClientJsonrpcResultRaw =
-    Result<jsonrpsee_types::Response<'static, serde_json::Value>, Cow<'static, str>>;
+type RpcClientJsonrpcResult = anyhow::Result<Vec<u8>>;
+type RpcClientJsonrpcResultRaw = Result<Bytes, Cow<'static, str>>;
 
 #[derive(Debug)]
 pub struct RpcClientJsonrpcInner {
@@ -182,12 +185,12 @@ impl RpcClientJsonrpcInner {
         }
     }
 
-    async fn call_get_success(
+    async fn call_get_success<T: Clone + DeserializeOwned>(
         &self,
         x_subscription_id: &str,
         method: &str,
         params: serde_json::Value,
-    ) -> Result<Cow<'_, serde_json::Value>, Cow<'static, str>> {
+    ) -> Result<T, Cow<'static, str>> {
         let body = json!({
             "jsonrpc": "2.0",
             "method": method,
@@ -196,8 +199,13 @@ impl RpcClientJsonrpcInner {
         })
         .to_string();
 
-        match self.call(x_subscription_id, body).await?.payload {
-            ResponsePayload::Success(value) => Ok(value),
+        let bytes = self.call(x_subscription_id, body).await?;
+
+        let result: Response<T> = serde_json::from_slice(&bytes)
+            .map_err(|_error| Cow::Borrowed("failed to parse json from upstream"))?;
+
+        match result.payload {
+            ResponsePayload::Success(value) => Ok(value.into_owned()),
             ResponsePayload::Error(error) => {
                 Err(Cow::Owned(format!("failed to get value: {error:?}")))
             }
@@ -224,23 +232,20 @@ impl RpcClientJsonrpcInner {
             )));
         }
 
-        let Ok(bytes) = response.bytes().await else {
-            return Err(Cow::Borrowed("failed to collect bytes from upstream"));
-        };
-
-        serde_json::from_slice(&bytes)
-            .map(|response: Response<'_, serde_json::Value>| response.into_owned())
-            .map_err(|_error| Cow::Borrowed("failed to parse json from upstream"))
+        response
+            .bytes()
+            .await
+            .map_err(|_error| Cow::Borrowed("failed to collect bytes from upstream"))
     }
 }
 
 type CachedEpochSchedule =
-    Shared<BoxFuture<'static, Result<Arc<serde_json::Value>, Cow<'static, str>>>>;
+    Shared<BoxFuture<'static, Result<Arc<Option<RpcLeaderSchedule>>, Cow<'static, str>>>>;
 
 #[derive(Debug)]
 pub struct RpcClientJsonrpc {
     inner: Arc<RpcClientJsonrpcInner>,
-    cache_cluster_nodes: CachedRequests<serde_json::Value>,
+    cache_cluster_nodes: CachedRequests<Vec<RpcContactInfo>>,
     cache_epoch_schedule: Arc<Mutex<HashMap<Epoch, CachedEpochSchedule>>>,
 }
 
@@ -300,6 +305,7 @@ impl RpcClientJsonrpc {
                 deadline,
             )
             .await
+            .map(Into::into)
             .map_err(|error| anyhow::anyhow!(error))
     }
 
@@ -309,10 +315,8 @@ impl RpcClientJsonrpc {
         deadline: Instant,
         id: &Id<'static>,
         slot: Slot,
-    ) -> anyhow::Result<
-        Result<Option<UiConfirmedBlock>, jsonrpsee_types::Response<'static, serde_json::Value>>,
-    > {
-        let result = self.inner
+    ) -> anyhow::Result<Result<Option<UiConfirmedBlock>, Vec<u8>>> {
+        let bytes = self.inner
             .call_with_timeout(
                 "",
                 json!({
@@ -327,13 +331,14 @@ impl RpcClientJsonrpc {
             .await
             .map_err(|error| anyhow::anyhow!(error))?;
 
+        let result: Response<Option<UiConfirmedBlock>> = serde_json::from_slice(&bytes)
+            .map_err(|_error| anyhow::anyhow!("failed to parse json from upstream"))?;
+
         let ResponsePayload::Success(value) = result.payload else {
-            return Ok(Err(result));
+            return Ok(Err(bytes.to_vec()));
         };
 
-        serde_json::from_value(value.into_owned())
-            .map(Ok)
-            .map_err(|error| anyhow::anyhow!("failed to parse response: {error:?}"))
+        Ok(Ok(value.into_owned()))
     }
 
     pub async fn get_blocks(
@@ -372,6 +377,7 @@ impl RpcClientJsonrpc {
             deadline,
         )
         .await
+        .map(Into::into)
         .map_err(|error| anyhow::anyhow!(error))
     }
 
@@ -381,9 +387,8 @@ impl RpcClientJsonrpc {
         id: &Id<'static>,
         start_slot: Slot,
         limit: usize,
-    ) -> anyhow::Result<Result<Vec<Slot>, jsonrpsee_types::Response<'static, serde_json::Value>>>
-    {
-        let result = self
+    ) -> anyhow::Result<Result<Vec<Slot>, Vec<u8>>> {
+        let bytes = self
             .inner
             .call_with_timeout(
                 "",
@@ -399,13 +404,14 @@ impl RpcClientJsonrpc {
             .await
             .map_err(|error| anyhow::anyhow!(error))?;
 
+        let result: Response<Vec<Slot>> = serde_json::from_slice(&bytes)
+            .map_err(|_error| anyhow::anyhow!("failed to parse json from upstream"))?;
+
         let ResponsePayload::Success(value) = result.payload else {
-            return Ok(Err(result));
+            return Ok(Err(bytes.to_vec()));
         };
 
-        serde_json::from_value(value.into_owned())
-            .map(Ok)
-            .map_err(|error| anyhow::anyhow!("failed to parse response: {error:?}"))
+        Ok(Ok(value.into_owned()))
     }
 
     pub async fn get_block_time(
@@ -435,6 +441,7 @@ impl RpcClientJsonrpc {
                 deadline,
             )
             .await
+            .map(Into::into)
             .map_err(|error| anyhow::anyhow!(error))
     }
 
@@ -450,9 +457,12 @@ impl RpcClientJsonrpc {
             .get(deadline, move || {
                 async move {
                     let result = inner
-                        .call_get_success(x_subscription_id.as_ref(), "getClusterNodes", json!([]))
-                        .await
-                        .map(|value| value.into_owned());
+                        .call_get_success::<Vec<RpcContactInfo>>(
+                            x_subscription_id.as_ref(),
+                            "getClusterNodes",
+                            json!([]),
+                        )
+                        .await;
                     counter!(
                         RPC_UPSTREAM_REQUESTS_TOTAL,
                         "x_subscription_id" => x_subscription_id,
@@ -495,6 +505,7 @@ impl RpcClientJsonrpc {
                 deadline,
             )
             .await
+            .map(Into::into)
             .map_err(|error| anyhow::anyhow!(error))
     }
 
@@ -534,6 +545,7 @@ impl RpcClientJsonrpc {
                     deadline,
                 )
                 .await
+                .map(Into::into)
                 .map_err(|error| anyhow::anyhow!(error));
         }
 
@@ -551,7 +563,7 @@ impl RpcClientJsonrpc {
                 let inner = Arc::clone(&self.inner);
                 let fut = async move {
                     let result = inner
-                        .call_get_success(
+                        .call_get_success::<Option<RpcLeaderSchedule>>(
                             x_subscription_id.as_ref(),
                             "getLeaderSchedule",
                             json!([
@@ -563,18 +575,13 @@ impl RpcClientJsonrpc {
                             ]),
                         )
                         .await
-                        .map(|value| Arc::new(value.into_owned()));
+                        .map(Arc::new);
                     counter!(
                         RPC_UPSTREAM_REQUESTS_TOTAL,
                         "x_subscription_id" => x_subscription_id,
                         "method" => "getLeaderSchedule",
                     )
                     .increment(1);
-                    if let Ok(payload) = &result {
-                        if !payload.is_null() && !payload.is_object() {
-                            return Err(Cow::Borrowed("invalid response type"));
-                        }
-                    }
                     result
                 }
                 .boxed()
@@ -591,12 +598,8 @@ impl RpcClientJsonrpc {
         .map_err(|error| anyhow::anyhow!(error))?;
 
         if let Some(identity) = identity {
-            if payload.is_null() {
+            let Some(map) = payload.as_ref() else {
                 return Ok(jsonrpc_response_success(id, serde_json::Value::Null));
-            }
-
-            let Some(map) = payload.as_object() else {
-                unreachable!()
             };
 
             if let Some(slots) = map.get(&identity) {
@@ -650,6 +653,7 @@ impl RpcClientJsonrpc {
                 deadline,
             )
             .await
+            .map(Into::into)
             .map_err(|error| anyhow::anyhow!(error))
     }
 
@@ -684,6 +688,7 @@ impl RpcClientJsonrpc {
                 deadline,
             )
             .await
+            .map(Into::into)
             .map_err(|error| anyhow::anyhow!(error))
     }
 
@@ -722,6 +727,7 @@ impl RpcClientJsonrpc {
                 deadline,
             )
             .await
+            .map(Into::into)
             .map_err(|error| anyhow::anyhow!(error))
     }
 }
