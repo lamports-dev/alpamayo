@@ -55,7 +55,6 @@ fn main() -> anyhow::Result<()> {
     let (stream_tx, stream_rx) = mpsc::channel(2048);
     let (rpc_storage_source, rpc_rx) =
         storage::source::RpcSourceConnected::new(config.source.rpc.concurrency);
-    let rpc_storage_source = Arc::new(rpc_storage_source);
 
     // Storage write / storage read channels
     let (sync_tx, _) = broadcast::channel(1024);
