@@ -13,7 +13,7 @@ use {
             memory::{MemoryConfirmedBlock, StorageMemory},
             rocksdb::{RocksdbRead, RocksdbWrite},
             slots::StoredSlots,
-            source::{RpcRequest, RpcSourceConnected, RpcSourceConnectedError},
+            source::{RpcSourceConnected, RpcSourceConnectedError},
             sync::ReadWriteSyncMessage,
         },
         util::HashMap,
@@ -49,7 +49,7 @@ pub fn start(
     stored_slots: StoredSlots,
     db_write: RocksdbWrite,
     db_read: RocksdbRead,
-    rpc_tx: mpsc::Sender<RpcRequest>,
+    rpc_storage_source: Arc<RpcSourceConnected>,
     stream_start: Arc<Notify>,
     stream_rx: mpsc::Receiver<StreamSourceMessage>,
     sync_tx: broadcast::Sender<ReadWriteSyncMessage>,
@@ -70,8 +70,6 @@ pub fn start(
 
                 let rpc_getblock_max_retries = config.blocks.rpc_getblock_max_retries;
                 let rpc_getblock_backoff_init = config.blocks.rpc_getblock_backoff_init;
-                let rpc_getblock_max_concurrency = config.blocks.rpc_getblock_max_concurrency;
-                let rpc = RpcSourceConnected::new(rpc_tx);
 
                 let files = config.blocks.files.clone();
                 let blocks = StoredBlocksWrite::new(
@@ -156,8 +154,7 @@ pub fn start(
                     stored_slots,
                     rpc_getblock_max_retries,
                     rpc_getblock_backoff_init,
-                    rpc_getblock_max_concurrency,
-                    rpc,
+                    rpc_storage_source,
                     stream_start,
                     stream_rx,
                     blocks,
@@ -181,8 +178,7 @@ async fn start2(
     stored_slots: StoredSlots,
     rpc_getblock_max_retries: usize,
     rpc_getblock_backoff_init: Duration,
-    rpc_getblock_max_concurrency: usize,
-    rpc: RpcSourceConnected,
+    rpc: Arc<RpcSourceConnected>,
     stream_start: Arc<Notify>,
     mut stream_rx: mpsc::Receiver<StreamSourceMessage>,
     mut blocks: StoredBlocksWrite,
@@ -200,7 +196,7 @@ async fn start2(
                                slot: Slot| {
         let mut max_retries = rpc_getblock_max_retries;
         let mut backoff_wait = rpc_getblock_backoff_init;
-        let rpc = rpc.clone();
+        let rpc = Arc::clone(&rpc);
         rpc_requests.push(spawn_local(async move {
             loop {
                 match rpc.get_block(slot).await {
@@ -276,9 +272,7 @@ async fn start2(
             }
 
             // get blocks
-            while next_rpc_request_slot <= next_confirmed_slot
-                && rpc_requests.len() < rpc_getblock_max_concurrency
-            {
+            while next_rpc_request_slot <= next_confirmed_slot && !rpc.is_full() {
                 get_confirmed_block(&mut rpc_requests, next_rpc_request_slot);
                 next_rpc_request_slot += 1;
             }

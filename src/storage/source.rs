@@ -14,7 +14,7 @@ use {
     std::sync::Arc,
     thiserror::Error,
     tokio::{
-        sync::{Notify, mpsc, oneshot},
+        sync::{Notify, Semaphore, mpsc, oneshot},
         time::sleep,
     },
     tracing::error,
@@ -43,14 +43,24 @@ pub enum RpcSourceConnectedError<E> {
 
 pub type RpcSourceConnectedResult<T, E> = Result<T, RpcSourceConnectedError<E>>;
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct RpcSourceConnected {
     rpc_tx: mpsc::Sender<RpcRequest>,
+    semaphore: Semaphore,
 }
 
 impl RpcSourceConnected {
-    pub const fn new(rpc_tx: mpsc::Sender<RpcRequest>) -> Self {
-        Self { rpc_tx }
+    pub fn new(concurrency: usize) -> (Self, mpsc::Receiver<RpcRequest>) {
+        let (rpc_tx, rpc_rx) = mpsc::channel(2);
+        let this = Self {
+            rpc_tx,
+            semaphore: Semaphore::new(concurrency),
+        };
+        (this, rpc_rx)
+    }
+
+    pub fn is_full(&self) -> bool {
+        self.semaphore.available_permits() == 0
     }
 
     async fn send<T, E>(
@@ -58,6 +68,7 @@ impl RpcSourceConnected {
         request: RpcRequest,
         rx: oneshot::Receiver<Result<T, E>>,
     ) -> RpcSourceConnectedResult<T, E> {
+        let _permit = self.semaphore.acquire().await;
         if self.rpc_tx.send(request).await.is_err() {
             Err(RpcSourceConnectedError::SendError)
         } else {
@@ -100,7 +111,7 @@ pub async fn start(
     while !finished {
         finished = tokio::select! {
             () = &mut shutdown => true,
-            item = rpc_rx.recv() => handle_rpc(item, &rpc),
+            item = rpc_rx.recv() => handle_rpc(item, Arc::clone(&rpc)),
             result = &mut stream => return result,
         };
     }
@@ -165,10 +176,9 @@ async fn start_stream(
     }
 }
 
-fn handle_rpc(item: Option<RpcRequest>, rpc: &Arc<RpcSource>) -> bool {
+fn handle_rpc(item: Option<RpcRequest>, rpc: Arc<RpcSource>) -> bool {
     match item {
         Some(request) => {
-            let rpc = Arc::clone(rpc);
             tokio::spawn(async move {
                 match request {
                     RpcRequest::Slots { tx } => {

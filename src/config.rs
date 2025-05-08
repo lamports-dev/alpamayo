@@ -167,11 +167,6 @@ pub struct ConfigStorageBlocks {
         with = "humantime_serde"
     )]
     pub rpc_getblock_backoff_init: Duration,
-    #[serde(
-        default = "ConfigStorageBlocks::default_rpc_getblock_max_concurrency",
-        deserialize_with = "deserialize_num_str"
-    )]
-    pub rpc_getblock_max_concurrency: usize,
     pub files: Vec<ConfigStorageFile>,
 }
 
@@ -182,10 +177,6 @@ impl ConfigStorageBlocks {
 
     const fn default_rpc_getblock_backoff_init() -> Duration {
         Duration::from_millis(100)
-    }
-
-    const fn default_rpc_getblock_max_concurrency() -> usize {
-        10
     }
 }
 

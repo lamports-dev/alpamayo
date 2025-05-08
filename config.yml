@@ -39,7 +39,6 @@ storage:
     max: 1_000
     rpc_getblock_max_retries: 10
     rpc_getblock_backoff_init: 100ms
-    rpc_getblock_max_concurrency: 10
     files:
       - id: 0
         path: ./db/alpamayo/storage0

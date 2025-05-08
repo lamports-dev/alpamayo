@@ -53,7 +53,9 @@ fn main() -> anyhow::Result<()> {
     // Source / storage write channels
     let stream_start = Arc::new(Notify::new());
     let (stream_tx, stream_rx) = mpsc::channel(2048);
-    let (rpc_tx, rpc_rx) = mpsc::channel(2048);
+    let (rpc_storage_source, rpc_rx) =
+        storage::source::RpcSourceConnected::new(config.source.rpc.concurrency);
+    let rpc_storage_source = Arc::new(rpc_storage_source);
 
     // Storage write / storage read channels
     let (sync_tx, _) = broadcast::channel(1024);
@@ -135,7 +137,7 @@ fn main() -> anyhow::Result<()> {
         stored_slots.clone(),
         db_write,
         db_read,
-        rpc_tx,
+        rpc_storage_source,
         stream_start,
         stream_rx,
         sync_tx,
