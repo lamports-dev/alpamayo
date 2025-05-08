@@ -35,6 +35,8 @@ source:
       send: ["gzip", "zstd"]
     x_token: null
 storage:
+  # backfilling:
+  #   sync_to: 338_669_763
   blocks:
     max: 1_000
     rpc_getblock_max_retries: 10

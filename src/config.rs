@@ -140,6 +140,8 @@ impl Default for ConfigSourceStreamReconnect {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConfigStorage {
+    /// Backfilling options
+    pub backfilling: Option<ConfigStorageBackfilling>,
     /// Storage files for blocks
     pub blocks: ConfigStorageBlocks,
     /// Storage of slots and tx index (RocksDB)
@@ -150,6 +152,13 @@ pub struct ConfigStorage {
     /// Read threads options
     #[serde(default)]
     pub read: ConfigStorageRead,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConfigStorageBackfilling {
+    #[serde(deserialize_with = "deserialize_humansize")]
+    pub sync_to: u64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
