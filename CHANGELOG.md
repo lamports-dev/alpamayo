@@ -14,10 +14,15 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Features
 
+### Breaking
+
+## [0.7.0] - 2025-05-??
+
+### Features
+
 - rpc: serialize to `Vec<u8>` instead of `serde_json::Value` ([#38](https://github.com/lamports-dev/alpamayo/pull/38))
 - rpc: remove get_block concurrency ([#39](https://github.com/lamports-dev/alpamayo/pull/39))
-
-### Breaking
+- storage: impl backfilling ([#40](https://github.com/lamports-dev/alpamayo/pull/40))
 
 ## [0.6.1] - 2025-04-30
 
