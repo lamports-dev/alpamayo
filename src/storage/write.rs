@@ -203,7 +203,6 @@ async fn start2(
         if !locked.insert(slot) {
             return;
         }
-        drop(locked);
 
         let mut max_retries = rpc_getblock_max_retries;
         let mut backoff_wait = rpc_getblock_backoff_init;
