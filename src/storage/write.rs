@@ -316,7 +316,7 @@ async fn start2(
 
                 let ts = Instant::now();
                 db_write
-                    .push_block(next_database_slot, block, storage_files, &mut blocks)
+                    .push_block_front(next_database_slot, block, storage_files, &mut blocks)
                     .await?;
                 metric_storage_block_sync.record(duration_to_seconds(ts.elapsed()));
 
@@ -420,7 +420,7 @@ async fn start2(
 
             let ts = Instant::now();
             db_write
-                .push_block(next_confirmed_slot, block, storage_files, &mut blocks)
+                .push_block_front(next_confirmed_slot, block, storage_files, &mut blocks)
                 .await?;
             metric_storage_block_sync.record(duration_to_seconds(ts.elapsed()));
 

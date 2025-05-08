@@ -925,7 +925,7 @@ impl RocksdbWrite {
         db.write(batch)
     }
 
-    pub async fn push_block(
+    pub async fn push_block_front(
         &self,
         slot: Slot,
         block: Option<Arc<BlockWithBinary>>,
@@ -959,7 +959,7 @@ impl RocksdbWrite {
                 .context("failed to get WriteRequest::SlotAdd request result")??;
 
             // blocks
-            blocks.push_block_dead(slot)?;
+            blocks.push_block_front_dead(slot)?;
 
             return Ok(());
         };
@@ -1008,7 +1008,7 @@ impl RocksdbWrite {
         rx.await
             .context("failed to get WriteRequest::SlotAdd request result")??;
 
-        blocks.push_block_confirmed(
+        blocks.push_block_front_confirmed(
             slot,
             block_time,
             block_height,

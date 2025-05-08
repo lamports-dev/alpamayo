@@ -109,11 +109,11 @@ impl StoredBlocksWrite {
         block.exists.then_some(block.slot)
     }
 
-    pub fn push_block_dead(&mut self, slot: Slot) -> anyhow::Result<()> {
-        self.push_block2(StoredBlock::new_dead(slot))
+    pub fn push_block_front_dead(&mut self, slot: Slot) -> anyhow::Result<()> {
+        self.push_block_front2(StoredBlock::new_dead(slot))
     }
 
-    pub fn push_block_confirmed(
+    pub fn push_block_front_confirmed(
         &mut self,
         slot: Slot,
         block_time: Option<UnixTimestamp>,
@@ -122,7 +122,7 @@ impl StoredBlocksWrite {
         offset: u64,
         block_size: u64,
     ) -> anyhow::Result<()> {
-        self.push_block2(StoredBlock::new_confirmed(
+        self.push_block_front2(StoredBlock::new_confirmed(
             slot,
             block_time,
             block_height,
@@ -132,7 +132,7 @@ impl StoredBlocksWrite {
         ))
     }
 
-    fn push_block2(&mut self, block: StoredBlock) -> anyhow::Result<()> {
+    fn push_block_front2(&mut self, block: StoredBlock) -> anyhow::Result<()> {
         self.head = (self.head + 1) % self.blocks.len();
         anyhow::ensure!(!self.blocks[self.head].exists, "no free slot");
 
