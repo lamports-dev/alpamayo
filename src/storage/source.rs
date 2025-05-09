@@ -14,7 +14,7 @@ use {
     std::sync::Arc,
     thiserror::Error,
     tokio::{
-        sync::{Notify, Semaphore, mpsc, oneshot},
+        sync::{Notify, mpsc, oneshot},
         time::sleep,
     },
     tracing::error,
@@ -43,24 +43,16 @@ pub enum RpcSourceConnectedError<E> {
 
 pub type RpcSourceConnectedResult<T, E> = Result<T, RpcSourceConnectedError<E>>;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct RpcSourceConnected {
     rpc_tx: mpsc::Sender<RpcRequest>,
-    semaphore: Semaphore,
 }
 
 impl RpcSourceConnected {
-    pub fn new(concurrency: usize) -> (Self, mpsc::Receiver<RpcRequest>) {
-        let (rpc_tx, rpc_rx) = mpsc::channel(2);
-        let this = Self {
-            rpc_tx,
-            semaphore: Semaphore::new(concurrency),
-        };
+    pub fn new() -> (Self, mpsc::Receiver<RpcRequest>) {
+        let (rpc_tx, rpc_rx) = mpsc::channel(1);
+        let this = Self { rpc_tx };
         (this, rpc_rx)
-    }
-
-    pub fn is_full(&self) -> bool {
-        self.semaphore.available_permits() == 0
     }
 
     async fn send<T, E>(
@@ -68,7 +60,6 @@ impl RpcSourceConnected {
         request: RpcRequest,
         rx: oneshot::Receiver<Result<T, E>>,
     ) -> RpcSourceConnectedResult<T, E> {
-        let _permit = self.semaphore.acquire().await;
         if self.rpc_tx.send(request).await.is_err() {
             Err(RpcSourceConnectedError::SendError)
         } else {

@@ -53,7 +53,7 @@ impl StoredBlocksWrite {
             sync_tx,
         };
 
-        stored_slots.first_available_store(this.front_slot());
+        stored_slots.first_available_store(this.first_slot());
 
         Ok(this)
     }
@@ -144,7 +144,7 @@ impl StoredBlocksWrite {
 
         // update stored if db was initialized
         if self.tail == 0 && self.head == 0 {
-            self.stored_slots.first_available_store(self.front_slot());
+            self.stored_slots.first_available_store(self.first_slot());
         }
 
         // set total
@@ -162,14 +162,14 @@ impl StoredBlocksWrite {
         if self.blocks[self.tail].exists {
             let block = std::mem::replace(&mut self.blocks[self.tail], StoredBlock::new_noexists());
             self.tail = (self.tail + 1) % self.blocks.len();
-            self.stored_slots.first_available_store(self.front_slot());
+            self.stored_slots.first_available_store(self.first_slot());
             Some(block)
         } else {
             None
         }
     }
 
-    fn front_slot(&self) -> Option<Slot> {
+    pub fn first_slot(&self) -> Option<Slot> {
         if self.tail == 0 && self.head == self.blocks.len() - 1 {
             return None;
         }

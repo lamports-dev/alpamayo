@@ -56,6 +56,7 @@ pub fn start(
     db_write: RocksdbWrite,
     db_read: RocksdbRead,
     rpc_storage_source: RpcSourceConnected,
+    rpc_concurrency: usize,
     stream_start: Arc<Notify>,
     stream_rx: mpsc::Receiver<StreamSourceMessage>,
     sync_tx: broadcast::Sender<ReadWriteSyncMessage>,
@@ -157,7 +158,9 @@ pub fn start(
                     .context("failed to send read/write init message")?;
 
                 let result = start2(
+                    config.backfilling.map(|config| config.sync_to),
                     stored_slots,
+                    rpc_concurrency,
                     rpc_getblock_max_retries,
                     rpc_getblock_backoff_init,
                     Arc::new(rpc_storage_source),
@@ -181,7 +184,9 @@ pub fn start(
 
 #[allow(clippy::too_many_arguments)]
 async fn start2(
+    backfill_upto: Option<Slot>,
     stored_slots: StoredSlots,
+    rpc_concurrency: usize,
     rpc_getblock_max_retries: usize,
     rpc_getblock_backoff_init: Duration,
     rpc: Arc<RpcSourceConnected>,
@@ -198,10 +203,12 @@ async fn start2(
     // rpc blocks & queue of confirmed blocks
     let mut rpc_blocks = RpcBlocks::new(
         Arc::clone(&rpc),
+        rpc_concurrency,
         rpc_getblock_max_retries,
         rpc_getblock_backoff_init,
     );
-    let mut queued_slots = HashMap::<Slot, Option<Arc<BlockWithBinary>>>::default();
+    let mut queued_slots_back = HashMap::<Slot, Option<Arc<BlockWithBinary>>>::default();
+    let mut queued_slots_front = HashMap::<Slot, Option<Arc<BlockWithBinary>>>::default();
 
     // fill the gap between stored and new
     let mut next_confirmed_slot = load_confirmed_slot(&rpc, &stored_slots, &sync_tx).await?;
@@ -246,7 +253,7 @@ async fn start2(
             }
 
             // get blocks
-            while next_rpc_request_slot <= next_confirmed_slot && !rpc.is_full() {
+            while next_rpc_request_slot <= next_confirmed_slot && !rpc_blocks.is_full() {
                 rpc_blocks.fetch(next_rpc_request_slot);
                 next_rpc_request_slot += 1;
             }
@@ -255,14 +262,14 @@ async fn start2(
             match rpc_blocks.next().await {
                 Some(Ok((slot, block))) => {
                     if slot >= next_database_slot {
-                        queued_slots.insert(slot, block.map(Arc::new));
+                        queued_slots_front.insert(slot, block.map(Arc::new));
                     }
                 }
                 Some(Err(error)) => return Err(error),
                 None => return Ok(()),
             }
 
-            while let Some(block) = queued_slots.remove(&next_database_slot) {
+            while let Some(block) = queued_slots_front.remove(&next_database_slot) {
                 let _ = sync_tx.send(ReadWriteSyncMessage::BlockConfirmed {
                     slot: next_database_slot,
                     block: block.clone(),
@@ -281,6 +288,8 @@ async fn start2(
     stream_start.notify_one();
 
     let mut storage_memory = StorageMemory::default();
+    let mut next_back_slot = None;
+    let mut next_back_request_slot = Slot::MAX;
 
     tokio::pin!(shutdown);
     loop {
@@ -290,7 +299,11 @@ async fn start2(
             message = rpc_blocks.next() => match message {
                 Some(Ok((slot, block))) => {
                     if slot >= next_confirmed_slot {
-                        queued_slots.insert(slot, block.map(Arc::new));
+                        queued_slots_front.insert(slot, block.map(Arc::new));
+                    } else if let Some(next_back_slot) = next_back_slot {
+                        if slot <= next_back_slot {
+                            queued_slots_back.insert(slot, block.map(Arc::new));
+                        }
                     }
                 }
                 Some(Err(error)) => return Err(error),
@@ -331,7 +344,9 @@ async fn start2(
 
                         if block.get_slot() > next_confirmed_slot {
                             for slot in next_confirmed_slot..block.get_slot() {
-                                rpc_blocks.fetch(slot);
+                                if !queued_slots_front.contains_key(&slot) {
+                                    rpc_blocks.fetch(slot);
+                                }
                             }
                         }
 
@@ -340,10 +355,10 @@ async fn start2(
                                 rpc_blocks.fetch(slot);
                             },
                             MemoryConfirmedBlock::Dead { slot } => {
-                                queued_slots.insert(slot, None);
+                                queued_slots_front.insert(slot, None);
                             }
                             MemoryConfirmedBlock::Block { slot, block } => {
-                                queued_slots.insert(slot, Some(block));
+                                queued_slots_front.insert(slot, Some(block));
                             }
                         }
                     }
@@ -353,8 +368,8 @@ async fn start2(
             () = &mut shutdown => return Ok(()),
         }
 
-        // save blocks
-        while let Some(block) = queued_slots.remove(&next_confirmed_slot) {
+        // save new blocks
+        while let Some(block) = queued_slots_front.remove(&next_confirmed_slot) {
             let _ = sync_tx.send(ReadWriteSyncMessage::BlockConfirmed {
                 slot: next_confirmed_slot,
                 block: block.clone(),
@@ -367,6 +382,29 @@ async fn start2(
             metric_storage_block_sync.record(duration_to_seconds(ts.elapsed()));
 
             next_confirmed_slot += 1;
+        }
+
+        // backfill
+        match (backfill_upto, next_back_slot) {
+            (Some(backfill_upto), Some(mut slot)) => {
+                if next_back_request_slot == Slot::MAX {
+                    next_back_request_slot = slot;
+                }
+
+                while next_back_request_slot >= backfill_upto && !rpc_blocks.is_full() {
+                    rpc_blocks.fetch(next_back_request_slot);
+                    next_back_request_slot -= 1;
+                }
+
+                while let Some(_block) = queued_slots_back.remove(&slot) {
+                    slot -= 1;
+                }
+                next_back_slot = Some(slot);
+            }
+            (Some(_), None) => {
+                next_back_slot = blocks.first_slot().and_then(|x| x.checked_sub(1));
+            }
+            _ => {}
         }
     }
 }
@@ -391,6 +429,7 @@ async fn load_confirmed_slot(
 #[derive(Debug)]
 struct RpcBlocks {
     rpc: Arc<RpcSourceConnected>,
+    rpc_concurrency: usize,
     rpc_getblock_max_retries: usize,
     rpc_getblock_backoff_init: Duration,
     rpc_inprogress: Mutex<HashSet<Slot>>,
@@ -403,16 +442,22 @@ struct RpcBlocks {
 impl RpcBlocks {
     fn new(
         rpc: Arc<RpcSourceConnected>,
+        rpc_concurrency: usize,
         rpc_getblock_max_retries: usize,
         rpc_getblock_backoff_init: Duration,
     ) -> Self {
         Self {
             rpc,
+            rpc_concurrency,
             rpc_getblock_max_retries,
             rpc_getblock_backoff_init,
             rpc_inprogress: Mutex::default(),
             rpc_requests: FuturesUnordered::default(),
         }
+    }
+
+    fn is_full(&self) -> bool {
+        self.rpc_requests.len() >= self.rpc_concurrency
     }
 
     fn fetch(&self, slot: Slot) {

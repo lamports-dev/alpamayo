@@ -157,7 +157,7 @@ pub struct ConfigStorage {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConfigStorageBackfilling {
-    #[serde(deserialize_with = "deserialize_humansize")]
+    #[serde(deserialize_with = "deserialize_num_str")]
     pub sync_to: u64,
 }
 
