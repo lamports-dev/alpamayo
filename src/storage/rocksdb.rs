@@ -925,6 +925,89 @@ impl RocksdbWrite {
         db.write(batch)
     }
 
+    pub async fn push_block_back(
+        &self,
+        slot: Slot,
+        block: Option<Arc<BlockWithBinary>>,
+        files: &mut StorageFilesWrite,
+        blocks: &mut StoredBlocksWrite,
+    ) -> anyhow::Result<bool> {
+        if let Some(next_slot) = blocks.get_first_slot().map(|slot| slot - 1) {
+            anyhow::ensure!(
+                next_slot == slot,
+                "trying to push invalid slot: {slot}, expected {next_slot}"
+            );
+        }
+
+        // make sure that we not reached blocks limit
+        if blocks.is_full() {
+            return Ok(false);
+        }
+
+        // store dead slot
+        let Some(block) = block else {
+            // db
+            let (tx, rx) = oneshot::channel();
+            self.req_tx
+                .send(WriteRequest::SlotAdd {
+                    slot,
+                    data: None,
+                    tx,
+                })
+                .context("failed to send WriteRequest::SlotAdd request")?;
+            rx.await
+                .context("failed to get WriteRequest::SlotAdd request result")??;
+
+            // blocks
+            blocks.push_block_back_dead(slot)?;
+
+            return Ok(true);
+        };
+
+        // 1) store block in file
+        // 2) tx and sfa index in db
+        let ((buffer, files_result), block) =
+            tokio::try_join!(files.push_block_back(block.protobuf.clone()), async move {
+                let (tx, rx) = oneshot::channel();
+                self.req_tx
+                    .send(WriteRequest::AddIndexes {
+                        slot,
+                        block: Arc::clone(&block),
+                        tx,
+                    })
+                    .context("failed to send WriteRequest::TxSfaIndex request")?;
+                rx.await
+                    .context("failed to get WriteRequest::TxSfaIndex request result")??;
+                Ok::<_, anyhow::Error>(block)
+            })?;
+        let Some((storage_id, offset)) = files_result else {
+            return Ok(false);
+        };
+
+        let block_time = block.block_time;
+        let block_height = block.block_height;
+        let (tx, rx) = oneshot::channel();
+        self.req_tx
+            .send(WriteRequest::SlotAdd {
+                slot,
+                data: Some((block, storage_id, offset)),
+                tx,
+            })
+            .context("failed to send WriteRequest::SlotAdd request")?;
+        rx.await
+            .context("failed to get WriteRequest::SlotAdd request result")??;
+
+        blocks.push_block_back_confirmed(
+            slot,
+            block_time,
+            block_height,
+            storage_id,
+            offset,
+            buffer.len() as u64,
+        )?;
+        Ok(true)
+    }
+
     pub async fn push_block_front(
         &self,
         slot: Slot,
@@ -970,7 +1053,7 @@ impl RocksdbWrite {
         let ((storage_id, offset, buffer, blocks), block) = tokio::try_join!(
             async move {
                 loop {
-                    let (buffer2, result) = files.push_block(buffer).await?;
+                    let (buffer2, result) = files.push_block_front(buffer).await?;
                     buffer = buffer2;
 
                     if let Some((storage_id, offset)) = result {

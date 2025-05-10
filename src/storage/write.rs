@@ -184,7 +184,7 @@ pub fn start(
 
 #[allow(clippy::too_many_arguments)]
 async fn start2(
-    backfill_upto: Option<Slot>,
+    mut backfill_upto: Option<Slot>,
     stored_slots: StoredSlots,
     rpc_concurrency: usize,
     rpc_getblock_max_retries: usize,
@@ -290,6 +290,7 @@ async fn start2(
     let mut storage_memory = StorageMemory::default();
     let mut next_back_slot = None;
     let mut next_back_request_slot = Slot::MAX;
+    let mut backfill_ts = None;
 
     tokio::pin!(shutdown);
     loop {
@@ -386,23 +387,50 @@ async fn start2(
 
         // backfill
         match (backfill_upto, next_back_slot) {
-            (Some(backfill_upto), Some(mut slot)) => {
+            (Some(backfill_upto_value), Some(mut slot)) => {
                 if next_back_request_slot == Slot::MAX {
                     next_back_request_slot = slot;
                 }
 
-                while next_back_request_slot >= backfill_upto && !rpc_blocks.is_full() {
+                if backfill_ts.is_none() {
+                    backfill_ts = Some((slot, Instant::now()));
+                }
+                if let Some((slot2, ts)) = backfill_ts {
+                    if ts.elapsed() > Duration::from_secs(5) {
+                        info!(
+                            sync_to = backfill_upto_value,
+                            left = slot - backfill_upto_value,
+                            diff = slot2 - slot,
+                            slots_per_sec = (slot2 - slot) as f64 / ts.elapsed().as_secs() as f64,
+                            "backfilling is in progress"
+                        );
+                        backfill_ts = Some((slot, Instant::now()));
+                    }
+                }
+
+                while next_back_request_slot >= backfill_upto_value && !rpc_blocks.is_full() {
                     rpc_blocks.fetch(next_back_request_slot);
                     next_back_request_slot -= 1;
                 }
 
-                while let Some(_block) = queued_slots_back.remove(&slot) {
+                while let Some(block) = queued_slots_back.remove(&slot) {
+                    let ts = Instant::now();
+                    let block_added = db_write
+                        .push_block_back(slot, block, storage_files, &mut blocks)
+                        .await?;
+                    metric_storage_block_sync.record(duration_to_seconds(ts.elapsed()));
+                    if !block_added {
+                        info!("backfilling is finished");
+                        backfill_upto = None;
+                        break;
+                    }
+
                     slot -= 1;
                 }
                 next_back_slot = Some(slot);
             }
             (Some(_), None) => {
-                next_back_slot = blocks.first_slot().and_then(|x| x.checked_sub(1));
+                next_back_slot = blocks.get_first_slot().and_then(|x| x.checked_sub(1));
             }
             _ => {}
         }
