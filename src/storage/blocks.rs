@@ -146,20 +146,19 @@ impl StoredBlocksWrite {
     }
 
     pub fn get_first_slot(&self) -> Option<Slot> {
-        if self.tail == 0 && self.head == self.blocks.len() - 1 {
-            return None;
-        }
-
-        let mut index = self.tail;
-        loop {
-            let block = &self.blocks[index];
-            if block.exists {
-                return Some(block.slot);
+        // additional condition in case if zero blocks exists
+        if self.blocks[self.tail].exists && self.blocks[self.head].exists {
+            let mut index = self.tail;
+            loop {
+                let block = &self.blocks[index];
+                if block.exists {
+                    return Some(block.slot);
+                }
+                if index == self.head {
+                    break;
+                }
+                index = (index + 1) % self.blocks.len();
             }
-            if index == self.head {
-                break;
-            }
-            index = (index + 1) % self.blocks.len();
         }
         None
     }
