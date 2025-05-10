@@ -413,6 +413,7 @@ async fn start2(
                     next_back_request_slot -= 1;
                 }
 
+                let tsloop = Instant::now();
                 while let Some(block) = queued_slots_back.remove(&slot) {
                     let ts = Instant::now();
                     let block_added = db_write
@@ -426,6 +427,11 @@ async fn start2(
                     }
 
                     slot -= 1;
+
+                    // do not block new blocks
+                    if tsloop.elapsed() > Duration::from_millis(100) {
+                        break;
+                    }
                 }
                 next_back_slot = Some(slot);
             }
