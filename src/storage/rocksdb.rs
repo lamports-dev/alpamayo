@@ -608,19 +608,11 @@ impl Rocksdb {
         options.create_if_missing(true);
         options.create_missing_column_families(true);
 
-        // Per the docs, a good value for this is the number of cores on the machine
-        options.increase_parallelism(num_cpus::get() as i32);
+        // Set_max_background_jobs(N), configures N/4 low priority threads and 3N/4 high priority threads
+        options.set_max_background_jobs(num_cpus::get() as i32);
 
-        // While a compaction is ongoing, all the background threads
-        // could be used by the compaction. This can stall writes which
-        // need to flush the memtable. Add some high-priority background threads
-        // which can service these writes.
-        let mut env = rocksdb::Env::new().unwrap();
-        env.set_high_priority_background_threads(4);
-        options.set_env(&env);
-
-        // Set max total WAL size
-        options.set_max_total_wal_size(512 * 1024 * 1024);
+        // Set max total WAL size to 4GiB
+        options.set_max_total_wal_size(4 * 1024 * 1024 * 1024);
 
         options
     }
@@ -629,7 +621,7 @@ impl Rocksdb {
         let mut options = Options::default();
 
         const MAX_WRITE_BUFFER_SIZE: u64 = 256 * 1024 * 1024;
-        options.set_max_write_buffer_number(2);
+        options.set_max_write_buffer_number(8);
         options.set_write_buffer_size(MAX_WRITE_BUFFER_SIZE as usize);
 
         let file_num_compaction_trigger = 4;

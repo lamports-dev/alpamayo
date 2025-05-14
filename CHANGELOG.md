@@ -16,6 +16,12 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Breaking
 
+## [0.7.1] - 2025-05-13
+
+### Fixes
+
+- storage: use rocksdb `set_max_background_jobs` ([#41](https://github.com/lamports-dev/alpamayo/pull/41))
+
 ## [0.7.0] - 2025-05-10
 
 ### Features
