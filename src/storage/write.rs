@@ -420,7 +420,7 @@ async fn start2(
                         .push_block_back(slot, block, storage_files, &mut blocks)
                         .await?;
                     metric_storage_block_sync.record(duration_to_seconds(ts.elapsed()));
-                    if !block_added {
+                    if !block_added || slot == backfill_upto_value {
                         info!("backfilling is finished");
                         backfill_upto = None;
                         break;
