@@ -66,7 +66,7 @@ storage:
     affinity: 3-4 # Optional affinity of read tokio runtimes
     # Max number of async requests handled by every read thread
     # async requests: getBlock, getInflationReward, getSignaturesForAddress, getSignatureStatuses, getTransaction
-    thread_max_async_requests: 128
+    thread_max_async_requests: 1024
     # Max number of read requests from files storage, includes: getBlock, getTransaction
     thread_max_files_requests: 32
 rpc:

@@ -273,7 +273,7 @@ impl Default for ConfigStorageRead {
         Self {
             threads: 2,
             affinity: None,
-            thread_max_async_requests: 128,
+            thread_max_async_requests: 1024,
             thread_max_files_requests: 32,
         }
     }
