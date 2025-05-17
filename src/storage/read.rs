@@ -38,7 +38,7 @@ use {
         time::Instant,
     },
     tokio::{
-        sync::{Mutex, broadcast, mpsc, oneshot},
+        sync::{Mutex, Semaphore, broadcast, mpsc, oneshot},
         time::timeout_at,
     },
     tracing::error,
@@ -51,6 +51,7 @@ pub fn start(
     affinity: Option<Vec<usize>>,
     mut sync_rx: broadcast::Receiver<ReadWriteSyncMessage>,
     max_async_requests: usize,
+    max_files_requests: usize,
     requests_rx: Arc<Mutex<mpsc::Receiver<ReadRequest>>>,
     mut stored_slots_read: StoredSlotsRead,
 ) -> anyhow::Result<thread::JoinHandle<anyhow::Result<()>>> {
@@ -89,6 +90,7 @@ pub fn start(
                 };
                 stored_slots_read.set_ready(storage_processed.is_ready());
 
+                let max_files_requests = Arc::new(Semaphore::new(max_files_requests));
                 let result = start2(
                     index,
                     sync_rx,
@@ -98,6 +100,7 @@ pub fn start(
                     &mut confirmed_in_process,
                     &mut storage_processed,
                     max_async_requests,
+                    Arc::clone(&max_files_requests),
                     requests_rx,
                     &mut read_requests,
                     stored_slots_read,
@@ -113,6 +116,7 @@ pub fn start(
                                 &storage_files,
                                 &confirmed_in_process,
                                 &storage_processed,
+                                &max_files_requests,
                             ) {
                                 read_requests.push(future);
                             }
@@ -138,6 +142,7 @@ async fn start2(
     confirmed_in_process: &mut Option<(Slot, Option<Arc<BlockWithBinary>>)>,
     storage_processed: &mut StorageProcessed,
     max_async_requests: usize,
+    max_files_requests: Arc<Semaphore>,
     read_requests_rx: Arc<Mutex<mpsc::Receiver<ReadRequest>>>,
     read_requests: &mut FuturesUnordered<LocalBoxFuture<'_, Option<ReadRequest>>>,
     mut stored_slots_read: StoredSlotsRead,
@@ -188,6 +193,7 @@ async fn start2(
                         storage_files,
                         confirmed_in_process,
                         storage_processed,
+                        &max_files_requests,
                     ) {
                         read_requests.push(future);
                     }
@@ -211,6 +217,7 @@ async fn start2(
                     storage_files,
                     confirmed_in_process,
                     storage_processed,
+                    &max_files_requests,
                 ) {
                     read_requests.push(future);
                 }
@@ -623,6 +630,7 @@ impl ReadRequest {
         storage_files: &StorageFilesRead,
         confirmed_in_process: &Option<(Slot, Option<Arc<BlockWithBinary>>)>,
         storage_processed: &StorageProcessed,
+        max_files_requests: &Arc<Semaphore>,
     ) -> Option<LocalBoxFuture<'a, Option<Self>>> {
         match self {
             Self::Block {
@@ -676,7 +684,9 @@ impl ReadRequest {
                 let read_fut =
                     storage_files.read(location.storage_id, location.offset, location.size);
 
+                let max_files_requests = Arc::clone(max_files_requests);
                 Some(Box::pin(async move {
+                    let lock = max_files_requests.acquire().await;
                     let ts = quanta::Instant::now();
                     let result = timeout_at(deadline.into(), read_fut).await;
                     gauge!(
@@ -685,6 +695,7 @@ impl ReadRequest {
                         "type" => "file",
                     )
                     .increment(duration_to_seconds(ts.elapsed()));
+                    drop(lock);
 
                     let result = match result {
                         Ok(Ok(bytes)) => ReadResultBlock::Block(bytes),
@@ -1347,16 +1358,20 @@ impl ReadRequest {
                     index.size,
                 );
 
-                let ts = quanta::Instant::now();
+                let max_files_requests = Arc::clone(max_files_requests);
                 Some(Box::pin(async move {
+                    let lock = max_files_requests.acquire().await;
+                    let ts = quanta::Instant::now();
+                    let result = timeout_at(deadline.into(), read_fut).await;
                     gauge!(
                         READ_DISK_SECONDS_TOTAL,
                         "x_subscription_id" => x_subscription_id,
                         "type" => "file",
                     )
                     .increment(duration_to_seconds(ts.elapsed()));
+                    drop(lock);
 
-                    let result = match timeout_at(deadline.into(), read_fut).await {
+                    let result = match result {
                         Ok(Ok(bytes)) => ReadResultTransaction::Transaction {
                             slot: index.slot,
                             block_time: location.block_time,

@@ -119,6 +119,7 @@ fn main() -> anyhow::Result<()> {
             affinity,
             sync_tx.subscribe(),
             config.storage.read.thread_max_async_requests,
+            config.storage.read.thread_max_files_requests,
             Arc::clone(&read_requests_rx),
             stored_confirmed_slot.clone(),
         )?;
