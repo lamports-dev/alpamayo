@@ -2,20 +2,26 @@
 logs:
   json: false
 metrics:
+  # Prometheus metrics available on `/metrics` endpoint
+  # Readiness probe available on `/ready`
+  # Liveness probe available on `/health`
   endpoint: 127.0.0.1:8001
 source:
+  # Tokio runtime for RPC requests and Geyser stream
   tokio:
-    worker_threads: 2
-    affinity: 0-1
+    worker_threads: 2 # Number of threads in Tokio runtime, by default all available cores
+    affinity: 0-1 # Pin threads to specific CPUs, optional
+  # RPC endpoint, used for edge-cases, catch-up on restart / stream reconnect and backfilling
   rpc:
     url: http://127.0.0.1:8899/
     timeout: 30s
-    concurrency: 10
+    concurrency: 10 # Max number of requests in progress at one moment
+  # Geyser stream
   stream:
-    source: richat # valid: richat, dragons_mouth
-    reconnect:
+    source: richat # richat (richat-geyser-plugin) or dragons_mouth (yellowstone grpc)
+    reconnect: # Reconnect options, if `null` then reconnect is disabled
       backoff_init: 100ms
-      backoff_max: 1s
+      backoff_max: 1s # Max delay between reconnect attempts
     endpoint: http://127.0.0.1:10000
     ca_certificate: null
     connect_timeout: null
@@ -29,44 +35,52 @@ source:
     tcp_keepalive: 15s
     tcp_nodelay: true
     timeout: null
-    max_decoding_message_size: 16_777_216 # 16MiB
-    compression:
+    max_decoding_message_size: 16_777_216 # 16MiB, should be enough (max account data length is 10MiB)
+    compression: # Optional compression, not recommended due to high traffic volume
       accept: ["gzip", "zstd"]
       send: ["gzip", "zstd"]
     x_token: null
 storage:
-  # backfilling:
-  #   sync_to: 338_669_763
+  # Backfill db to specified slot, if missed no backfilling at all
+  backfilling:
+    sync_to: 338_669_763
   blocks:
-    max: 1_000
-    rpc_getblock_max_retries: 10
-    rpc_getblock_backoff_init: 100ms
+    max: 1_000 # Max number of stored slots, once limit is reached old blocks will be pruned
+    rpc_getblock_max_retries: 10 # Max retries when trying to fetch blocks from RPC
+    rpc_getblock_backoff_init: 100ms # Initial exponentional retry delay
+    # Files to store blocks in protobuf, can be on different disks
+    # Used in round-robin schedule. Once all space is used old blocks will be pruned
     files:
       - id: 0
         path: ./db/alpamayo/storage0
         size: 8gb
   rocksdb:
-    path: ./db/alpamayo/rocksdb
-    index_slot_compression: none
-    index_sfa_compression: none
-    read_channel_size: 40 # default: number of CPUs on the system * 5
-    read_workers: 8 # default: number of CPUs on the system
+    path: ./db/alpamayo/rocksdb # Rocksdb location, don't forget to increase `max_open_files`
+    index_slot_compression: none # Slot info (transactions and touched addresses) compression: none, snappy, zlib, bz2, lz4, lz4hc, zstd
+    index_sfa_compression: none # Address signatures per slot compression: none, snappy, zlib, bz2, lz4, lz4hc, zstd
+    read_channel_size: 40 # Queue size of read requests, by default number of CPUs on the system * 5
+    read_workers: 8 # Number of threads used to read data from Rocksdb, by default number of CPUs on the system
   write:
-    affinity: 2
+    affinity: 2 # Optional affinity of write thread, used to build blocks and write them to storage files
   read:
-    threads: 2
-    affinity: 3-4
-    requests_concurrency: 128
+    threads: 2 # Number of single-threaded tokio runtimes used to read data from storage files
+    affinity: 3-4 # Optional affinity of read tokio runtimes
+    requests_concurrency: 128 # Max number of requests handled by read threads
 rpc:
-  endpoint: 127.0.0.1:9000
+  endpoint: 127.0.0.1:9000 # RPC endpoint, implement same JSON-RPC API as Agave
+  # RPC Tokio runtime, used to parse requests, serialize responses
   tokio:
-    worker_threads: 2
-    affinity: 5-6
-  body_limit: 50KiB
+    worker_threads: 2 # Number of threads in Tokio runtime, by default all available cores
+    affinity: 5-6 # Pin threads to specified CPUs, optional
+  body_limit: 50KiB # JSON-RPC body limit
   request_timeout: 60s
+  # httpget is plain HTTP interface with protobuf in response, allow to server blocks up to 15 times faster
+  # `/block/${slot}` — block request
+  # `/tx/${signature}` — transaction request
   calls_httpget:
     - getBlock
     - getTransaction
+  # Supported methods in JSON-RPC
   calls_jsonrpc:
     - getBlock
     - getBlockHeight
@@ -85,22 +99,30 @@ rpc:
     - getTransaction
     - getVersion
     - isBlockhashValid
-  gsfa_limit: 1000
-  gss_transaction_history: true
-  grpf_percentile: true
-  gcn_cache_ttl: 1s
-  request_channel_capacity: 4096
+  gsfa_limit: 1000 # Max limit in `getSignaturesForAddress`, default value in Agave is 1000
+  gss_transaction_history: true # Allow to handle `getSignatureStatus` from storage, not only from latest 300 slots
+  grpf_percentile: true # Allow to use `percentile` option in `getRecentPrioritizationFees`
+  gcn_cache_ttl: 1s # TTL for cached `getClusterNodes`
+  request_channel_capacity: 4096 # Queue size of requests to read threads (be aware, one JSON-RPC request can contain multiple requests)
+  # fallback for httpget
   upstream_httpget:
     endpoint: http://127.0.0.1:8899
     user_agent: alpamayo/v0.1.0
     version: HTTP/1.1
     timeout: 30s
+  # fallback for JSON-RPC methods
   upstream_jsonrpc:
     endpoint: http://127.0.0.1:8899
     user_agent: alpamayo/v0.1.0
     version: HTTP/1.1
     timeout: 30s
+  # getBlock and getTransactions requires a lot of CPU time to decode protobuf, encode to requested format, serialize data
+  # getBlock can requires more than 100ms to do all work, it would be good to have these threads separated from everything rest
+  # for example, you can pin:
+  #   - source runtime + write thread + read threads to one pool of CPUs
+  #   - rpc runtime to another pool of CPUs
+  #   - workers to some CPUs from rpc runtime
   workers:
-    threads: 8 # default is number of CPUs
-    affinity: 7-14 # no affinity by default
-    channel_size: 4096
+    threads: 8 # Number of workers, by default number of CPUs
+    affinity: 7-14 # Optional threads affinity
+    channel_size: 4096 # Queue size to worker threads
