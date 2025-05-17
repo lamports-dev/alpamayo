@@ -16,6 +16,12 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Breaking
 
+## [0.8.0] - 2025-05-18
+
+### Features
+
+- storage: add read thread options ([#44](https://github.com/lamports-dev/alpamayo/pull/44))
+
 ## [0.7.2] - 2025-05-15
 
 ### Fixes
