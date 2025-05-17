@@ -565,7 +565,7 @@ impl Rocksdb {
         );
 
         let (write_tx, write_rx) = mpsc::sync_channel(1);
-        let (read_tx, read_rx) = mpsc::sync_channel(config.read_channel_size);
+        let (read_tx, read_rx) = mpsc::channel();
 
         let mut threads = vec![];
         let jh = Builder::new().name("rocksdbWrt".to_owned()).spawn({
@@ -1213,7 +1213,7 @@ enum ReadRequest {
 
 #[derive(Debug, Clone)]
 pub struct RocksdbRead {
-    req_tx: mpsc::SyncSender<ReadRequest>,
+    req_tx: mpsc::Sender<ReadRequest>,
 }
 
 impl RocksdbRead {

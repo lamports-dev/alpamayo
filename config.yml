@@ -58,7 +58,6 @@ storage:
     path: ./db/alpamayo/rocksdb # Rocksdb location, don't forget to increase `max_open_files`
     index_slot_compression: none # Slot info (transactions and touched addresses) compression: none, snappy, zlib, bz2, lz4, lz4hc, zstd
     index_sfa_compression: none # Address signatures per slot compression: none, snappy, zlib, bz2, lz4, lz4hc, zstd
-    read_channel_size: 40 # Queue size of read requests, by default number of CPUs on the system * 5
     read_workers: 8 # Number of threads used to read data from Rocksdb, by default number of CPUs on the system
   write:
     affinity: 2 # Optional affinity of write thread, used to build blocks and write them to storage files

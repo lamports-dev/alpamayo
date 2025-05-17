@@ -207,11 +207,6 @@ pub struct ConfigStorageRocksdb {
     #[serde(default)]
     pub index_sfa_compression: ConfigStorageRocksdbCompression,
     #[serde(
-        default = "ConfigStorageRocksdb::default_read_channel_size",
-        deserialize_with = "deserialize_num_str"
-    )]
-    pub read_channel_size: usize,
-    #[serde(
         default = "ConfigStorageRocksdb::default_read_workers",
         deserialize_with = "deserialize_num_str"
     )]
@@ -219,10 +214,6 @@ pub struct ConfigStorageRocksdb {
 }
 
 impl ConfigStorageRocksdb {
-    fn default_read_channel_size() -> usize {
-        num_cpus::get() * 5
-    }
-
     fn default_read_workers() -> usize {
         num_cpus::get()
     }
