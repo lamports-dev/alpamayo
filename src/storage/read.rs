@@ -38,7 +38,7 @@ use {
         time::Instant,
     },
     tokio::{
-        sync::{Mutex, OwnedSemaphorePermit, Semaphore, broadcast, mpsc, oneshot},
+        sync::{Mutex, broadcast, mpsc, oneshot},
         time::timeout_at,
     },
     tracing::error,
@@ -50,7 +50,7 @@ pub fn start(
     index: usize,
     affinity: Option<Vec<usize>>,
     mut sync_rx: broadcast::Receiver<ReadWriteSyncMessage>,
-    read_requests_concurrency: Arc<Semaphore>,
+    max_async_requests: usize,
     requests_rx: Arc<Mutex<mpsc::Receiver<ReadRequest>>>,
     mut stored_slots_read: StoredSlotsRead,
 ) -> anyhow::Result<thread::JoinHandle<anyhow::Result<()>>> {
@@ -97,7 +97,7 @@ pub fn start(
                     &storage_files,
                     &mut confirmed_in_process,
                     &mut storage_processed,
-                    read_requests_concurrency,
+                    max_async_requests,
                     requests_rx,
                     &mut read_requests,
                     stored_slots_read,
@@ -113,7 +113,6 @@ pub fn start(
                                 &storage_files,
                                 &confirmed_in_process,
                                 &storage_processed,
-                                None,
                             ) {
                                 read_requests.push(future);
                             }
@@ -138,22 +137,13 @@ async fn start2(
     storage_files: &StorageFilesRead,
     confirmed_in_process: &mut Option<(Slot, Option<Arc<BlockWithBinary>>)>,
     storage_processed: &mut StorageProcessed,
-    read_requests_concurrency: Arc<Semaphore>,
+    max_async_requests: usize,
     read_requests_rx: Arc<Mutex<mpsc::Receiver<ReadRequest>>>,
     read_requests: &mut FuturesUnordered<LocalBoxFuture<'_, Option<ReadRequest>>>,
     mut stored_slots_read: StoredSlotsRead,
 ) -> anyhow::Result<()> {
-    let read_request_next =
-        read_request_get_next(Arc::clone(&read_requests_concurrency), read_requests_rx);
-    tokio::pin!(read_request_next);
-
     loop {
-        let read_request_fut = if read_requests.is_empty() {
-            pending().boxed_local()
-        } else {
-            read_requests.next().boxed_local()
-        };
-
+        let read_requests_len = read_requests.len();
         tokio::select! {
             biased;
             // sync update
@@ -186,7 +176,11 @@ async fn start2(
                 Err(broadcast::error::RecvError::Lagged(_)) => anyhow::bail!("read runtime lagged"),
             },
             // existed request
-            message = read_request_fut => match message {
+            message = if read_requests.is_empty() {
+                pending().boxed_local()
+            } else {
+                read_requests.next().boxed_local()
+            } => match message {
                 Some(Some(request)) => {
                     if let Some(future) = request.process(
                         blocks,
@@ -194,7 +188,6 @@ async fn start2(
                         storage_files,
                         confirmed_in_process,
                         storage_processed,
-                        None
                     ) {
                         read_requests.push(future);
                     }
@@ -203,12 +196,12 @@ async fn start2(
                 None => unreachable!(),
             },
             // get new request
-            (read_requests_rx, lock, request) = &mut read_request_next => {
-                read_request_next.set(read_request_get_next(
-                    Arc::clone(&read_requests_concurrency),
-                    read_requests_rx,
-                ));
-                let Some(request) = request else {
+            message = if read_requests_len >= max_async_requests {
+                pending().boxed_local()
+            } else {
+                read_requests_rx.lock().then(|mut rx| async move { rx.recv().await }).boxed()
+            } => {
+                let Some(request) = message else {
                     return Ok(());
                 };
 
@@ -218,33 +211,12 @@ async fn start2(
                     storage_files,
                     confirmed_in_process,
                     storage_processed,
-                    Some(lock)
                 ) {
                     read_requests.push(future);
                 }
-            },
+            }
         }
     }
-}
-
-async fn read_request_get_next(
-    read_requests_concurrency: Arc<Semaphore>,
-    read_requests_rx: Arc<Mutex<mpsc::Receiver<ReadRequest>>>,
-) -> (
-    Arc<Mutex<mpsc::Receiver<ReadRequest>>>,
-    OwnedSemaphorePermit,
-    Option<ReadRequest>,
-) {
-    let lock = read_requests_concurrency
-        .acquire_owned()
-        .await
-        .expect("live semaphore");
-
-    let mut rx = read_requests_rx.lock().await;
-    let request = rx.recv().await;
-    drop(rx);
-
-    (read_requests_rx, lock, request)
 }
 
 #[derive(Debug)]
@@ -609,14 +581,12 @@ pub enum ReadRequest {
         signatures: Vec<RpcConfirmedTransactionStatusWithSignature>,
         tx: oneshot::Sender<ReadResultSignaturesForAddress>,
         x_subscription_id: Arc<str>,
-        lock: Option<OwnedSemaphorePermit>,
     },
     SignaturesForAddress3 {
         deadline: Instant,
         signatures: Vec<RpcConfirmedTransactionStatusWithSignature>,
         finished: bool,
         tx: oneshot::Sender<ReadResultSignaturesForAddress>,
-        lock: Option<OwnedSemaphorePermit>,
     },
     SignatureStatuses {
         deadline: Instant,
@@ -636,7 +606,6 @@ pub enum ReadRequest {
         index: TransactionIndexValue<'static>,
         tx: oneshot::Sender<ReadResultTransaction>,
         x_subscription_id: Arc<str>,
-        lock: Option<OwnedSemaphorePermit>,
     },
     BlockhashValid {
         deadline: Instant,
@@ -654,7 +623,6 @@ impl ReadRequest {
         storage_files: &StorageFilesRead,
         confirmed_in_process: &Option<(Slot, Option<Arc<BlockWithBinary>>)>,
         storage_processed: &StorageProcessed,
-        lock: Option<OwnedSemaphorePermit>,
     ) -> Option<LocalBoxFuture<'a, Option<Self>>> {
         match self {
             Self::Block {
@@ -724,7 +692,6 @@ impl ReadRequest {
                         Err(_error) => ReadResultBlock::Timeout,
                     };
                     let _ = tx.send(result);
-                    drop(lock);
                     None
                 }))
             }
@@ -1052,7 +1019,6 @@ impl ReadRequest {
                                     signatures,
                                     tx,
                                     x_subscription_id,
-                                    lock,
                                 });
                             }
                             // found but not satisfy commitment, return empty vec
@@ -1084,7 +1050,6 @@ impl ReadRequest {
                         signatures,
                         tx,
                         x_subscription_id,
-                        lock,
                     }))))
                 }
             }
@@ -1097,7 +1062,6 @@ impl ReadRequest {
                 signatures,
                 tx,
                 x_subscription_id,
-                lock,
             } => {
                 if deadline < Instant::now() {
                     let _ = tx.send(ReadResultSignaturesForAddress::Timeout);
@@ -1130,7 +1094,6 @@ impl ReadRequest {
                                 signatures,
                                 finished,
                                 tx,
-                                lock,
                             })
                         }
                         Ok(Err(error)) => {
@@ -1149,7 +1112,6 @@ impl ReadRequest {
                 signatures,
                 mut finished,
                 tx,
-                lock,
             } => {
                 if deadline < Instant::now() {
                     let _ = tx.send(ReadResultSignaturesForAddress::Timeout);
@@ -1194,7 +1156,6 @@ impl ReadRequest {
                 };
 
                 let _ = tx.send(result);
-                drop(lock);
                 None
             }
             Self::SignatureStatuses {
@@ -1291,7 +1252,6 @@ impl ReadRequest {
                     };
 
                     let _ = tx.send(result);
-                    drop(lock);
                     None
                 }))
             }
@@ -1342,7 +1302,6 @@ impl ReadRequest {
                                 index,
                                 tx,
                                 x_subscription_id,
-                                lock,
                             });
                         }
                         Ok(Ok(None)) => ReadResultTransaction::NotFound,
@@ -1359,7 +1318,6 @@ impl ReadRequest {
                 index,
                 tx,
                 x_subscription_id,
-                lock,
             } => {
                 if deadline < Instant::now() {
                     let _ = tx.send(ReadResultTransaction::Timeout);
@@ -1410,7 +1368,6 @@ impl ReadRequest {
                         Err(_error) => ReadResultTransaction::Timeout,
                     };
                     let _ = tx.send(result);
-                    drop(lock);
                     None
                 }))
             }

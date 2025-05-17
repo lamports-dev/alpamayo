@@ -64,7 +64,9 @@ storage:
   read:
     threads: 2 # Number of single-threaded tokio runtimes used to read data from storage files
     affinity: 3-4 # Optional affinity of read tokio runtimes
-    requests_concurrency: 128 # Max number of requests handled by read threads
+    # Max number of async requests handled by every read thread
+    # async requests: getBlock, getInflationReward, getSignaturesForAddress, getSignatureStatuses, getTransaction
+    thread_max_async_requests: 64
 rpc:
   endpoint: 127.0.0.1:9000 # RPC endpoint, implement same JSON-RPC API as Agave
   # RPC Tokio runtime, used to parse requests, serialize responses

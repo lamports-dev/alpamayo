@@ -11,7 +11,7 @@ use {
         thread::{self, sleep},
         time::Duration,
     },
-    tokio::sync::{Mutex, Notify, Semaphore, broadcast, mpsc},
+    tokio::sync::{Mutex, Notify, broadcast, mpsc},
     tracing::{info, warn},
 };
 
@@ -103,9 +103,6 @@ fn main() -> anyhow::Result<()> {
 
     // Storage read runtimes
     let read_requests_rx = Arc::new(Mutex::new(read_requests_rx));
-    let read_requests_concurrency = Arc::new(Semaphore::const_new(
-        config.storage.read.requests_concurrency,
-    ));
     let stored_confirmed_slot =
         storage::slots::StoredSlotsRead::new(stored_slots.clone(), config.storage.read.threads);
     for index in 0..config.storage.read.threads {
@@ -121,14 +118,13 @@ fn main() -> anyhow::Result<()> {
             index,
             affinity,
             sync_tx.subscribe(),
-            Arc::clone(&read_requests_concurrency),
+            config.storage.read.thread_max_async_requests,
             Arc::clone(&read_requests_rx),
             stored_confirmed_slot.clone(),
         )?;
         threads.push((format!("alpStorageRd{index:02}"), Some(jh)));
     }
     drop(read_requests_rx);
-    drop(read_requests_concurrency);
 
     // Storage write runtime
     let jh = storage::write::start(

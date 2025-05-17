@@ -263,7 +263,7 @@ pub struct ConfigStorageRead {
     #[serde(deserialize_with = "deserialize_affinity")]
     pub affinity: Option<Vec<usize>>,
     #[serde(deserialize_with = "deserialize_num_str")]
-    pub requests_concurrency: usize,
+    pub thread_max_async_requests: usize,
 }
 
 impl Default for ConfigStorageRead {
@@ -271,7 +271,7 @@ impl Default for ConfigStorageRead {
         Self {
             threads: 2,
             affinity: None,
-            requests_concurrency: 128,
+            thread_max_async_requests: 64,
         }
     }
 }
