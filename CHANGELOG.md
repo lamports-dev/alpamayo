@@ -12,6 +12,8 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Fixes
 
+- rpc: use `-32009` for missed slot too ([#46](https://github.com/lamports-dev/alpamayo/pull/46))
+
 ### Features
 
 ### Breaking
