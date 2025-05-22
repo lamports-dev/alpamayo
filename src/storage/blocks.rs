@@ -109,6 +109,20 @@ impl StoredBlocksWrite {
         block.exists.then_some(block.slot)
     }
 
+    pub fn get_latest_height(&self) -> Option<Slot> {
+        let mut index = self.head;
+        loop {
+            let block = self.blocks[index];
+            if block.exists && !block.dead {
+                return block.block_height;
+            }
+            if index == self.tail {
+                return None;
+            }
+            index = index.checked_sub(1).unwrap_or(self.blocks.len() - 1);
+        }
+    }
+
     pub fn push_block_front_dead(&mut self, slot: Slot) -> anyhow::Result<()> {
         self.push_block_front2(StoredBlock::new_dead(slot))
     }
