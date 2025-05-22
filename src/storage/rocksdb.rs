@@ -1477,7 +1477,7 @@ impl RocksdbRead {
             let slots = rx
                 .await
                 .context("failed to get ReadRequest::Slots request result")?;
-            info!(elapsed = ?ts.elapsed(), "read slot index");
+            info!(elapsed = ?ts.elapsed(), total = ?slots.as_ref().map(|vec| vec.len()).ok(), "read slot index");
             slots
         }))
     }

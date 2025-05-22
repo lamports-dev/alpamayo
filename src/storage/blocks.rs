@@ -6,6 +6,7 @@ use {
     },
     solana_sdk::clock::{MAX_RECENT_BLOCKHASHES, Slot, UnixTimestamp},
     tokio::sync::broadcast,
+    tracing::debug,
 };
 
 #[derive(Debug)]
@@ -34,7 +35,7 @@ impl StoredBlocksWrite {
         let iter = blocks
             .iter()
             .enumerate()
-            .filter(|(_index, block)| block.exists && !block.dead);
+            .filter(|(_index, block)| block.exists);
         let tail = iter
             .clone()
             .min_by_key(|(_index, block)| block.slot)
@@ -44,6 +45,7 @@ impl StoredBlocksWrite {
             .max_by_key(|(_index, block)| block.slot)
             .map(|(index, _block)| index)
             .unwrap_or_else(|| blocks.len() - 1);
+        debug!(total = blocks.len(), tail, head, "blocks info");
 
         let this = Self {
             blocks,
@@ -148,7 +150,7 @@ impl StoredBlocksWrite {
 
     fn push_block_front2(&mut self, block: StoredBlock) -> anyhow::Result<()> {
         self.head = (self.head + 1) % self.blocks.len();
-        anyhow::ensure!(!self.blocks[self.head].exists, "no free slot");
+        anyhow::ensure!(!self.blocks[self.head].exists, "no free slot (front)");
 
         let _ = self.sync_tx.send(ReadWriteSyncMessage::ConfirmedBlockPush {
             block: block.into(),
@@ -211,7 +213,7 @@ impl StoredBlocksWrite {
 
     fn push_block_back2(&mut self, block: StoredBlock) -> anyhow::Result<()> {
         self.tail = self.tail.checked_sub(1).unwrap_or(self.blocks.len() - 1);
-        anyhow::ensure!(!self.blocks[self.tail].exists, "no free slot");
+        anyhow::ensure!(!self.blocks[self.tail].exists, "no free slot (back)");
 
         self.blocks[self.tail] = block;
         self.update_total(true);

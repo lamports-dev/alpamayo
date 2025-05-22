@@ -16,6 +16,12 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Breaking
 
+## [0.8.2] - 2025-05-22
+
+## Fixes
+
+- storage: fix slots index loading ([#47](https://github.com/lamports-dev/alpamayo/pull/47))
+
 ## [0.8.1] - 2025-05-22
 
 ### Fixes
