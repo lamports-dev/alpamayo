@@ -7,7 +7,9 @@ use {
         rpc_client::RpcClientConfig,
         rpc_config::RpcBlockConfig,
         rpc_custom_error::{
-            JSON_RPC_SERVER_ERROR_BLOCK_NOT_AVAILABLE, JSON_RPC_SERVER_ERROR_SLOT_SKIPPED,
+            JSON_RPC_SERVER_ERROR_BLOCK_NOT_AVAILABLE,
+            JSON_RPC_SERVER_ERROR_LONG_TERM_STORAGE_SLOT_SKIPPED,
+            JSON_RPC_SERVER_ERROR_SLOT_SKIPPED,
         },
         rpc_request::RpcError,
     },
@@ -144,6 +146,17 @@ impl RpcSource {
                 kind:
                     ClientErrorKind::RpcError(RpcError::RpcResponseError {
                         code: JSON_RPC_SERVER_ERROR_SLOT_SKIPPED,
+                        ..
+                    }),
+                ..
+            }) => {
+                return Err(GetBlockError::SlotSkipped(slot));
+            }
+            // missed
+            Err(ClientError {
+                kind:
+                    ClientErrorKind::RpcError(RpcError::RpcResponseError {
+                        code: JSON_RPC_SERVER_ERROR_LONG_TERM_STORAGE_SLOT_SKIPPED,
                         ..
                     }),
                 ..

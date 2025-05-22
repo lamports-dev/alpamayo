@@ -12,11 +12,16 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Fixes
 
-- storage: add height check for new blocks ([#45](https://github.com/lamports-dev/alpamayo/pull/45))
-
 ### Features
 
 ### Breaking
+
+## [0.8.1] - 2025-05-22
+
+### Fixes
+
+- storage: add height check for new blocks ([#45](https://github.com/lamports-dev/alpamayo/pull/45))
+- rpc: use `-32009` for missed slot too ([#46](https://github.com/lamports-dev/alpamayo/pull/46))
 
 ## [0.8.0] - 2025-05-18
 
