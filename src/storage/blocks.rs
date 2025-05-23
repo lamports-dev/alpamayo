@@ -2,7 +2,7 @@ use {
     crate::{
         rpc::api_jsonrpc::RpcRequestBlocksUntil,
         storage::{files::StorageId, slots::StoredSlots, sync::ReadWriteSyncMessage},
-        util::HashMap,
+        util::{HashMap, VecSide},
     },
     solana_sdk::clock::{MAX_RECENT_BLOCKHASHES, Slot, UnixTimestamp},
     tokio::sync::broadcast,
@@ -166,7 +166,7 @@ impl StoredBlocksWrite {
             });
 
         self.blocks[self.head] = block;
-        self.update_total(false);
+        self.update_total(VecSide::Front);
         Ok(())
     }
 
@@ -231,11 +231,11 @@ impl StoredBlocksWrite {
             });
 
         self.blocks[self.tail] = block;
-        self.update_total(true);
+        self.update_total(VecSide::Back);
         Ok(())
     }
 
-    fn update_total(&self, push_back: bool) {
+    fn update_total(&self, side: VecSide) {
         let total = if self.head >= self.tail {
             self.head - self.tail + 1
         } else {
@@ -244,9 +244,19 @@ impl StoredBlocksWrite {
         self.stored_slots.set_total(total);
 
         // update stored if db was initialized
-        if push_back || (self.tail == 0 && self.head == 0) {
+        if side == VecSide::Back || (self.tail == 0 && self.head == 0) {
             self.stored_slots
                 .first_available_store(self.get_first_slot());
+        }
+    }
+
+    pub fn pop_block_front(&mut self) -> Option<StoredBlock> {
+        if self.blocks[self.head].exists {
+            let block = std::mem::replace(&mut self.blocks[self.head], StoredBlock::new_noexists());
+            self.head = self.head.checked_sub(1).unwrap_or(self.blocks.len() - 1);
+            Some(block)
+        } else {
+            None
         }
     }
 
@@ -271,6 +281,11 @@ pub struct StoredBlocksRead {
 }
 
 impl StoredBlocksRead {
+    pub fn pop_block_front(&mut self) {
+        self.blocks[self.head] = StoredBlock::new_noexists();
+        self.head = self.head.checked_sub(1).unwrap_or(self.blocks.len() - 1);
+    }
+
     pub fn pop_block_back(&mut self) {
         self.blocks[self.tail] = StoredBlock::new_noexists();
         self.tail = (self.tail + 1) % self.blocks.len();

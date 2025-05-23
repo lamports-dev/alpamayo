@@ -169,6 +169,7 @@ async fn start2(
                     stored_slots_read.set_finalized(index, slot);
                     storage_processed.set_finalized(slot);
                 }
+                Ok(ReadWriteSyncMessage::ConfirmedBlockPopFront) => blocks.pop_block_front(),
                 Ok(ReadWriteSyncMessage::ConfirmedBlockPopBack) => blocks.pop_block_back(),
                 Ok(ReadWriteSyncMessage::ConfirmedBlockPushFront { block }) => {
                     let Some((slot, _block)) = confirmed_in_process.take() else {

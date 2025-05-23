@@ -29,6 +29,10 @@ struct Args {
     /// Only check config and exit
     #[clap(long, default_value_t = false)]
     pub check: bool,
+
+    /// Revert latest slots, rescue if invalid slot was added
+    #[clap(long, hide = true)]
+    pub pop_slots_front: Option<usize>,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -129,6 +133,7 @@ fn main() -> anyhow::Result<()> {
 
     // Storage write runtime
     let jh = storage::write::start(
+        args.pop_slots_front,
         config.storage.clone(),
         stored_slots.clone(),
         db_write,

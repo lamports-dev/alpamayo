@@ -1119,7 +1119,7 @@ impl RocksdbWrite {
         blocks: &mut StoredBlocksWrite,
     ) -> anyhow::Result<()> {
         let Some(block) = blocks.pop_block_back() else {
-            anyhow::bail!("no blocks to remove");
+            anyhow::bail!("no blocks to remove from back");
         };
         let _ = self
             .sync_tx
@@ -1141,7 +1141,39 @@ impl RocksdbWrite {
         if block.size == 0 {
             Ok(())
         } else {
-            files.pop_block(block)
+            files.pop_block_back(block)
+        }
+    }
+
+    pub async fn pop_block_front(
+        &self,
+        files: &mut StorageFilesWrite,
+        blocks: &mut StoredBlocksWrite,
+    ) -> anyhow::Result<()> {
+        let Some(block) = blocks.pop_block_front() else {
+            anyhow::bail!("no blocks to remove from front");
+        };
+        let _ = self
+            .sync_tx
+            .send(ReadWriteSyncMessage::ConfirmedBlockPopFront);
+
+        // remove from db
+        let (tx, rx) = oneshot::channel();
+        self.req_tx
+            .send(WriteRequest::SlotRemove {
+                slot: block.slot,
+                dead: block.dead,
+                tx,
+            })
+            .context("failed to send WriteRequest::SlotRemove request")?;
+        rx.await
+            .context("failed to get WriteRequest::SlotRemove request result")??;
+
+        // update offset in file
+        if block.size == 0 {
+            Ok(())
+        } else {
+            files.pop_block_front(block)
         }
     }
 }

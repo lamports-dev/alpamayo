@@ -37,13 +37,15 @@ pub enum ReadWriteSyncMessage {
     SlotFinalized {
         slot: Slot,
     },
-    // confirmed/finalized block removed from the storage
+    // block removed (front, by request)
+    ConfirmedBlockPopFront,
+    // block removed (back, purged)
     ConfirmedBlockPopBack,
-    // confirmed block added to storage
+    // block added to storage (front, new data)
     ConfirmedBlockPushFront {
         block: StoredBlockPushSync,
     },
-    // confirmed block added to storage (backfilling)
+    // block added to storage (back, backfilling)
     ConfirmedBlockPushBack {
         block: StoredBlockPushSync,
     },

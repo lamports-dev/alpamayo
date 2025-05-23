@@ -6,7 +6,7 @@ use {
             blocks::{StoredBlock, StoredBlocksWrite},
             util,
         },
-        util::HashMap,
+        util::{HashMap, VecSide},
     },
     anyhow::Context,
     futures::future::{FutureExt, LocalBoxFuture, TryFutureExt, join_all, try_join_all},
@@ -177,20 +177,20 @@ impl StorageFilesWrite {
         &mut self,
         buffer: Vec<u8>,
     ) -> anyhow::Result<(Vec<u8>, Option<(StorageId, u64)>)> {
-        self.push_block(buffer, false).await
+        self.push_block(buffer, VecSide::Front).await
     }
 
     pub async fn push_block_back(
         &mut self,
         buffer: Vec<u8>,
     ) -> anyhow::Result<(Vec<u8>, Option<(StorageId, u64)>)> {
-        self.push_block(buffer, true).await
+        self.push_block(buffer, VecSide::Back).await
     }
 
     async fn push_block(
         &mut self,
         buffer: Vec<u8>,
-        push_back: bool,
+        side: VecSide,
     ) -> anyhow::Result<(Vec<u8>, Option<(StorageId, u64)>)> {
         let Some(index) = self.get_file_index_for_new_block(buffer.len() as u64) else {
             return Ok((buffer, None));
@@ -198,10 +198,9 @@ impl StorageFilesWrite {
         let file = &mut self.files[index];
 
         let free_space_init = file.free_space() as f64;
-        let (offset, buffer) = if push_back {
-            file.write_back(buffer).await
-        } else {
-            file.write_front(buffer).await
+        let (offset, buffer) = match side {
+            VecSide::Back => file.write_back(buffer).await,
+            VecSide::Front => file.write_front(buffer).await,
         }
         .with_context(|| format!("failed to write block to file id#{}", file.id))?;
         let free_space_new = file.free_space() as f64;
@@ -228,14 +227,35 @@ impl StorageFilesWrite {
         }
     }
 
-    pub fn pop_block(&mut self, block: StoredBlock) -> anyhow::Result<()> {
+    pub fn pop_block_back(&mut self, block: StoredBlock) -> anyhow::Result<()> {
+        self.pop_block(block, VecSide::Back)
+    }
+
+    pub fn pop_block_front(&mut self, block: StoredBlock) -> anyhow::Result<()> {
+        self.pop_block(block, VecSide::Front)
+    }
+
+    fn pop_block(&mut self, block: StoredBlock, side: VecSide) -> anyhow::Result<()> {
         let Some(file_index) = self.id2file.get(&block.storage_id).copied() else {
             anyhow::bail!("unknown storage id: {}", block.storage_id);
         };
         let file = &mut self.files[file_index];
 
         let free_space_init = file.free_space() as f64;
-        file.tail = (block.size + block.offset) % file.size;
+        match side {
+            VecSide::Back => {
+                file.tail = (block.offset + block.size) % file.size;
+            }
+            VecSide::Front => {
+                file.head = block.offset;
+            }
+        }
+        anyhow::ensure!(
+            file.head < file.size,
+            "file storage head overflow, {} vs {}",
+            file.head,
+            file.size
+        );
         anyhow::ensure!(
             file.tail <= file.size,
             "file storage tail overflow, {} vs {}",
