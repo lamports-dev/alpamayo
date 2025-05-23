@@ -16,6 +16,12 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Breaking
 
+## [0.8.3] - 2025-05-23
+
+## Fixes
+
+- storage: fix backfilling for read layer ([#48](https://github.com/lamports-dev/alpamayo/pull/48))
+
 ## [0.8.2] - 2025-05-22
 
 ## Fixes
