@@ -173,18 +173,18 @@ impl StorageFilesWrite {
         .await;
     }
 
-    pub async fn push_block_front(
-        &mut self,
-        buffer: Vec<u8>,
-    ) -> anyhow::Result<(Vec<u8>, Option<(StorageId, u64)>)> {
-        self.push_block(buffer, VecSide::Front).await
-    }
-
     pub async fn push_block_back(
         &mut self,
         buffer: Vec<u8>,
     ) -> anyhow::Result<(Vec<u8>, Option<(StorageId, u64)>)> {
         self.push_block(buffer, VecSide::Back).await
+    }
+
+    pub async fn push_block_front(
+        &mut self,
+        buffer: Vec<u8>,
+    ) -> anyhow::Result<(Vec<u8>, Option<(StorageId, u64)>)> {
+        self.push_block(buffer, VecSide::Front).await
     }
 
     async fn push_block(
@@ -290,6 +290,20 @@ impl StorageFile {
         }
     }
 
+    async fn write_back(&mut self, buffer: Vec<u8>) -> anyhow::Result<(u64, Vec<u8>)> {
+        let len = buffer.len() as u64;
+        anyhow::ensure!(self.free_space() >= len, "not enough space");
+
+        // update tail
+        self.tail = self.tail.checked_sub(len).unwrap_or(self.size - len);
+
+        let (result, buffer) = self.file.write_all_at(buffer, self.tail).await;
+        let () = result?;
+        self.file.sync_data().await?;
+
+        Ok((self.tail, buffer))
+    }
+
     async fn write_front(&mut self, buffer: Vec<u8>) -> anyhow::Result<(u64, Vec<u8>)> {
         let len = buffer.len() as u64;
         anyhow::ensure!(self.free_space() >= len, "not enough space");
@@ -313,20 +327,6 @@ impl StorageFile {
         );
 
         Ok((offset, buffer))
-    }
-
-    async fn write_back(&mut self, buffer: Vec<u8>) -> anyhow::Result<(u64, Vec<u8>)> {
-        let len = buffer.len() as u64;
-        anyhow::ensure!(self.free_space() >= len, "not enough space");
-
-        // update tail
-        self.tail = self.tail.checked_sub(len).unwrap_or(self.size - len);
-
-        let (result, buffer) = self.file.write_all_at(buffer, self.tail).await;
-        let () = result?;
-        self.file.sync_data().await?;
-
-        Ok((self.tail, buffer))
     }
 }
 

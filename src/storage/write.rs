@@ -214,10 +214,8 @@ async fn start2(
     let mut queued_slots_front = HashMap::<Slot, Option<Arc<BlockWithBinary>>>::default();
 
     // revert slots, if required
-    tracing::error!(?pop_slots_front, "slots");
     if let Some(slots) = pop_slots_front {
         for _ in 0..slots {
-            tracing::error!(latest = ?blocks.get_latest_slot(), "slots");
             let Some(slot) = blocks.get_latest_slot() else {
                 break;
             };
@@ -235,7 +233,7 @@ async fn start2(
         let mut next_rpc_request_slot = slot + 1;
         let mut next_database_slot = slot + 1;
         info!(
-            next_database_slot = next_database_slot,
+            next_database_slot,
             slot_node = next_confirmed_slot,
             diff = next_confirmed_slot - next_database_slot,
             "initiate node catch-up process"

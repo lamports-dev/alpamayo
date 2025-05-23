@@ -7,7 +7,7 @@ use {
             files::{StorageFilesWrite, StorageId},
             sync::ReadWriteSyncMessage,
         },
-        util::HashMap,
+        util::{HashMap, VecSide},
     },
     anyhow::Context,
     bitflags::bitflags,
@@ -1118,31 +1118,7 @@ impl RocksdbWrite {
         files: &mut StorageFilesWrite,
         blocks: &mut StoredBlocksWrite,
     ) -> anyhow::Result<()> {
-        let Some(block) = blocks.pop_block_back() else {
-            anyhow::bail!("no blocks to remove from back");
-        };
-        let _ = self
-            .sync_tx
-            .send(ReadWriteSyncMessage::ConfirmedBlockPopBack);
-
-        // remove from db
-        let (tx, rx) = oneshot::channel();
-        self.req_tx
-            .send(WriteRequest::SlotRemove {
-                slot: block.slot,
-                dead: block.dead,
-                tx,
-            })
-            .context("failed to send WriteRequest::SlotRemove request")?;
-        rx.await
-            .context("failed to get WriteRequest::SlotRemove request result")??;
-
-        // update offset in file
-        if block.size == 0 {
-            Ok(())
-        } else {
-            files.pop_block_back(block)
-        }
+        self.pop_block(files, blocks, VecSide::Back).await
     }
 
     pub async fn pop_block_front(
@@ -1150,12 +1126,25 @@ impl RocksdbWrite {
         files: &mut StorageFilesWrite,
         blocks: &mut StoredBlocksWrite,
     ) -> anyhow::Result<()> {
-        let Some(block) = blocks.pop_block_front() else {
+        self.pop_block(files, blocks, VecSide::Front).await
+    }
+
+    async fn pop_block(
+        &self,
+        files: &mut StorageFilesWrite,
+        blocks: &mut StoredBlocksWrite,
+        side: VecSide,
+    ) -> anyhow::Result<()> {
+        let Some(block) = (match side {
+            VecSide::Back => blocks.pop_block_back(),
+            VecSide::Front => blocks.pop_block_front(),
+        }) else {
             anyhow::bail!("no blocks to remove from front");
         };
-        let _ = self
-            .sync_tx
-            .send(ReadWriteSyncMessage::ConfirmedBlockPopFront);
+        let _ = self.sync_tx.send(match side {
+            VecSide::Back => ReadWriteSyncMessage::ConfirmedBlockPopBack,
+            VecSide::Front => ReadWriteSyncMessage::ConfirmedBlockPopFront,
+        });
 
         // remove from db
         let (tx, rx) = oneshot::channel();
@@ -1173,7 +1162,10 @@ impl RocksdbWrite {
         if block.size == 0 {
             Ok(())
         } else {
-            files.pop_block_front(block)
+            match side {
+                VecSide::Back => files.pop_block_back(block),
+                VecSide::Front => files.pop_block_front(block),
+            }
         }
     }
 }

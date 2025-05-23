@@ -113,63 +113,6 @@ impl StoredBlocksWrite {
         map
     }
 
-    pub fn get_latest_slot(&self) -> Option<Slot> {
-        let block = self.blocks[self.head];
-        block.exists.then_some(block.slot)
-    }
-
-    pub fn get_latest_height(&self) -> Option<Slot> {
-        let mut index = self.head;
-        loop {
-            let block = self.blocks[index];
-            if block.exists && !block.dead {
-                return block.block_height;
-            }
-            if index == self.tail {
-                return None;
-            }
-            index = index.checked_sub(1).unwrap_or(self.blocks.len() - 1);
-        }
-    }
-
-    pub fn push_block_front_dead(&mut self, slot: Slot) -> anyhow::Result<()> {
-        self.push_block_front2(StoredBlock::new_dead(slot))
-    }
-
-    pub fn push_block_front_confirmed(
-        &mut self,
-        slot: Slot,
-        block_time: Option<UnixTimestamp>,
-        block_height: Option<Slot>,
-        storage_id: StorageId,
-        offset: u64,
-        block_size: u64,
-    ) -> anyhow::Result<()> {
-        self.push_block_front2(StoredBlock::new_confirmed(
-            slot,
-            block_time,
-            block_height,
-            storage_id,
-            offset,
-            block_size,
-        ))
-    }
-
-    fn push_block_front2(&mut self, block: StoredBlock) -> anyhow::Result<()> {
-        self.head = (self.head + 1) % self.blocks.len();
-        anyhow::ensure!(!self.blocks[self.head].exists, "no free slot (front)");
-
-        let _ = self
-            .sync_tx
-            .send(ReadWriteSyncMessage::ConfirmedBlockPushFront {
-                block: block.into(),
-            });
-
-        self.blocks[self.head] = block;
-        self.update_total(VecSide::Front);
-        Ok(())
-    }
-
     fn get_first(&self, filter: impl Fn(&StoredBlock) -> bool) -> Option<&StoredBlock> {
         // additional condition in case if zero blocks exists
         if self.blocks[self.tail].exists && self.blocks[self.head].exists {
@@ -195,6 +138,25 @@ impl StoredBlocksWrite {
     pub fn get_first_height(&self) -> Option<Slot> {
         self.get_first(|blk| blk.exists && !blk.dead)
             .and_then(|blk| blk.block_height)
+    }
+
+    pub fn get_latest_slot(&self) -> Option<Slot> {
+        let block = self.blocks[self.head];
+        block.exists.then_some(block.slot)
+    }
+
+    pub fn get_latest_height(&self) -> Option<Slot> {
+        let mut index = self.head;
+        loop {
+            let block = self.blocks[index];
+            if block.exists && !block.dead {
+                return block.block_height;
+            }
+            if index == self.tail {
+                return None;
+            }
+            index = index.checked_sub(1).unwrap_or(self.blocks.len() - 1);
+        }
     }
 
     pub fn push_block_back_dead(&mut self, slot: Slot) -> anyhow::Result<()> {
@@ -235,6 +197,44 @@ impl StoredBlocksWrite {
         Ok(())
     }
 
+    pub fn push_block_front_dead(&mut self, slot: Slot) -> anyhow::Result<()> {
+        self.push_block_front2(StoredBlock::new_dead(slot))
+    }
+
+    pub fn push_block_front_confirmed(
+        &mut self,
+        slot: Slot,
+        block_time: Option<UnixTimestamp>,
+        block_height: Option<Slot>,
+        storage_id: StorageId,
+        offset: u64,
+        block_size: u64,
+    ) -> anyhow::Result<()> {
+        self.push_block_front2(StoredBlock::new_confirmed(
+            slot,
+            block_time,
+            block_height,
+            storage_id,
+            offset,
+            block_size,
+        ))
+    }
+
+    fn push_block_front2(&mut self, block: StoredBlock) -> anyhow::Result<()> {
+        self.head = (self.head + 1) % self.blocks.len();
+        anyhow::ensure!(!self.blocks[self.head].exists, "no free slot (front)");
+
+        let _ = self
+            .sync_tx
+            .send(ReadWriteSyncMessage::ConfirmedBlockPushFront {
+                block: block.into(),
+            });
+
+        self.blocks[self.head] = block;
+        self.update_total(VecSide::Front);
+        Ok(())
+    }
+
     fn update_total(&self, side: VecSide) {
         let total = if self.head >= self.tail {
             self.head - self.tail + 1
@@ -250,22 +250,22 @@ impl StoredBlocksWrite {
         }
     }
 
-    pub fn pop_block_front(&mut self) -> Option<StoredBlock> {
-        if self.blocks[self.head].exists {
-            let block = std::mem::replace(&mut self.blocks[self.head], StoredBlock::new_noexists());
-            self.head = self.head.checked_sub(1).unwrap_or(self.blocks.len() - 1);
-            Some(block)
-        } else {
-            None
-        }
-    }
-
     pub fn pop_block_back(&mut self) -> Option<StoredBlock> {
         if self.blocks[self.tail].exists {
             let block = std::mem::replace(&mut self.blocks[self.tail], StoredBlock::new_noexists());
             self.tail = (self.tail + 1) % self.blocks.len();
             self.stored_slots
                 .first_available_store(self.get_first_slot());
+            Some(block)
+        } else {
+            None
+        }
+    }
+
+    pub fn pop_block_front(&mut self) -> Option<StoredBlock> {
+        if self.blocks[self.head].exists {
+            let block = std::mem::replace(&mut self.blocks[self.head], StoredBlock::new_noexists());
+            self.head = self.head.checked_sub(1).unwrap_or(self.blocks.len() - 1);
             Some(block)
         } else {
             None
@@ -281,24 +281,24 @@ pub struct StoredBlocksRead {
 }
 
 impl StoredBlocksRead {
-    pub fn pop_block_front(&mut self) {
-        self.blocks[self.head] = StoredBlock::new_noexists();
-        self.head = self.head.checked_sub(1).unwrap_or(self.blocks.len() - 1);
-    }
-
     pub fn pop_block_back(&mut self) {
         self.blocks[self.tail] = StoredBlock::new_noexists();
         self.tail = (self.tail + 1) % self.blocks.len();
     }
 
-    pub fn push_block_front(&mut self, message: StoredBlockPushSync) {
-        self.head = (self.head + 1) % self.blocks.len();
-        self.blocks[self.head] = message.block;
+    pub fn pop_block_front(&mut self) {
+        self.blocks[self.head] = StoredBlock::new_noexists();
+        self.head = self.head.checked_sub(1).unwrap_or(self.blocks.len() - 1);
     }
 
     pub fn push_block_back(&mut self, message: StoredBlockPushSync) {
         self.tail = self.tail.checked_sub(1).unwrap_or(self.blocks.len() - 1);
         self.blocks[self.tail] = message.block;
+    }
+
+    pub fn push_block_front(&mut self, message: StoredBlockPushSync) {
+        self.head = (self.head + 1) % self.blocks.len();
+        self.blocks[self.head] = message.block;
     }
 
     pub fn get_block_location(&self, slot: Slot) -> StorageBlockLocationResult {
