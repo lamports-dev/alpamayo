@@ -166,7 +166,7 @@ impl StorageMemory {
 
                     error!(
                         gen_next_slot = self.gen_next_slot,
-                        "unexpected gen_next_slot for confirmed_index, 1"
+                        "unexpected gen_next_slot for confirmed_index with existed block"
                     );
                 }
                 None => {
