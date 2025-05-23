@@ -49,16 +49,7 @@ struct BlockInfo {
 }
 
 impl BlockInfo {
-    const fn new(slot: Slot, block: Arc<BlockWithBinary>) -> Self {
-        Self {
-            slot,
-            block: Some(block),
-            dead: false,
-            confirmed: false,
-        }
-    }
-
-    const fn new_empty(slot: Slot) -> Self {
+    const fn new(slot: Slot) -> Self {
         Self {
             slot,
             block: None,
@@ -76,56 +67,48 @@ pub struct StorageMemory {
 }
 
 impl StorageMemory {
-    pub fn add_processed(&mut self, slot: Slot, block: Arc<BlockWithBinary>) {
+    // create empty slots
+    fn add_slot(&mut self, slot: Slot) -> Option<&mut BlockInfo> {
         // drop if we already reported about that slot
         if slot < self.gen_next_slot {
-            return;
+            return None;
         }
 
-        // add slot directly if we don't have blocks
         if self.blocks.is_empty() {
-            self.blocks.push_back(BlockInfo::new(slot, block));
-            return;
-        }
-
-        // push empty slots
-        if slot < self.blocks[0].slot {
+            self.blocks.push_back(BlockInfo::new(slot));
+        } else if slot < self.blocks[0].slot {
             for slot in (slot..self.blocks[0].slot).rev() {
-                self.blocks.push_front(BlockInfo::new_empty(slot));
+                self.blocks.push_front(BlockInfo::new(slot));
             }
         } else if slot > self.blocks[self.blocks.len() - 1].slot {
             for slot in self.blocks[self.blocks.len() - 1].slot + 1..=slot {
-                self.blocks.push_back(BlockInfo::new_empty(slot));
+                self.blocks.push_back(BlockInfo::new(slot));
             }
         }
 
-        // update block
         let index = (slot - self.blocks[0].slot) as usize;
-        self.blocks[index].block = Some(block);
+        Some(&mut self.blocks[index])
+    }
+
+    pub fn add_processed(&mut self, slot: Slot, block: Arc<BlockWithBinary>) {
+        if let Some(item) = self.add_slot(slot) {
+            item.block = Some(block);
+        }
     }
 
     pub fn set_dead(&mut self, slot: Slot) {
-        if let Some(first_block) = self.blocks.front() {
-            if first_block.slot <= slot {
-                let index = (slot - first_block.slot) as usize;
-                if let Some(info) = self.blocks.get_mut(index) {
-                    info.dead = true;
-                }
-            }
+        if let Some(item) = self.add_slot(slot) {
+            item.dead = true;
         }
     }
 
     pub fn set_confirmed(&mut self, slot: Slot) {
         assert!(self.confirmed < slot, "attempt to backward confirmed");
-        if let Some(first_block) = self.blocks.front() {
-            if first_block.slot <= slot {
-                let index = (slot - first_block.slot) as usize;
-                if let Some(info) = self.blocks.get_mut(index) {
-                    info.confirmed = true;
-                }
-            }
+
+        if let Some(item) = self.add_slot(slot) {
+            item.confirmed = true;
+            self.confirmed = slot;
         }
-        self.confirmed = slot;
     }
 
     pub fn pop_confirmed(&mut self) -> Option<MemoryConfirmedBlock> {
@@ -142,11 +125,7 @@ impl StorageMemory {
             self.gen_next_slot = self.confirmed.min(first_slot);
         }
 
-        // we don't have slots yet
-        if self.confirmed < first_slot {
-            return None;
-        }
-
+        // get index of confirmed slot
         let mut confirmed_index = self
             .blocks
             .iter()
