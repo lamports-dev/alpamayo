@@ -177,6 +177,9 @@ async fn start2(
                     anyhow::ensure!(slot == block.slot(), "unexpect confirmed block: {slot} vs {}", block.slot());
                     blocks.push_block_front(block);
                 },
+                Ok(ReadWriteSyncMessage::ConfirmedBlockPushBack { block }) => {
+                    blocks.push_block_back(block);
+                },
                 Err(broadcast::error::RecvError::Closed) => return Ok(()), // shutdown
                 Err(broadcast::error::RecvError::Lagged(_)) => anyhow::bail!("read runtime lagged"),
             },

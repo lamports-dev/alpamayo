@@ -224,6 +224,12 @@ impl StoredBlocksWrite {
         self.tail = self.tail.checked_sub(1).unwrap_or(self.blocks.len() - 1);
         anyhow::ensure!(!self.blocks[self.tail].exists, "no free slot (back)");
 
+        let _ = self
+            .sync_tx
+            .send(ReadWriteSyncMessage::ConfirmedBlockPushBack {
+                block: block.into(),
+            });
+
         self.blocks[self.tail] = block;
         self.update_total(true);
         Ok(())
@@ -273,6 +279,11 @@ impl StoredBlocksRead {
     pub fn push_block_front(&mut self, message: StoredBlockPushSync) {
         self.head = (self.head + 1) % self.blocks.len();
         self.blocks[self.head] = message.block;
+    }
+
+    pub fn push_block_back(&mut self, message: StoredBlockPushSync) {
+        self.tail = self.tail.checked_sub(1).unwrap_or(self.blocks.len() - 1);
+        self.blocks[self.tail] = message.block;
     }
 
     pub fn get_block_location(&self, slot: Slot) -> StorageBlockLocationResult {

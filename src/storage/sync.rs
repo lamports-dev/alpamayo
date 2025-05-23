@@ -43,4 +43,8 @@ pub enum ReadWriteSyncMessage {
     ConfirmedBlockPushFront {
         block: StoredBlockPushSync,
     },
+    // confirmed block added to storage (backfilling)
+    ConfirmedBlockPushBack {
+        block: StoredBlockPushSync,
+    },
 }
