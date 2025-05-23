@@ -108,22 +108,21 @@ impl StorageMemory {
         if let Some(item) = self.add_slot(slot) {
             item.confirmed = true;
             self.confirmed = slot;
+
+            if self.gen_next_slot == 0 {
+                self.gen_next_slot = slot;
+            }
         }
     }
 
     pub fn pop_confirmed(&mut self) -> Option<MemoryConfirmedBlock> {
-        // check that confirmed is set
-        if self.confirmed == 0 {
+        // check that confirmed & gen_next_slot is set
+        if self.confirmed == 0 || self.gen_next_slot == 0 {
             return None;
         }
 
         // get first slot
         let first_slot = self.blocks.front().map(|b| b.slot)?;
-
-        // initialize gen_next_slot
-        if self.gen_next_slot == 0 {
-            self.gen_next_slot = self.confirmed.min(first_slot);
-        }
 
         // get index of confirmed slot
         let mut confirmed_index = self
