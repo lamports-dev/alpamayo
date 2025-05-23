@@ -62,7 +62,7 @@ storage:
   write:
     affinity: 2 # Optional affinity of write thread, used to build blocks and write them to storage files
   read:
-    threads: 2 # Number of single-threaded tokio runtimes used to read data from storage files
+    threads: 1 # Number of single-threaded tokio runtimes used to read data from storage files
     affinity: 3-4 # Optional affinity of read tokio runtimes
     # Max number of async requests handled by every read thread
     # async requests: getBlock, getInflationReward, getSignaturesForAddress, getSignatureStatuses, getTransaction

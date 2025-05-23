@@ -271,7 +271,7 @@ pub struct ConfigStorageRead {
 impl Default for ConfigStorageRead {
     fn default() -> Self {
         Self {
-            threads: 2,
+            threads: 1,
             affinity: None,
             thread_max_async_requests: 1024,
             thread_max_files_requests: 32,
