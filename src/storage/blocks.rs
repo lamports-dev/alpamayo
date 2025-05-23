@@ -159,9 +159,11 @@ impl StoredBlocksWrite {
         self.head = (self.head + 1) % self.blocks.len();
         anyhow::ensure!(!self.blocks[self.head].exists, "no free slot (front)");
 
-        let _ = self.sync_tx.send(ReadWriteSyncMessage::ConfirmedBlockPush {
-            block: block.into(),
-        });
+        let _ = self
+            .sync_tx
+            .send(ReadWriteSyncMessage::ConfirmedBlockPushFront {
+                block: block.into(),
+            });
 
         self.blocks[self.head] = block;
         self.update_total(false);
@@ -242,7 +244,7 @@ impl StoredBlocksWrite {
         }
     }
 
-    pub fn pop_block(&mut self) -> Option<StoredBlock> {
+    pub fn pop_block_back(&mut self) -> Option<StoredBlock> {
         if self.blocks[self.tail].exists {
             let block = std::mem::replace(&mut self.blocks[self.tail], StoredBlock::new_noexists());
             self.tail = (self.tail + 1) % self.blocks.len();
@@ -263,12 +265,12 @@ pub struct StoredBlocksRead {
 }
 
 impl StoredBlocksRead {
-    pub fn pop_block(&mut self) {
+    pub fn pop_block_back(&mut self) {
         self.blocks[self.tail] = StoredBlock::new_noexists();
         self.tail = (self.tail + 1) % self.blocks.len();
     }
 
-    pub fn push_block(&mut self, message: StoredBlockPushSync) {
+    pub fn push_block_front(&mut self, message: StoredBlockPushSync) {
         self.head = (self.head + 1) % self.blocks.len();
         self.blocks[self.head] = message.block;
     }

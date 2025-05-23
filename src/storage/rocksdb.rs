@@ -1036,7 +1036,7 @@ impl RocksdbWrite {
 
         // get some space if we reached blocks limit
         if blocks.is_full() {
-            self.pop_block(files, blocks).await?;
+            self.pop_block_back(files, blocks).await?;
         }
 
         // store dead slot
@@ -1072,7 +1072,7 @@ impl RocksdbWrite {
                         return Ok((storage_id, offset, buffer, blocks));
                     }
 
-                    self.pop_block(files, blocks).await?;
+                    self.pop_block_back(files, blocks).await?;
                 }
             },
             async move {
@@ -1113,15 +1113,17 @@ impl RocksdbWrite {
         )
     }
 
-    async fn pop_block(
+    async fn pop_block_back(
         &self,
         files: &mut StorageFilesWrite,
         blocks: &mut StoredBlocksWrite,
     ) -> anyhow::Result<()> {
-        let Some(block) = blocks.pop_block() else {
+        let Some(block) = blocks.pop_block_back() else {
             anyhow::bail!("no blocks to remove");
         };
-        let _ = self.sync_tx.send(ReadWriteSyncMessage::ConfirmedBlockPop);
+        let _ = self
+            .sync_tx
+            .send(ReadWriteSyncMessage::ConfirmedBlockPopBack);
 
         // remove from db
         let (tx, rx) = oneshot::channel();

@@ -169,13 +169,13 @@ async fn start2(
                     stored_slots_read.set_finalized(index, slot);
                     storage_processed.set_finalized(slot);
                 }
-                Ok(ReadWriteSyncMessage::ConfirmedBlockPop) => blocks.pop_block(),
-                Ok(ReadWriteSyncMessage::ConfirmedBlockPush { block }) => {
+                Ok(ReadWriteSyncMessage::ConfirmedBlockPopBack) => blocks.pop_block_back(),
+                Ok(ReadWriteSyncMessage::ConfirmedBlockPushFront { block }) => {
                     let Some((slot, _block)) = confirmed_in_process.take() else {
                         anyhow::bail!("expected confirmed before push");
                     };
                     anyhow::ensure!(slot == block.slot(), "unexpect confirmed block: {slot} vs {}", block.slot());
-                    blocks.push_block(block);
+                    blocks.push_block_front(block);
                 },
                 Err(broadcast::error::RecvError::Closed) => return Ok(()), // shutdown
                 Err(broadcast::error::RecvError::Lagged(_)) => anyhow::bail!("read runtime lagged"),
