@@ -927,7 +927,7 @@ impl RocksdbWrite {
         if let Some(next_slot) = blocks.get_first_slot().map(|slot| slot - 1) {
             anyhow::ensure!(
                 next_slot == slot,
-                "trying to push invalid slot: {slot}, expected {next_slot}"
+                "trying to push back invalid slot: {slot}, expected {next_slot}"
             );
         }
         if let Some(first_height) = blocks.get_first_height() {
@@ -935,7 +935,7 @@ impl RocksdbWrite {
                 let block_height = block.block_height.expect("should have height");
                 anyhow::ensure!(
                     block_height + 1 == first_height,
-                    "trying to push block with invalid height: {block_height}, expected {}",
+                    "trying to push back block with invalid height: {block_height}, expected {}",
                     first_height - 1
                 );
             }
@@ -1020,7 +1020,7 @@ impl RocksdbWrite {
         if let Some(next_slot) = blocks.get_latest_slot().map(|slot| slot + 1) {
             anyhow::ensure!(
                 next_slot == slot,
-                "trying to push invalid slot: {slot}, expected {next_slot}"
+                "trying to push front invalid slot: {slot}, expected {next_slot}"
             );
         }
         if let Some(latest_height) = blocks.get_latest_height() {
@@ -1028,7 +1028,7 @@ impl RocksdbWrite {
                 let block_height = block.block_height.expect("should have height");
                 anyhow::ensure!(
                     latest_height + 1 == block_height,
-                    "trying to push block with invalid height: {block_height}, expected {}",
+                    "trying to push front block with invalid height: {block_height}, expected {}",
                     latest_height + 1
                 );
             }

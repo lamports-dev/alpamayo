@@ -6,7 +6,7 @@ use {
     },
     solana_sdk::clock::{MAX_RECENT_BLOCKHASHES, Slot, UnixTimestamp},
     tokio::sync::broadcast,
-    tracing::debug,
+    tracing::info,
 };
 
 #[derive(Debug)]
@@ -45,7 +45,14 @@ impl StoredBlocksWrite {
             .max_by_key(|(_index, block)| block.slot)
             .map(|(index, _block)| index)
             .unwrap_or_else(|| blocks.len() - 1);
-        debug!(total = blocks.len(), tail, head, "blocks info");
+        info!(
+            total = blocks.len(),
+            tail_index = tail,
+            tail_slot = blocks[tail].slot,
+            head_index = head,
+            head_slot = blocks[head].slot,
+            "load blocks info"
+        );
 
         let this = Self {
             blocks,

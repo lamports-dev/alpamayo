@@ -217,7 +217,7 @@ async fn start2(
         let mut next_rpc_request_slot = slot + 1;
         let mut next_database_slot = slot + 1;
         info!(
-            slot_db = next_database_slot,
+            next_database_slot = next_database_slot,
             slot_node = next_confirmed_slot,
             diff = next_confirmed_slot - next_database_slot,
             "initiate node catch-up process"
