@@ -98,6 +98,7 @@ impl StorageMemory {
 
     pub fn set_dead(&mut self, slot: Slot) {
         if let Some(item) = self.add_slot(slot) {
+            assert!(!item.confirmed, "trying to mark confirmed slot as dead");
             item.dead = true;
         }
     }
@@ -106,6 +107,7 @@ impl StorageMemory {
         assert!(self.confirmed < slot, "attempt to backward confirmed");
 
         if let Some(item) = self.add_slot(slot) {
+            assert!(!item.dead, "trying to mark dead slot as confirmed");
             item.confirmed = true;
             self.confirmed = slot;
 
