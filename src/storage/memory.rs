@@ -140,6 +140,7 @@ impl StorageMemory {
                     if first_slot <= block.parent_slot {
                         let confirmed_index_new = (block.parent_slot - first_slot) as usize;
                         for index in confirmed_index_new + 1..confirmed_index {
+                            self.blocks[index].block = None;
                             self.blocks[index].dead = true;
                         }
                         confirmed_index = confirmed_index_new;

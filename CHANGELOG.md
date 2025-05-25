@@ -16,6 +16,12 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Breaking
 
+## [0.8.5] - 2025-05-25
+
+## Fixes
+
+- storage: fix dead slots in memory storage ([#50](https://github.com/lamports-dev/alpamayo/pull/50))
+
 ## [0.8.4] - 2025-05-24
 
 ## Fixes
