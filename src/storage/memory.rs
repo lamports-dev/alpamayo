@@ -138,12 +138,7 @@ impl StorageMemory {
                 Some(block) => {
                     // update confirmed index
                     if first_slot <= block.parent_slot {
-                        let confirmed_index_new = (block.parent_slot - first_slot) as usize;
-                        for index in confirmed_index_new + 1..confirmed_index {
-                            self.blocks[index].block = None;
-                            self.blocks[index].dead = true;
-                        }
-                        confirmed_index = confirmed_index_new;
+                        confirmed_index = (block.parent_slot - first_slot) as usize;
                         continue;
                     }
 
@@ -161,6 +156,11 @@ impl StorageMemory {
 
                     // missed if not marked as dead
                     if self.gen_next_slot == first_slot {
+                        for index in 0..confirmed_index {
+                            self.blocks[index].block = None;
+                            self.blocks[index].dead = true;
+                        }
+
                         let BlockInfo {
                             slot, block, dead, ..
                         } = self.blocks.pop_front().expect("existed");
