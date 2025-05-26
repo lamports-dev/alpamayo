@@ -291,7 +291,7 @@ async fn start2(
 
             // get blocks
             while next_rpc_request_slot <= next_confirmed_slot && !rpc_blocks.is_full() {
-                rpc_blocks.fetch(next_rpc_request_slot);
+                rpc_blocks.fetch(next_rpc_request_slot, false);
                 next_rpc_request_slot += 1;
             }
 
@@ -383,14 +383,14 @@ async fn start2(
                         if block.get_slot() > next_confirmed_slot {
                             for slot in next_confirmed_slot..block.get_slot() {
                                 if !queued_slots_front.contains_key(&slot) {
-                                    rpc_blocks.fetch(slot);
+                                    rpc_blocks.fetch(slot, true);
                                 }
                             }
                         }
 
                         match block {
                             MemoryConfirmedBlock::Missed { slot } => {
-                                rpc_blocks.fetch(slot);
+                                rpc_blocks.fetch(slot, false);
                             },
                             MemoryConfirmedBlock::Dead { slot } => {
                                 queued_slots_front.insert(slot, None);
@@ -414,10 +414,12 @@ async fn start2(
             });
 
             let ts = Instant::now();
+            let height = block.as_ref().and_then(|b| b.block_height);
             db_write
                 .push_block_front(next_confirmed_slot, block, storage_files, &mut blocks)
                 .await?;
             metric_storage_block_sync.record(duration_to_seconds(ts.elapsed()));
+            tracing::warn!(slot = next_confirmed_slot, height, elapsed = ?ts.elapsed(), "pushed front");
 
             next_confirmed_slot += 1;
         }
@@ -446,7 +448,7 @@ async fn start2(
                 }
 
                 while next_back_request_slot >= backfill_upto_value && !rpc_blocks.is_full() {
-                    rpc_blocks.fetch(next_back_request_slot);
+                    rpc_blocks.fetch(next_back_request_slot, false);
                     next_back_request_slot -= 1;
                 }
 
@@ -455,10 +457,12 @@ async fn start2(
                     let block_added =
                         if blocks.get_back_slot().and_then(|x| x.checked_sub(1)) == Some(slot) {
                             let ts = Instant::now();
+                            let height = block.as_ref().and_then(|b| b.block_height);
                             let block_added = db_write
                                 .push_block_back(slot, block, storage_files, &mut blocks)
                                 .await?;
                             metric_storage_block_sync.record(duration_to_seconds(ts.elapsed()));
+                            tracing::warn!(slot, height, elapsed = ?ts.elapsed(), "pushed back");
                             block_added
                         } else {
                             false
@@ -546,10 +550,13 @@ impl RpcBlocks {
         self.rpc_requests.len() >= self.rpc_concurrency
     }
 
-    fn fetch(&self, slot: Slot) {
+    fn fetch(&self, slot: Slot, log: bool) {
         let mut locked = self.rpc_inprogress.lock().expect("unpoisoned");
         if !locked.insert(slot) {
             return;
+        }
+        if log {
+            tracing::warn!(slot, "fetch");
         }
 
         let rpc = Arc::clone(&self.rpc);
