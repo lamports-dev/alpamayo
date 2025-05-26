@@ -211,6 +211,7 @@ impl HttpSource {
                     }),
                 ..
             }) => {
+                tracing::warn!(slot, "slot skipped: JSON_RPC_SERVER_ERROR_SLOT_SKIPPED");
                 return Err(GetBlockError::SlotSkipped(slot));
             }
             // missed
@@ -222,6 +223,10 @@ impl HttpSource {
                     }),
                 ..
             }) => {
+                tracing::warn!(
+                    slot,
+                    "slot skipped: JSON_RPC_SERVER_ERROR_LONG_TERM_STORAGE_SLOT_SKIPPED"
+                );
                 return Err(GetBlockError::SlotSkipped(slot));
             }
             Err(error) => {
