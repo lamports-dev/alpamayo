@@ -110,6 +110,7 @@ impl StorageMemory {
             assert!(!item.dead, "trying to mark dead slot as confirmed");
             item.confirmed = true;
             self.confirmed = slot;
+            tracing::warn!(slot, "set confirmed");
 
             if self.gen_next_slot == 0 {
                 self.gen_next_slot = slot;
@@ -136,8 +137,23 @@ impl StorageMemory {
         let block = loop {
             match &self.blocks[confirmed_index].block {
                 Some(block) => {
+                    let item = &self.blocks[confirmed_index];
+                    tracing::warn!(
+                        gen_next_slot = self.gen_next_slot,
+                        first_slot,
+                        slot = item.slot,
+                        parent_slot = block.parent_slot,
+                        confirmed = item.confirmed,
+                        "pop_confirmed"
+                    );
+
                     // update confirmed index
                     if first_slot <= block.parent_slot {
+                        tracing::warn!(
+                            slot = item.slot,
+                            parent = block.parent_slot,
+                            "move to parent"
+                        );
                         confirmed_index = (block.parent_slot - first_slot) as usize;
                         continue;
                     }
@@ -145,12 +161,14 @@ impl StorageMemory {
                     // we don't have info about block
                     if self.gen_next_slot <= block.parent_slot {
                         let slot = self.gen_next_slot;
+                        tracing::warn!(slot, "Some / missed");
                         break MemoryConfirmedBlock::Missed { slot };
                     }
 
                     // missed slots
                     if self.gen_next_slot < first_slot {
                         let slot = self.gen_next_slot;
+                        tracing::warn!(slot, "Some / dead");
                         break MemoryConfirmedBlock::Dead { slot };
                     }
 
@@ -162,11 +180,16 @@ impl StorageMemory {
                         }
 
                         let BlockInfo {
-                            slot, block, dead, ..
+                            slot,
+                            block,
+                            dead,
+                            confirmed,
                         } = self.blocks.pop_front().expect("existed");
                         break if let Some(block) = block {
+                            tracing::warn!(slot, parent_slot = block.parent_slot, confirmed, height = ?block.block_height, "block");
                             MemoryConfirmedBlock::Block { slot, block }
                         } else {
+                            tracing::warn!(slot, dead, "Some / missed_or_dead");
                             MemoryConfirmedBlock::missed_or_dead(slot, dead)
                         };
                     }
@@ -180,6 +203,7 @@ impl StorageMemory {
                     // we don't have any info, definitely missed
                     if self.gen_next_slot < first_slot {
                         let slot = self.gen_next_slot;
+                        tracing::warn!(slot, "None / missed");
                         break MemoryConfirmedBlock::Missed { slot };
                     }
 
@@ -187,6 +211,7 @@ impl StorageMemory {
                     if self.gen_next_slot == first_slot {
                         let BlockInfo { slot, dead, .. } =
                             self.blocks.pop_front().expect("existed");
+                        tracing::warn!(slot, dead, "None / missed_or_dead");
                         break MemoryConfirmedBlock::missed_or_dead(slot, dead);
                     }
 
