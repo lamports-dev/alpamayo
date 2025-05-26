@@ -291,7 +291,7 @@ async fn start2(
 
             // get blocks
             while next_request_slot <= next_confirmed_slot && !http_blocks.is_full() {
-                http_blocks.fetch(next_request_slot, true);
+                http_blocks.fetch(next_request_slot, true, false);
                 next_request_slot += 1;
             }
 
@@ -384,14 +384,14 @@ async fn start2(
                         if block.get_slot() > next_confirmed_slot {
                             for slot in next_confirmed_slot..block.get_slot() {
                                 if !queued_slots_front.contains_key(&slot) {
-                                    http_blocks.fetch(slot, false);
+                                    http_blocks.fetch(slot, false, true);
                                 }
                             }
                         }
 
                         match block {
                             MemoryConfirmedBlock::Missed { slot } => {
-                                http_blocks.fetch(slot, false);
+                                http_blocks.fetch(slot, false, false);
                             },
                             MemoryConfirmedBlock::Dead { slot } => {
                                 queued_slots_front.insert(slot, None);
@@ -415,10 +415,12 @@ async fn start2(
             });
 
             let ts = Instant::now();
+            let height = block.as_ref().and_then(|b| b.block_height);
             db_write
                 .push_block_front(next_confirmed_slot, block, storage_files, &mut blocks)
                 .await?;
             metric_storage_block_sync.record(duration_to_seconds(ts.elapsed()));
+            tracing::warn!(slot = next_confirmed_slot, height, elapsed = ?ts.elapsed(), "pushed front");
 
             next_confirmed_slot += 1;
         }
@@ -447,7 +449,7 @@ async fn start2(
                 }
 
                 while next_back_request_slot >= backfill_upto_value && !http_blocks.is_full() {
-                    http_blocks.fetch(next_back_request_slot, true);
+                    http_blocks.fetch(next_back_request_slot, true, false);
                     next_back_request_slot -= 1;
                 }
 
@@ -456,10 +458,12 @@ async fn start2(
                     let block_added =
                         if blocks.get_back_slot().and_then(|x| x.checked_sub(1)) == Some(slot) {
                             let ts = Instant::now();
+                            let height = block.as_ref().and_then(|b| b.block_height);
                             let block_added = db_write
                                 .push_block_back(slot, block, storage_files, &mut blocks)
                                 .await?;
                             metric_storage_block_sync.record(duration_to_seconds(ts.elapsed()));
+                            tracing::warn!(slot, height, elapsed = ?ts.elapsed(), "pushed back");
                             block_added
                         } else {
                             false
@@ -549,10 +553,13 @@ impl HttpBlocks {
         self.requests.len() >= self.concurrency
     }
 
-    fn fetch(&self, slot: Slot, httpget: bool) {
+    fn fetch(&self, slot: Slot, httpget: bool, log: bool) {
         let mut locked = mutex_lock(&self.inprogress);
         if !locked.insert(slot) {
             return;
+        }
+        if log {
+            tracing::warn!(slot, "fetch");
         }
 
         let http = Arc::clone(&self.http);
