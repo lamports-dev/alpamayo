@@ -25,6 +25,9 @@ pub enum RpcRequest {
     Slots {
         tx: oneshot::Sender<Result<(Slot, Slot), ClientError>>,
     },
+    FirstAvailableBlock {
+        tx: oneshot::Sender<Result<Slot, ClientError>>,
+    },
     Block {
         slot: Slot,
         tx: oneshot::Sender<Result<BlockWithBinary, GetBlockError>>,
@@ -82,6 +85,11 @@ impl RpcSourceConnected {
     ) -> RpcSourceConnectedResult<BlockWithBinary, GetBlockError> {
         let (tx, rx) = oneshot::channel();
         self.send(RpcRequest::Block { slot, tx }, rx).await
+    }
+
+    pub async fn get_first_available_block(&self) -> RpcSourceConnectedResult<Slot, ClientError> {
+        let (tx, rx) = oneshot::channel();
+        self.send(RpcRequest::FirstAvailableBlock { tx }, rx).await
     }
 }
 
@@ -175,6 +183,10 @@ fn handle_rpc(item: Option<RpcRequest>, rpc: Arc<RpcSource>) -> bool {
                     RpcRequest::Slots { tx } => {
                         let result =
                             tokio::try_join!(rpc.get_finalized_slot(), rpc.get_confirmed_slot());
+                        let _ = tx.send(result);
+                    }
+                    RpcRequest::FirstAvailableBlock { tx } => {
+                        let result = rpc.get_first_available_block().await;
                         let _ = tx.send(result);
                     }
                     RpcRequest::Block { slot, tx } => {

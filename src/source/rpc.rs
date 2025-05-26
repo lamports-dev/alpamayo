@@ -115,6 +115,11 @@ impl RpcSource {
             .await
     }
 
+    pub async fn get_first_available_block(&self) -> Result<Slot, ClientError> {
+        let _permit = self.semaphore.acquire().await.expect("unclosed");
+        self.client.get_first_available_block().await
+    }
+
     pub async fn get_block(&self, slot: Slot) -> Result<BlockWithBinary, GetBlockError> {
         let config = RpcBlockConfig {
             encoding: Some(UiTransactionEncoding::Base64),

@@ -203,6 +203,15 @@ async fn start2(
 ) -> anyhow::Result<()> {
     let metric_storage_block_sync = histogram!(WRITE_BLOCK_SYNC_SECONDS);
 
+    // check backfill_upto
+    if let Some(backfill_upto) = backfill_upto {
+        let first_available_block = rpc.get_first_available_block().await?;
+        anyhow::ensure!(
+            backfill_upto <= first_available_block,
+            "trying to backfill to {backfill_upto} while first available is {first_available_block}"
+        );
+    }
+
     // rpc blocks & queue of confirmed blocks
     let mut rpc_blocks = RpcBlocks::new(
         Arc::clone(&rpc),
