@@ -54,6 +54,7 @@ storage:
       - id: 0
         path: ./db/alpamayo/storage0
         size: 8gb
+        new_blocks: true
   rocksdb:
     path: ./db/alpamayo/rocksdb # Rocksdb location, don't forget to increase `max_open_files`
     index_slot_compression: none # Slot info (transactions and touched addresses) compression: none, snappy, zlib, bz2, lz4, lz4hc, zstd

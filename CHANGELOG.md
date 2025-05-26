@@ -20,6 +20,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## Fixes
 
+- storage: allow to disable specific file ([#53](https://github.com/lamports-dev/alpamayo/pull/53))
 - rpc: check first available slot on startup ([#52](https://github.com/lamports-dev/alpamayo/pull/52))
 
 ## [0.8.6] - 2025-05-25

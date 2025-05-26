@@ -162,6 +162,7 @@ impl StorageFilesWrite {
             tail: 0,
             head: 0,
             size: config.size,
+            new_blocks: config.new_blocks,
             metric_space_free: gauge!(STORAGE_FILES_SPACE, "id" => config.id.to_string(), "type" => "free"),
         })
     }
@@ -217,7 +218,8 @@ impl StorageFilesWrite {
             let index = self.next_file;
             self.next_file = (self.next_file + 1) % self.files.len();
 
-            if self.files[index].free_space() >= size {
+            let file = &self.files[index];
+            if file.new_blocks && file.free_space() >= size {
                 return Some(index);
             }
 
@@ -278,6 +280,7 @@ struct StorageFile {
     tail: u64,
     head: u64,
     size: u64,
+    new_blocks: bool,
     metric_space_free: Gauge,
 }
 

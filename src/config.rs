@@ -196,6 +196,14 @@ pub struct ConfigStorageFile {
     pub path: PathBuf,
     #[serde(deserialize_with = "deserialize_humansize")]
     pub size: u64,
+    #[serde(default = "ConfigStorageFile::default_new_blocks")]
+    pub new_blocks: bool,
+}
+
+impl ConfigStorageFile {
+    const fn default_new_blocks() -> bool {
+        true
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
