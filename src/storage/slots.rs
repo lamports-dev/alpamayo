@@ -167,12 +167,14 @@ impl StoredSlotsRead {
     }
 
     pub fn set_processed(&self, index: usize, slot: Slot) {
+        tracing::warn!(index, slot, "set_processed");
         if self.set(&self.slots_processed, index, slot) {
             self.stored_slots.processed_store_max(slot);
         }
     }
 
     pub fn set_confirmed(&self, index: usize, slot: Slot) {
+        tracing::warn!(index, slot, "set_confirmed");
         if self.set(&self.slots_confirmed, index, slot) {
             self.stored_slots.processed_store_max(slot);
             self.stored_slots.confirmed_store(slot);
@@ -180,6 +182,7 @@ impl StoredSlotsRead {
     }
 
     pub fn set_finalized(&self, index: usize, slot: Slot) {
+        tracing::warn!(index, slot, "set_finalized");
         if self.set(&self.slots_finalized, index, slot) {
             self.stored_slots.finalized_store(slot);
 
