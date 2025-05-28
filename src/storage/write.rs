@@ -207,29 +207,25 @@ async fn start2(
     let metric_storage_block_sync = histogram!(WRITE_BLOCK_SYNC_SECONDS);
 
     // revert back slots, if required
-    if let Some(slots) = pop_slots_back {
-        for _ in 0..slots {
-            let Some(slot) = blocks.get_back_slot() else {
-                break;
-            };
+    for _ in 0..pop_slots_back.unwrap_or_default() {
+        let Some(slot) = blocks.get_back_slot() else {
+            break;
+        };
 
-            let ts = Instant::now();
-            db_write.pop_block_back(storage_files, &mut blocks).await?;
-            info!(slot, elapsed = ?ts.elapsed(), "pop back slot");
-        }
+        let ts = Instant::now();
+        db_write.pop_block_back(storage_files, &mut blocks).await?;
+        info!(slot, elapsed = ?ts.elapsed(), "pop back slot");
     }
 
     // revert front slots, if required
-    if let Some(slots) = pop_slots_front {
-        for _ in 0..slots {
-            let Some(slot) = blocks.get_front_slot() else {
-                break;
-            };
+    for _ in 0..pop_slots_front.unwrap_or_default() {
+        let Some(slot) = blocks.get_front_slot() else {
+            break;
+        };
 
-            let ts = Instant::now();
-            db_write.pop_block_front(storage_files, &mut blocks).await?;
-            info!(slot, elapsed = ?ts.elapsed(), "pop front slot");
-        }
+        let ts = Instant::now();
+        db_write.pop_block_front(storage_files, &mut blocks).await?;
+        info!(slot, elapsed = ?ts.elapsed(), "pop front slot");
     }
 
     // check backfill_upto
