@@ -132,12 +132,12 @@ impl StoredBlocksWrite {
     }
 
     pub fn get_back_slot(&self) -> Option<Slot> {
-        self.get_back(|blk| blk.exists).map(|blk| blk.slot)
+        self.get_back(|block| block.exists).map(|block| block.slot)
     }
 
     pub fn get_back_height(&self) -> Option<(Slot, Slot)> {
-        self.get_back(|blk| blk.exists && !blk.dead)
-            .and_then(|blk| blk.block_height.map(|height| (blk.slot, height)))
+        self.get_back(|block| block.exists && !block.dead)
+            .map(|block| (block.slot, block.block_height.expect("should have height")))
     }
 
     pub fn get_front_slot(&self) -> Option<Slot> {
@@ -150,7 +150,7 @@ impl StoredBlocksWrite {
         loop {
             let block = self.blocks[index];
             if block.exists && !block.dead {
-                return block.block_height.map(|height| (block.slot, height));
+                return Some((block.slot, block.block_height.expect("should have height")));
             }
             if index == self.tail {
                 return None;
