@@ -62,7 +62,7 @@ impl StoredBlocksWrite {
             sync_tx,
         };
 
-        stored_slots.first_available_store(this.get_first_slot());
+        stored_slots.first_available_store(this.get_back_slot());
 
         Ok(this)
     }
@@ -113,7 +113,7 @@ impl StoredBlocksWrite {
         map
     }
 
-    fn get_first(&self, filter: impl Fn(&StoredBlock) -> bool) -> Option<&StoredBlock> {
+    fn get_back(&self, filter: impl Fn(&StoredBlock) -> bool) -> Option<&StoredBlock> {
         // additional condition in case if zero blocks exists
         if self.blocks[self.tail].exists && self.blocks[self.head].exists {
             let mut index = self.tail;
@@ -131,21 +131,21 @@ impl StoredBlocksWrite {
         None
     }
 
-    pub fn get_first_slot(&self) -> Option<Slot> {
-        self.get_first(|blk| blk.exists).map(|blk| blk.slot)
+    pub fn get_back_slot(&self) -> Option<Slot> {
+        self.get_back(|blk| blk.exists).map(|blk| blk.slot)
     }
 
-    pub fn get_first_height(&self) -> Option<Slot> {
-        self.get_first(|blk| blk.exists && !blk.dead)
+    pub fn get_back_height(&self) -> Option<Slot> {
+        self.get_back(|blk| blk.exists && !blk.dead)
             .and_then(|blk| blk.block_height)
     }
 
-    pub fn get_latest_slot(&self) -> Option<Slot> {
+    pub fn get_front_slot(&self) -> Option<Slot> {
         let block = self.blocks[self.head];
         block.exists.then_some(block.slot)
     }
 
-    pub fn get_latest_height(&self) -> Option<Slot> {
+    pub fn get_front_height(&self) -> Option<Slot> {
         let mut index = self.head;
         loop {
             let block = self.blocks[index];
@@ -246,7 +246,7 @@ impl StoredBlocksWrite {
         // update stored if db was initialized
         if side == VecSide::Back || (self.tail == 0 && self.head == 0) {
             self.stored_slots
-                .first_available_store(self.get_first_slot());
+                .first_available_store(self.get_back_slot());
         }
     }
 
@@ -255,7 +255,7 @@ impl StoredBlocksWrite {
             let block = std::mem::replace(&mut self.blocks[self.tail], StoredBlock::new_noexists());
             self.tail = (self.tail + 1) % self.blocks.len();
             self.stored_slots
-                .first_available_store(self.get_first_slot());
+                .first_available_store(self.get_back_slot());
             Some(block)
         } else {
             None

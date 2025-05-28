@@ -225,7 +225,7 @@ async fn start2(
     // revert slots, if required
     if let Some(slots) = pop_slots_front {
         for _ in 0..slots {
-            let Some(slot) = blocks.get_latest_slot() else {
+            let Some(slot) = blocks.get_front_slot() else {
                 break;
             };
 
@@ -237,7 +237,7 @@ async fn start2(
 
     // fill the gap between stored and new
     let mut next_confirmed_slot = load_confirmed_slot(&rpc, &stored_slots, &sync_tx).await?;
-    if let Some(slot) = blocks.get_latest_slot() {
+    if let Some(slot) = blocks.get_front_slot() {
         let mut next_confirmed_slot_last_update = Instant::now();
         let mut next_rpc_request_slot = slot + 1;
         let mut next_database_slot = slot + 1;
@@ -461,7 +461,7 @@ async fn start2(
                 next_back_slot = Some(slot);
             }
             (Some(_), None) => {
-                next_back_slot = blocks.get_first_slot().and_then(|x| x.checked_sub(1));
+                next_back_slot = blocks.get_back_slot().and_then(|x| x.checked_sub(1));
             }
             _ => {}
         }

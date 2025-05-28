@@ -924,13 +924,13 @@ impl RocksdbWrite {
         files: &mut StorageFilesWrite,
         blocks: &mut StoredBlocksWrite,
     ) -> anyhow::Result<bool> {
-        if let Some(next_slot) = blocks.get_first_slot().map(|slot| slot - 1) {
+        if let Some(next_slot) = blocks.get_back_slot().map(|slot| slot - 1) {
             anyhow::ensure!(
                 next_slot == slot,
                 "trying to push back invalid slot: {slot}, expected {next_slot}"
             );
         }
-        if let Some(first_height) = blocks.get_first_height() {
+        if let Some(first_height) = blocks.get_back_height() {
             if let Some(block) = &block {
                 let block_height = block.block_height.expect("should have height");
                 anyhow::ensure!(
@@ -1017,13 +1017,13 @@ impl RocksdbWrite {
         files: &mut StorageFilesWrite,
         blocks: &mut StoredBlocksWrite,
     ) -> anyhow::Result<()> {
-        if let Some(next_slot) = blocks.get_latest_slot().map(|slot| slot + 1) {
+        if let Some(next_slot) = blocks.get_front_slot().map(|slot| slot + 1) {
             anyhow::ensure!(
                 next_slot == slot,
                 "trying to push front invalid slot: {slot}, expected {next_slot}"
             );
         }
-        if let Some(latest_height) = blocks.get_latest_height() {
+        if let Some(latest_height) = blocks.get_front_height() {
             if let Some(block) = &block {
                 let block_height = block.block_height.expect("should have height");
                 anyhow::ensure!(
