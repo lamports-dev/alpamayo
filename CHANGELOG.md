@@ -16,6 +16,12 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Breaking
 
+## [0.8.8] - 2025-05-28
+
+## Fixes
+
+- bin: print timestamp with error ([#54](https://github.com/lamports-dev/alpamayo/pull/54))
+
 ## [0.8.7] - 2025-05-26
 
 ## Fixes
