@@ -232,7 +232,7 @@ async fn start2(
     if let Some(backfill_upto) = backfill_upto {
         let first_available_block = rpc.get_first_available_block().await?;
         anyhow::ensure!(
-            backfill_upto <= first_available_block,
+            backfill_upto >= first_available_block,
             "trying to backfill to {backfill_upto} while first available is {first_available_block}"
         );
     }
