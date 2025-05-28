@@ -12,7 +12,7 @@ use {
         time::Duration,
     },
     tokio::sync::{Mutex, Notify, broadcast, mpsc},
-    tracing::{info, warn},
+    tracing::{error, info, warn},
 };
 
 #[derive(Debug, Parser)]
@@ -35,7 +35,18 @@ struct Args {
     pub pop_slots_front: Option<usize>,
 }
 
-fn main() -> anyhow::Result<()> {
+fn main() {
+    if let Err(err) = try_main() {
+        match std::env::var_os("RUST_BACKTRACE") {
+            Some(value) if value == *"0" => error!("Error: {err}"),
+            None => error!("Error: {err}"),
+            _ => error!("Error: {err:?}"),
+        }
+        std::process::exit(1);
+    }
+}
+
+fn try_main() -> anyhow::Result<()> {
     let args = Args::parse();
     let config = Config::load_from_file(&args.config)
         .with_context(|| format!("failed to load config from {}", args.config))?;
