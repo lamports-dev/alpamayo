@@ -930,13 +930,12 @@ impl RocksdbWrite {
                 "trying to push back invalid slot: {slot}, expected {next_slot}"
             );
         }
-        if let Some(first_height) = blocks.get_back_height() {
+        if let Some((back_slot, back_height)) = blocks.get_back_height() {
             if let Some(block) = &block {
                 let block_height = block.block_height.expect("should have height");
                 anyhow::ensure!(
-                    block_height + 1 == first_height,
-                    "trying to push back block with invalid height: {block_height}, expected {}",
-                    first_height - 1
+                    block_height + 1 == back_height,
+                    "trying to push back block with invalid height: {block_height} (slot {slot}), current: {back_height} (slot {back_slot})",
                 );
             }
         }
@@ -1023,13 +1022,12 @@ impl RocksdbWrite {
                 "trying to push front invalid slot: {slot}, expected {next_slot}"
             );
         }
-        if let Some(latest_height) = blocks.get_front_height() {
+        if let Some((front_slot, front_height)) = blocks.get_front_height() {
             if let Some(block) = &block {
                 let block_height = block.block_height.expect("should have height");
                 anyhow::ensure!(
-                    latest_height + 1 == block_height,
-                    "trying to push front block with invalid height: {block_height}, expected {}",
-                    latest_height + 1
+                    front_height + 1 == block_height,
+                    "trying to push front block with invalid height: {block_height} (slot {slot}), current: {front_height} (slot {front_slot})"
                 );
             }
         }
