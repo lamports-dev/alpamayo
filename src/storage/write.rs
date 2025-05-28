@@ -51,6 +51,7 @@ use {
 
 #[allow(clippy::too_many_arguments)]
 pub fn start(
+    pop_slots_back: Option<usize>,
     pop_slots_front: Option<usize>,
     config: ConfigStorage,
     stored_slots: StoredSlots,
@@ -159,6 +160,7 @@ pub fn start(
                     .context("failed to send read/write init message")?;
 
                 let result = start2(
+                    pop_slots_back,
                     pop_slots_front,
                     config.backfilling.map(|config| config.sync_to),
                     stored_slots,
@@ -186,6 +188,7 @@ pub fn start(
 
 #[allow(clippy::too_many_arguments)]
 async fn start2(
+    pop_slots_back: Option<usize>,
     pop_slots_front: Option<usize>,
     mut backfill_upto: Option<Slot>,
     stored_slots: StoredSlots,
@@ -202,6 +205,32 @@ async fn start2(
     shutdown: Shutdown,
 ) -> anyhow::Result<()> {
     let metric_storage_block_sync = histogram!(WRITE_BLOCK_SYNC_SECONDS);
+
+    // revert back slots, if required
+    if let Some(slots) = pop_slots_back {
+        for _ in 0..slots {
+            let Some(slot) = blocks.get_back_slot() else {
+                break;
+            };
+
+            let ts = Instant::now();
+            db_write.pop_block_back(storage_files, &mut blocks).await?;
+            info!(slot, elapsed = ?ts.elapsed(), "pop back slot");
+        }
+    }
+
+    // revert front slots, if required
+    if let Some(slots) = pop_slots_front {
+        for _ in 0..slots {
+            let Some(slot) = blocks.get_front_slot() else {
+                break;
+            };
+
+            let ts = Instant::now();
+            db_write.pop_block_front(storage_files, &mut blocks).await?;
+            info!(slot, elapsed = ?ts.elapsed(), "pop front slot");
+        }
+    }
 
     // check backfill_upto
     if let Some(backfill_upto) = backfill_upto {
@@ -221,19 +250,6 @@ async fn start2(
     );
     let mut queued_slots_back = HashMap::<Slot, Option<Arc<BlockWithBinary>>>::default();
     let mut queued_slots_front = HashMap::<Slot, Option<Arc<BlockWithBinary>>>::default();
-
-    // revert slots, if required
-    if let Some(slots) = pop_slots_front {
-        for _ in 0..slots {
-            let Some(slot) = blocks.get_front_slot() else {
-                break;
-            };
-
-            let ts = Instant::now();
-            db_write.pop_block_front(storage_files, &mut blocks).await?;
-            info!(slot, elapsed = ?ts.elapsed(), "pop slot");
-        }
-    }
 
     // fill the gap between stored and new
     let mut next_confirmed_slot = load_confirmed_slot(&rpc, &stored_slots, &sync_tx).await?;

@@ -1111,7 +1111,7 @@ impl RocksdbWrite {
         )
     }
 
-    async fn pop_block_back(
+    pub async fn pop_block_back(
         &self,
         files: &mut StorageFilesWrite,
         blocks: &mut StoredBlocksWrite,

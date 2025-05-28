@@ -16,6 +16,12 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Breaking
 
+## [0.8.9] - 2025-05-28
+
+## Fixes
+
+- storage: allow to pop back slots on startup ([#55](https://github.com/lamports-dev/alpamayo/pull/55))
+
 ## [0.8.8] - 2025-05-28
 
 ## Fixes
