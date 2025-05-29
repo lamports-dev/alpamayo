@@ -1,5 +1,5 @@
 use {
-    alpamayo::{config::Config, metrics, rpc, storage},
+    alpamayo::{config::Config, metrics, rpc, storage, version::VERSION},
     anyhow::Context,
     clap::Parser,
     futures::future::{FutureExt, TryFutureExt, ready, try_join_all},
@@ -57,6 +57,8 @@ fn try_main() -> anyhow::Result<()> {
 
     // Setup logs
     alpamayo::log::setup(config.logs.json)?;
+    info!("version: {} / {}", VERSION.version, VERSION.git);
+
     let metrics_handle = metrics::setup()?;
 
     // Exit if we only check the config

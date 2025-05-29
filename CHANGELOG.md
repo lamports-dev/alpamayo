@@ -22,6 +22,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 - storage: allow to pop back slots on startup ([#55](https://github.com/lamports-dev/alpamayo/pull/55))
 - storage: fix first available slot and backfill condition ([#56](https://github.com/lamports-dev/alpamayo/pull/56))
+- bin: log version on startup ([#57](https://github.com/lamports-dev/alpamayo/pull/57))
 
 ## [0.8.8] - 2025-05-28
 
