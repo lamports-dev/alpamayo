@@ -16,6 +16,12 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Breaking
 
+## [0.9.0] - 2025-05-30
+
+### Breaking
+
+- alpamayo: bump agave to v2.2 ([#58](https://github.com/lamports-dev/alpamayo/pull/58))
+
 ## [0.8.9] - 2025-05-28
 
 ## Fixes
