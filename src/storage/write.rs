@@ -482,12 +482,12 @@ async fn start2(
             }
             (Some(backfill_upto_value), None) => {
                 if let Some(slot) = blocks.get_back_slot().and_then(|x| x.checked_sub(1)) {
-                    if slot <= backfill_upto_value {
+                    if slot > backfill_upto_value {
+                        next_back_slot = Some(slot);
+                    } else {
                         info!("backfilling is finished");
                         backfill_upto = None;
                     }
-
-                    next_back_slot = Some(slot);
                 }
             }
             _ => {}
