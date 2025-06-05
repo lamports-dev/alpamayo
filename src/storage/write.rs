@@ -339,7 +339,7 @@ async fn start2(
                     if slot >= next_confirmed_slot {
                         queued_slots_front.insert(slot, block.map(Arc::new));
                     } else if let Some(next_back_slot) = next_back_slot {
-                        if slot <= next_back_slot {
+                        if slot <= next_back_slot && backfill_upto.is_some() {
                             queued_slots_back.insert(slot, block.map(Arc::new));
                         }
                     }
@@ -452,14 +452,22 @@ async fn start2(
 
                 let tsloop = Instant::now();
                 while let Some(block) = queued_slots_back.remove(&slot) {
-                    let ts = Instant::now();
-                    let block_added = db_write
-                        .push_block_back(slot, block, storage_files, &mut blocks)
-                        .await?;
-                    metric_storage_block_sync.record(duration_to_seconds(ts.elapsed()));
+                    let block_added =
+                        if blocks.get_back_slot().and_then(|x| x.checked_sub(1)) == Some(slot) {
+                            let ts = Instant::now();
+                            let block_added = db_write
+                                .push_block_back(slot, block, storage_files, &mut blocks)
+                                .await?;
+                            metric_storage_block_sync.record(duration_to_seconds(ts.elapsed()));
+                            block_added
+                        } else {
+                            false
+                        };
+
                     if !block_added || slot == backfill_upto_value {
                         info!("backfilling is finished");
                         backfill_upto = None;
+                        queued_slots_back.clear();
                         break;
                     }
 
@@ -472,8 +480,15 @@ async fn start2(
                 }
                 next_back_slot = Some(slot);
             }
-            (Some(_), None) => {
-                next_back_slot = blocks.get_back_slot().and_then(|x| x.checked_sub(1));
+            (Some(backfill_upto_value), None) => {
+                if let Some(slot) = blocks.get_back_slot().and_then(|x| x.checked_sub(1)) {
+                    if slot <= backfill_upto_value {
+                        info!("backfilling is finished");
+                        backfill_upto = None;
+                    }
+
+                    next_back_slot = Some(slot);
+                }
             }
             _ => {}
         }

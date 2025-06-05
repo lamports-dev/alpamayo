@@ -16,6 +16,12 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Breaking
 
+## [0.9.1] - 2025-06-05
+
+### Fixes
+
+- storage: fix backfilling stop condition ([#59](https://github.com/lamports-dev/alpamayo/pull/59))
+
 ## [0.9.0] - 2025-05-30
 
 ### Breaking
