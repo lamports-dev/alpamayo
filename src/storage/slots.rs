@@ -1,11 +1,9 @@
 use {
-    crate::{
-        metrics::STORAGE_STORED_SLOTS,
-        util::{HashMap, HashSet},
-    },
+    crate::{metrics::STORAGE_STORED_SLOTS, util::HashSet},
     metrics::{Gauge, gauge},
     solana_sdk::clock::Slot,
     std::{
+        collections::BTreeMap,
         ops::Deref,
         sync::{
             Arc, Mutex,
@@ -127,9 +125,9 @@ impl StoredSlots {
 #[derive(Debug, Clone)]
 pub struct StoredSlotsRead {
     stored_slots: StoredSlots,
-    slots_processed: Arc<Mutex<HashMap<Slot, HashSet<usize>>>>,
-    slots_confirmed: Arc<Mutex<HashMap<Slot, HashSet<usize>>>>,
-    slots_finalized: Arc<Mutex<HashMap<Slot, HashSet<usize>>>>,
+    slots_processed: Arc<Mutex<BTreeMap<Slot, HashSet<usize>>>>,
+    slots_confirmed: Arc<Mutex<BTreeMap<Slot, HashSet<usize>>>>,
+    slots_finalized: Arc<Mutex<BTreeMap<Slot, HashSet<usize>>>>,
     max_recent_blockhashes: Arc<Mutex<usize>>,
     max_recent_blockhashes_ready: bool,
     total_readers: usize,
@@ -150,7 +148,7 @@ impl StoredSlotsRead {
 
     fn set(
         &self,
-        map: &Arc<Mutex<HashMap<Slot, HashSet<usize>>>>,
+        map: &Arc<Mutex<BTreeMap<Slot, HashSet<usize>>>>,
         index: usize,
         slot: Slot,
     ) -> bool {
@@ -183,6 +181,22 @@ impl StoredSlotsRead {
     pub fn set_finalized(&self, index: usize, slot: Slot) {
         if self.set(&self.slots_finalized, index, slot) {
             self.stored_slots.finalized_store(slot);
+
+            for map in &[
+                &self.slots_processed,
+                &self.slots_confirmed,
+                &self.slots_finalized,
+            ] {
+                let mut lock = map.lock().expect("unpanicked mutex");
+                loop {
+                    match lock.first_key_value().map(|(slot, _)| *slot) {
+                        Some(map_slot) if map_slot <= slot => {
+                            lock.remove(&map_slot);
+                        }
+                        _ => break,
+                    }
+                }
+            }
         }
     }
 

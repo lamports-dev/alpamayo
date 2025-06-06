@@ -16,6 +16,12 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Breaking
 
+## [0.9.2] - 2025-06-05
+
+### Fixes
+
+- storage: remove outdated unsynced slots ([#60](https://github.com/lamports-dev/alpamayo/pull/60))
+
 ## [0.9.1] - 2025-06-05
 
 ### Fixes
