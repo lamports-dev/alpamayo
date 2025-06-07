@@ -47,8 +47,8 @@ use {
         custom_error::RpcCustomError,
         request::{MAX_GET_CONFIRMED_BLOCKS_RANGE, MAX_GET_SIGNATURE_STATUSES_QUERY_ITEMS},
         response::{
-            RpcBlockhash, RpcConfirmedTransactionStatusWithSignature, RpcInflationReward,
-            RpcResponseContext, RpcVersionInfo,
+            Response as RpcResponse, RpcBlockhash, RpcConfirmedTransactionStatusWithSignature,
+            RpcInflationReward, RpcResponseContext, RpcVersionInfo,
         },
     },
     solana_sdk::{
@@ -1696,7 +1696,7 @@ impl RpcRequestHandler for RpcRequestLatestBlockhash {
                 blockhash,
                 last_valid_block_height,
             } => {
-                let response = solana_rpc_client_api::response::Response {
+                let response = RpcResponse {
                     context: RpcResponseContext::new(slot),
                     value: RpcBlockhash {
                         blockhash,
@@ -2096,6 +2096,7 @@ impl RpcRequestHandler for RpcRequestSignatureStatuses {
         #[derive(Debug, Deserialize)]
         struct ReqParams {
             signature_strs: Vec<String>,
+            #[serde(default)]
             config: Option<RpcSignatureStatusConfig>,
         }
 
@@ -2180,7 +2181,7 @@ impl RpcRequestHandler for RpcRequestSignatureStatuses {
         if self.search_transaction_history
             && !self.upstream_disabled
             && self.state.upstream.is_some()
-            && !statuses.iter().any(|status| status.is_none())
+            && statuses.iter().any(|status| status.is_none())
         {
             let mut signatures_history = Vec::new();
             for (signature, status) in self.signatures.iter().zip(statuses.iter()) {
@@ -2204,7 +2205,7 @@ impl RpcRequestHandler for RpcRequestSignatureStatuses {
             }
         }
 
-        let response = solana_rpc_client_api::response::Response {
+        let response = RpcResponse {
             context: RpcResponseContext::new(self.state.stored_slots.processed_load()),
             value: statuses,
         };
@@ -2228,7 +2229,7 @@ impl RpcRequestSignatureStatuses {
                 )
                 .await?;
 
-            let result: Response<Vec<Option<TransactionStatus>>> =
+            let result: Response<RpcResponse<Vec<Option<TransactionStatus>>>> =
                 serde_json::from_slice(&bytes)
                     .map_err(|_error| anyhow::anyhow!("failed to parse json from upstream"))?;
 
@@ -2239,7 +2240,7 @@ impl RpcRequestSignatureStatuses {
             let ResponsePayload::Success(value) = result.payload else {
                 unreachable!();
             };
-            Ok(Ok(value.into_owned()))
+            Ok(Ok(value.into_owned().value))
         } else {
             Ok(Ok(vec![]))
         }
@@ -2625,7 +2626,7 @@ impl RpcRequestHandler for RpcRequestIsBlockhashValid {
         match result {
             ReadResultBlockhashValid::Timeout => anyhow::bail!("timeout"),
             ReadResultBlockhashValid::Blockhash { slot, is_valid } => {
-                let response = solana_rpc_client_api::response::Response {
+                let response = RpcResponse {
                     context: RpcResponseContext::new(slot),
                     value: is_valid,
                 };

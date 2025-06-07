@@ -16,11 +16,12 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Breaking
 
-## [0.9.2] - 2025-06-07
+## [0.9.3] - 2025-06-07
 
 ### Fixes
 
 - rpc: fix default params ([#61](https://github.com/lamports-dev/alpamayo/pull/61))
+- rpc: fix gSS upstream parsing ([#62](https://github.com/lamports-dev/alpamayo/pull/62))
 
 ## [0.9.2] - 2025-06-05
 
