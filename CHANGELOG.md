@@ -16,6 +16,12 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Breaking
 
+## [0.9.2] - 2025-06-07
+
+### Fixes
+
+- rpc: fix default params ([#61](https://github.com/lamports-dev/alpamayo/pull/61))
+
 ## [0.9.2] - 2025-06-05
 
 ### Fixes

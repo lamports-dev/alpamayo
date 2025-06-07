@@ -659,13 +659,17 @@ impl RpcRequestHandler for RpcRequestBlockHeight {
         _upstream_disabled: bool,
         request: Request<'_>,
     ) -> Result<Self, Vec<u8>> {
-        #[derive(Debug, Deserialize)]
+        #[derive(Debug, Default, Deserialize)]
         struct ReqParams {
             #[serde(default)]
             config: Option<RpcContextConfig>,
         }
 
-        let (id, ReqParams { config }) = parse_params(request)?;
+        let (id, ReqParams { config }) = if request.params.is_some() {
+            parse_params(request)?
+        } else {
+            (request.id, Default::default())
+        };
         let RpcContextConfig {
             commitment,
             min_context_slot,
@@ -1131,7 +1135,7 @@ impl RpcRequestHandler for RpcRequestInflationReward {
         upstream_disabled: bool,
         request: Request<'_>,
     ) -> Result<Self, Vec<u8>> {
-        #[derive(Debug, Deserialize)]
+        #[derive(Debug, Default, Deserialize)]
         struct ReqParams {
             #[serde(default)]
             address_strs: Vec<String>,
@@ -1145,7 +1149,11 @@ impl RpcRequestHandler for RpcRequestInflationReward {
                 address_strs,
                 config,
             },
-        ) = parse_params(request)?;
+        ) = if request.params.is_some() {
+            parse_params(request)?
+        } else {
+            (request.id, Default::default())
+        };
         let mut addresses = Vec::with_capacity(address_strs.len());
         for address_str in address_strs.iter() {
             match verify_pubkey(address_str) {
@@ -1638,7 +1646,7 @@ impl RpcRequestHandler for RpcRequestLatestBlockhash {
         _upstream_disabled: bool,
         request: Request<'_>,
     ) -> Result<Self, Vec<u8>> {
-        #[derive(Debug, Deserialize)]
+        #[derive(Debug, Default, Deserialize)]
         struct ReqParams {
             #[serde(default)]
             config: Option<RpcContextConfig>,
@@ -1721,7 +1729,7 @@ impl RpcRequestHandler for RpcRequestLeaderSchedule {
         _upstream_disabled: bool,
         request: Request<'_>,
     ) -> Result<Self, Vec<u8>> {
-        #[derive(Debug, Deserialize)]
+        #[derive(Debug, Default, Deserialize)]
         struct ReqParams {
             #[serde(default)]
             options: Option<RpcLeaderScheduleConfigWrapper>,
@@ -1729,7 +1737,11 @@ impl RpcRequestHandler for RpcRequestLeaderSchedule {
             config: Option<RpcLeaderScheduleConfig>,
         }
 
-        let (id, ReqParams { options, config }) = parse_params(request)?;
+        let (id, ReqParams { options, config }) = if request.params.is_some() {
+            parse_params(request)?
+        } else {
+            (request.id, Default::default())
+        };
         let (slot, maybe_config) = options.map(|options| options.unzip()).unwrap_or_default();
         let config = maybe_config.or(config).unwrap_or_default();
 
@@ -1800,7 +1812,7 @@ impl RpcRequestHandler for RpcRequestRecentPrioritizationFees {
         _upstream_disabled: bool,
         request: Request<'_>,
     ) -> Result<Self, Vec<u8>> {
-        #[derive(Debug, Deserialize)]
+        #[derive(Debug, Default, Deserialize)]
         struct ReqParams {
             #[serde(default)]
             pubkey_strs: Option<Vec<String>>,
@@ -1814,7 +1826,11 @@ impl RpcRequestHandler for RpcRequestRecentPrioritizationFees {
                 pubkey_strs,
                 config,
             },
-        ) = parse_params(request)?;
+        ) = if request.params.is_some() {
+            parse_params(request)?
+        } else {
+            (request.id, Default::default())
+        };
 
         let pubkey_strs = pubkey_strs.unwrap_or_default();
         if pubkey_strs.len() > MAX_TX_ACCOUNT_LOCKS {
@@ -2240,13 +2256,17 @@ impl RpcRequestHandler for RpcRequestSlot {
         _upstream_disabled: bool,
         request: Request<'_>,
     ) -> Result<Self, Vec<u8>> {
-        #[derive(Debug, Deserialize)]
+        #[derive(Debug, Default, Deserialize)]
         struct ReqParams {
             #[serde(default)]
             config: Option<RpcContextConfig>,
         }
 
-        let (id, ReqParams { config }) = parse_params(request)?;
+        let (id, ReqParams { config }) = if request.params.is_some() {
+            parse_params(request)?
+        } else {
+            (request.id, Default::default())
+        };
         let RpcContextConfig {
             commitment,
             min_context_slot,
