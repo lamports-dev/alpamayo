@@ -177,7 +177,7 @@ impl SlotExtraIndex {
 
 #[derive(Debug, Default, Clone)]
 pub struct SlotExtraIndexValue {
-    pub transactions: Vec<[u8; 8]>,
+    pub transactions: Vec<[u8; 10]>,
     pub sfa: Vec<[u8; 8]>,
 }
 
@@ -231,9 +231,13 @@ impl ColumnName for TransactionIndex {
 }
 
 impl TransactionIndex {
-    pub fn encode(signature: &Signature) -> [u8; 8] {
+    pub fn encode(signature: &Signature) -> [u8; 10] {
+        let mut bytes = [0; 10];
         let hash = HASHER.with(|hasher| hasher.hash_one(signature));
-        hash.to_be_bytes()
+        bytes[0..8].copy_from_slice(&hash.to_be_bytes());
+        bytes[8] = signature.as_ref()[0];
+        bytes[9] = signature.as_ref()[63];
+        bytes
     }
 }
 
@@ -1303,7 +1307,7 @@ impl RocksdbRead {
                 }
                 ReadRequest::SignatureStatuses { signatures, tx } => {
                     let _ = tx
-                        .send(Self::spawn_signatire_statuses(&db, signatures))
+                        .send(Self::spawn_signature_statuses(&db, signatures))
                         .is_err();
                 }
                 ReadRequest::InflationReward {
@@ -1405,7 +1409,7 @@ impl RocksdbRead {
         Ok((signatures, finished))
     }
 
-    fn spawn_signatire_statuses(
+    fn spawn_signature_statuses(
         db: &DB,
         signatures: Vec<Signature>,
     ) -> anyhow::Result<Vec<(Signature, TransactionIndexValue<'static>)>> {

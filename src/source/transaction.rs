@@ -11,7 +11,7 @@ use {
 
 #[derive(Debug)]
 pub struct TransactionWithBinary {
-    pub key: [u8; 8],
+    pub key: [u8; 10],
     pub signature: Signature,
     pub err: Option<TransactionError>,
     pub sfa: Vec<SignatureForAddress>,

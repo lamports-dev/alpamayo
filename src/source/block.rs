@@ -25,7 +25,7 @@ use {
 
 #[derive(Debug, Clone)]
 pub struct BlockTransactionOffset {
-    pub key: [u8; 8],
+    pub key: [u8; 10],
     pub offset: u64,
     pub size: u64,
     pub err: Option<TransactionError>,
