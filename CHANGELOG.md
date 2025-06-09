@@ -16,7 +16,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Breaking
 
-## [0.10.0] - 2025-06-??
+## [0.10.0] - 2025-06-09
 
 ### Breaking
 

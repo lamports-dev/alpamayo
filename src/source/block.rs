@@ -3,6 +3,7 @@ use {
         source::{
             fees::TransactionsFees, sfa::SignaturesForAddress, transaction::TransactionWithBinary,
         },
+        storage::rocksdb::HashedKey,
         util::HashMap,
     },
     prost::{
@@ -25,7 +26,7 @@ use {
 
 #[derive(Debug, Clone)]
 pub struct BlockTransactionOffset {
-    pub key: [u8; 10],
+    pub key: HashedKey,
     pub offset: u64,
     pub size: u64,
     pub err: Option<TransactionError>,

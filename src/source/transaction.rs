@@ -1,7 +1,7 @@
 use {
     crate::{
         source::{fees::TransactionFees, sfa::SignatureForAddress},
-        storage::rocksdb::TransactionIndex,
+        storage::rocksdb::{HashedKey, TransactionIndex},
     },
     prost::Message as _,
     solana_sdk::{clock::Slot, signature::Signature, transaction::TransactionError},
@@ -11,7 +11,7 @@ use {
 
 #[derive(Debug)]
 pub struct TransactionWithBinary {
-    pub key: [u8; 10],
+    pub key: HashedKey,
     pub signature: Signature,
     pub err: Option<TransactionError>,
     pub sfa: Vec<SignatureForAddress>,

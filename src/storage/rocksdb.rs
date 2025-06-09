@@ -48,6 +48,17 @@ thread_local! {
     static HASHER: SeedableRandomState = SeedableRandomState::fixed();
 }
 
+pub type HashedKey = [u8; 10];
+
+fn make_hashed_key(key: &[u8]) -> HashedKey {
+    let mut bytes = HashedKey::default();
+    let hash = HASHER.with(|hasher| hasher.hash_one(key));
+    bytes[0..8].copy_from_slice(&hash.to_be_bytes());
+    bytes[8] = key[0];
+    bytes[9] = key[key.len() - 1];
+    bytes
+}
+
 trait ColumnName {
     const NAME: &'static str;
 }
@@ -177,8 +188,8 @@ impl SlotExtraIndex {
 
 #[derive(Debug, Default, Clone)]
 pub struct SlotExtraIndexValue {
-    pub transactions: Vec<[u8; 10]>,
-    pub sfa: Vec<[u8; 10]>,
+    pub transactions: Vec<HashedKey>,
+    pub sfa: Vec<HashedKey>,
 }
 
 impl SlotExtraIndexValue {
@@ -231,13 +242,8 @@ impl ColumnName for TransactionIndex {
 }
 
 impl TransactionIndex {
-    pub fn encode(signature: &Signature) -> [u8; 10] {
-        let mut bytes = [0; 10];
-        let hash = HASHER.with(|hasher| hasher.hash_one(signature));
-        bytes[0..8].copy_from_slice(&hash.to_be_bytes());
-        bytes[8] = signature.as_ref()[0];
-        bytes[9] = signature.as_ref()[63];
-        bytes
+    pub fn encode(signature: &Signature) -> HashedKey {
+        make_hashed_key(signature.as_ref())
     }
 }
 
@@ -291,16 +297,11 @@ impl ColumnName for SfaIndex {
 }
 
 impl SfaIndex {
-    pub fn address_hash(address: &Pubkey) -> [u8; 10] {
-        let mut bytes = [0; 10];
-        let hash = HASHER.with(|hasher| hasher.hash_one(address));
-        bytes[0..8].copy_from_slice(&hash.to_be_bytes());
-        bytes[8] = address.as_ref()[0];
-        bytes[9] = address.as_ref()[31];
-        bytes
+    pub fn address_hash(address: &Pubkey) -> HashedKey {
+        make_hashed_key(address.as_ref())
     }
 
-    pub fn concat(address_hash: [u8; 10], slot: Slot) -> [u8; 18] {
+    pub fn concat(address_hash: HashedKey, slot: Slot) -> [u8; 18] {
         let mut key = [0; 18];
         key[0..10].copy_from_slice(&address_hash);
         key[10..].copy_from_slice(&slot.to_be_bytes());
@@ -311,7 +312,7 @@ impl SfaIndex {
         Self::concat(Self::address_hash(address), slot)
     }
 
-    pub fn decode(slice: &[u8]) -> anyhow::Result<([u8; 10], Slot)> {
+    pub fn decode(slice: &[u8]) -> anyhow::Result<(HashedKey, Slot)> {
         anyhow::ensure!(slice.len() == 18, "invalid key length: {}", slice.len());
         Ok((
             slice[0..10].try_into().expect("valid len"),

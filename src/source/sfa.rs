@@ -1,5 +1,5 @@
 use {
-    crate::storage::rocksdb::SfaIndex,
+    crate::storage::rocksdb::{HashedKey, SfaIndex},
     solana_sdk::{
         clock::Slot, pubkey::Pubkey, signature::Signature, transaction::TransactionError,
     },
@@ -8,7 +8,7 @@ use {
 #[derive(Debug)]
 pub struct SignatureForAddress {
     pub key: [u8; 18],
-    pub address_hash: [u8; 10],
+    pub address_hash: HashedKey,
     pub address: Pubkey,
     pub signature: Signature,
     pub err: Option<TransactionError>,
@@ -37,7 +37,7 @@ impl SignatureForAddress {
 #[derive(Debug)]
 pub struct SignaturesForAddress {
     pub key: [u8; 18],
-    pub address_hash: [u8; 10],
+    pub address_hash: HashedKey,
     pub signatures: Vec<SignatureStatus>,
 }
 
