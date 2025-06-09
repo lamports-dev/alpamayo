@@ -7,8 +7,8 @@ use {
 
 #[derive(Debug)]
 pub struct SignatureForAddress {
-    pub key: [u8; 16],
-    pub address_hash: [u8; 8],
+    pub key: [u8; 18],
+    pub address_hash: [u8; 10],
     pub address: Pubkey,
     pub signature: Signature,
     pub err: Option<TransactionError>,
@@ -36,8 +36,8 @@ impl SignatureForAddress {
 
 #[derive(Debug)]
 pub struct SignaturesForAddress {
-    pub key: [u8; 16],
-    pub address_hash: [u8; 8],
+    pub key: [u8; 18],
+    pub address_hash: [u8; 10],
     pub signatures: Vec<SignatureStatus>,
 }
 

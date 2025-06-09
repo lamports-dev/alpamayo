@@ -178,7 +178,7 @@ impl SlotExtraIndex {
 #[derive(Debug, Default, Clone)]
 pub struct SlotExtraIndexValue {
     pub transactions: Vec<[u8; 10]>,
-    pub sfa: Vec<[u8; 8]>,
+    pub sfa: Vec<[u8; 10]>,
 }
 
 impl SlotExtraIndexValue {
@@ -291,26 +291,31 @@ impl ColumnName for SfaIndex {
 }
 
 impl SfaIndex {
-    pub fn address_hash(address: &Pubkey) -> [u8; 8] {
-        HASHER.with(|hasher| hasher.hash_one(address)).to_be_bytes()
+    pub fn address_hash(address: &Pubkey) -> [u8; 10] {
+        let mut bytes = [0; 10];
+        let hash = HASHER.with(|hasher| hasher.hash_one(address));
+        bytes[0..8].copy_from_slice(&hash.to_be_bytes());
+        bytes[8] = address.as_ref()[0];
+        bytes[9] = address.as_ref()[31];
+        bytes
     }
 
-    pub fn concat(address_hash: [u8; 8], slot: Slot) -> [u8; 16] {
-        let mut key = [0; 16];
-        key[0..8].copy_from_slice(&address_hash);
-        key[8..].copy_from_slice(&slot.to_be_bytes());
+    pub fn concat(address_hash: [u8; 10], slot: Slot) -> [u8; 18] {
+        let mut key = [0; 18];
+        key[0..10].copy_from_slice(&address_hash);
+        key[10..].copy_from_slice(&slot.to_be_bytes());
         key
     }
 
-    pub fn encode(address: &Pubkey, slot: Slot) -> [u8; 16] {
+    pub fn encode(address: &Pubkey, slot: Slot) -> [u8; 18] {
         Self::concat(Self::address_hash(address), slot)
     }
 
-    pub fn decode(slice: &[u8]) -> anyhow::Result<([u8; 8], Slot)> {
-        anyhow::ensure!(slice.len() == 16, "invalid key length: {}", slice.len());
+    pub fn decode(slice: &[u8]) -> anyhow::Result<([u8; 10], Slot)> {
+        anyhow::ensure!(slice.len() == 18, "invalid key length: {}", slice.len());
         Ok((
-            slice[0..8].try_into().expect("valid len"),
-            Slot::from_be_bytes(slice[8..].try_into().expect("valid len")),
+            slice[0..10].try_into().expect("valid len"),
+            Slot::from_be_bytes(slice[10..].try_into().expect("valid len")),
         ))
     }
 }
