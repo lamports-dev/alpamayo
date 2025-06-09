@@ -151,9 +151,7 @@ impl HttpSource {
     }
 
     async fn get_block_http(&self, slot: Slot) -> Option<BlockWithBinary> {
-        let Some((url, client)) = self.httpurl.as_ref() else {
-            return None;
-        };
+        let (url, client) = self.httpurl.as_ref()?;
 
         let url = url.join(&format!("block/{slot}")).ok()?;
         let permit = self.semaphore.acquire().await.expect("unclosed");
