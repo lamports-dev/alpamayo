@@ -291,7 +291,7 @@ async fn start2(
 
             // get blocks
             while next_request_slot <= next_confirmed_slot && !http_blocks.is_full() {
-                http_blocks.fetch(next_request_slot);
+                http_blocks.fetch(next_request_slot, true);
                 next_request_slot += 1;
             }
 
@@ -383,14 +383,14 @@ async fn start2(
                         if block.get_slot() > next_confirmed_slot {
                             for slot in next_confirmed_slot..block.get_slot() {
                                 if !queued_slots_front.contains_key(&slot) {
-                                    http_blocks.fetch(slot);
+                                    http_blocks.fetch(slot, false);
                                 }
                             }
                         }
 
                         match block {
                             MemoryConfirmedBlock::Missed { slot } => {
-                                http_blocks.fetch(slot);
+                                http_blocks.fetch(slot, false);
                             },
                             MemoryConfirmedBlock::Dead { slot } => {
                                 queued_slots_front.insert(slot, None);
@@ -446,7 +446,7 @@ async fn start2(
                 }
 
                 while next_back_request_slot >= backfill_upto_value && !http_blocks.is_full() {
-                    http_blocks.fetch(next_back_request_slot);
+                    http_blocks.fetch(next_back_request_slot, true);
                     next_back_request_slot -= 1;
                 }
 
@@ -548,7 +548,7 @@ impl HttpBlocks {
         self.requests.len() >= self.concurrency
     }
 
-    fn fetch(&self, slot: Slot) {
+    fn fetch(&self, slot: Slot, httpget: bool) {
         let mut locked = self.inprogress.lock().expect("unpoisoned");
         if !locked.insert(slot) {
             return;
@@ -559,7 +559,7 @@ impl HttpBlocks {
         let mut backoff_wait = self.getblock_backoff_init;
         self.requests.push(spawn_local(async move {
             loop {
-                match http.get_block(slot).await {
+                match http.get_block(slot, httpget).await {
                     Ok(block) => break Ok((slot, Some(block))),
                     Err(error) => {
                         if matches!(error, HttpSourceConnectedError::SendError) {

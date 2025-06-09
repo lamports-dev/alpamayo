@@ -30,6 +30,7 @@ pub enum HttpRequest {
     },
     Block {
         slot: Slot,
+        httpget: bool,
         tx: oneshot::Sender<Result<BlockWithBinary, GetBlockError>>,
     },
 }
@@ -82,9 +83,10 @@ impl HttpSourceConnected {
     pub async fn get_block(
         &self,
         slot: Slot,
+        httpget: bool,
     ) -> HttpSourceConnectedResult<BlockWithBinary, GetBlockError> {
         let (tx, rx) = oneshot::channel();
-        self.send(HttpRequest::Block { slot, tx }, rx).await
+        self.send(HttpRequest::Block { slot, httpget, tx }, rx).await
     }
 
     pub async fn get_first_available_block(&self) -> HttpSourceConnectedResult<Slot, ClientError> {
@@ -189,8 +191,8 @@ fn handle_http(item: Option<HttpRequest>, http: Arc<HttpSource>) -> bool {
                         let result = http.get_first_available_block().await;
                         let _ = tx.send(result);
                     }
-                    HttpRequest::Block { slot, tx } => {
-                        let result = http.get_block(slot).await;
+                    HttpRequest::Block { slot, httpget, tx } => {
+                        let result = http.get_block(slot, httpget).await;
                         let _ = tx.send(result);
                     }
                 }

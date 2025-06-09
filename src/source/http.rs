@@ -117,7 +117,11 @@ impl HttpSource {
         self.client.get_first_available_block().await
     }
 
-    pub async fn get_block(&self, slot: Slot) -> Result<BlockWithBinary, GetBlockError> {
+    pub async fn get_block(&self, slot: Slot, httpget: bool) -> Result<BlockWithBinary, GetBlockError> {
+        self.get_block_rpc(slot).await
+    }
+
+    async fn get_block_rpc(&self, slot: Slot) -> Result<BlockWithBinary, GetBlockError> {
         let config = RpcBlockConfig {
             encoding: Some(UiTransactionEncoding::Base64),
             transaction_details: Some(TransactionDetails::Full),

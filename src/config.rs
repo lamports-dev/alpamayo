@@ -85,6 +85,7 @@ pub struct ConfigSource {
 #[serde(deny_unknown_fields, default)]
 pub struct ConfigSourceHttp {
     pub rpc: String,
+    pub httpget: Option<String>,
     #[serde(with = "humantime_serde")]
     pub timeout: Duration,
     #[serde(deserialize_with = "deserialize_num_str")]
@@ -95,6 +96,7 @@ impl Default for ConfigSourceHttp {
     fn default() -> Self {
         Self {
             rpc: "http://127.0.0.1:8899".to_owned(),
+            httpget: None,
             timeout: Duration::from_secs(30),
             concurrency: 10,
         }
