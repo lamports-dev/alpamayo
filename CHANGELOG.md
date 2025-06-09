@@ -16,6 +16,12 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Breaking
 
+## [0.10.0] - 2025-06-??
+
+### Breaking
+
+- storage: add bytes to hashes ([#63](https://github.com/lamports-dev/alpamayo/pull/63))
+
 ## [0.9.3] - 2025-06-07
 
 ### Fixes
