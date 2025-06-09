@@ -86,7 +86,8 @@ impl HttpSourceConnected {
         httpget: bool,
     ) -> HttpSourceConnectedResult<BlockWithBinary, GetBlockError> {
         let (tx, rx) = oneshot::channel();
-        self.send(HttpRequest::Block { slot, httpget, tx }, rx).await
+        self.send(HttpRequest::Block { slot, httpget, tx }, rx)
+            .await
     }
 
     pub async fn get_first_available_block(&self) -> HttpSourceConnectedResult<Slot, ClientError> {
