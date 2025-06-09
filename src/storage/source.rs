@@ -3,7 +3,7 @@ use {
         config::{ConfigSource, ConfigSourceStream},
         source::{
             block::BlockWithBinary,
-            rpc::{GetBlockError, RpcSource},
+            http::{GetBlockError, HttpSource},
             stream::{StreamSource, StreamSourceMessage},
         },
     },
@@ -21,7 +21,7 @@ use {
 };
 
 #[derive(Debug)]
-pub enum RpcRequest {
+pub enum HttpRequest {
     Slots {
         tx: oneshot::Sender<Result<(Slot, Slot), ClientError>>,
     },
@@ -35,7 +35,7 @@ pub enum RpcRequest {
 }
 
 #[derive(Debug, Error)]
-pub enum RpcSourceConnectedError<E> {
+pub enum HttpSourceConnectedError<E> {
     #[error("send channel is closed")]
     SendError,
     #[error("recv channel is closed")]
@@ -44,63 +44,63 @@ pub enum RpcSourceConnectedError<E> {
     Error(#[from] E),
 }
 
-pub type RpcSourceConnectedResult<T, E> = Result<T, RpcSourceConnectedError<E>>;
+pub type HttpSourceConnectedResult<T, E> = Result<T, HttpSourceConnectedError<E>>;
 
 #[derive(Debug, Clone)]
-pub struct RpcSourceConnected {
-    rpc_tx: mpsc::Sender<RpcRequest>,
+pub struct HttpSourceConnected {
+    http_tx: mpsc::Sender<HttpRequest>,
 }
 
-impl RpcSourceConnected {
-    pub fn new() -> (Self, mpsc::Receiver<RpcRequest>) {
-        let (rpc_tx, rpc_rx) = mpsc::channel(1);
-        let this = Self { rpc_tx };
-        (this, rpc_rx)
+impl HttpSourceConnected {
+    pub fn new() -> (Self, mpsc::Receiver<HttpRequest>) {
+        let (http_tx, http_rx) = mpsc::channel(1);
+        let this = Self { http_tx };
+        (this, http_rx)
     }
 
     async fn send<T, E>(
         &self,
-        request: RpcRequest,
+        request: HttpRequest,
         rx: oneshot::Receiver<Result<T, E>>,
-    ) -> RpcSourceConnectedResult<T, E> {
-        if self.rpc_tx.send(request).await.is_err() {
-            Err(RpcSourceConnectedError::SendError)
+    ) -> HttpSourceConnectedResult<T, E> {
+        if self.http_tx.send(request).await.is_err() {
+            Err(HttpSourceConnectedError::SendError)
         } else {
             match rx.await {
                 Ok(Ok(result)) => Ok(result),
-                Ok(Err(error)) => Err(RpcSourceConnectedError::Error(error)),
-                Err(_) => Err(RpcSourceConnectedError::RecvError),
+                Ok(Err(error)) => Err(HttpSourceConnectedError::Error(error)),
+                Err(_) => Err(HttpSourceConnectedError::RecvError),
             }
         }
     }
 
-    pub async fn get_slots(&self) -> RpcSourceConnectedResult<(Slot, Slot), ClientError> {
+    pub async fn get_slots(&self) -> HttpSourceConnectedResult<(Slot, Slot), ClientError> {
         let (tx, rx) = oneshot::channel();
-        self.send(RpcRequest::Slots { tx }, rx).await
+        self.send(HttpRequest::Slots { tx }, rx).await
     }
 
     pub async fn get_block(
         &self,
         slot: Slot,
-    ) -> RpcSourceConnectedResult<BlockWithBinary, GetBlockError> {
+    ) -> HttpSourceConnectedResult<BlockWithBinary, GetBlockError> {
         let (tx, rx) = oneshot::channel();
-        self.send(RpcRequest::Block { slot, tx }, rx).await
+        self.send(HttpRequest::Block { slot, tx }, rx).await
     }
 
-    pub async fn get_first_available_block(&self) -> RpcSourceConnectedResult<Slot, ClientError> {
+    pub async fn get_first_available_block(&self) -> HttpSourceConnectedResult<Slot, ClientError> {
         let (tx, rx) = oneshot::channel();
-        self.send(RpcRequest::FirstAvailableBlock { tx }, rx).await
+        self.send(HttpRequest::FirstAvailableBlock { tx }, rx).await
     }
 }
 
 pub async fn start(
     config: ConfigSource,
-    mut rpc_rx: mpsc::Receiver<RpcRequest>,
+    mut http_rx: mpsc::Receiver<HttpRequest>,
     stream_start: Arc<Notify>,
     stream_tx: mpsc::Sender<StreamSourceMessage>,
     shutdown: Shutdown,
 ) -> anyhow::Result<()> {
-    let rpc = Arc::new(RpcSource::new(config.rpc).await?);
+    let http = Arc::new(HttpSource::new(config.http).await?);
     let stream = start_stream(config.stream, stream_tx, stream_start);
 
     tokio::pin!(shutdown);
@@ -110,7 +110,7 @@ pub async fn start(
     while !finished {
         finished = tokio::select! {
             () = &mut shutdown => true,
-            item = rpc_rx.recv() => handle_rpc(item, Arc::clone(&rpc)),
+            item = http_rx.recv() => handle_http(item, Arc::clone(&http)),
             result = &mut stream => return result,
         };
     }
@@ -175,22 +175,22 @@ async fn start_stream(
     }
 }
 
-fn handle_rpc(item: Option<RpcRequest>, rpc: Arc<RpcSource>) -> bool {
+fn handle_http(item: Option<HttpRequest>, http: Arc<HttpSource>) -> bool {
     match item {
         Some(request) => {
             tokio::spawn(async move {
                 match request {
-                    RpcRequest::Slots { tx } => {
+                    HttpRequest::Slots { tx } => {
                         let result =
-                            tokio::try_join!(rpc.get_finalized_slot(), rpc.get_confirmed_slot());
+                            tokio::try_join!(http.get_finalized_slot(), http.get_confirmed_slot());
                         let _ = tx.send(result);
                     }
-                    RpcRequest::FirstAvailableBlock { tx } => {
-                        let result = rpc.get_first_available_block().await;
+                    HttpRequest::FirstAvailableBlock { tx } => {
+                        let result = http.get_first_available_block().await;
                         let _ = tx.send(result);
                     }
-                    RpcRequest::Block { slot, tx } => {
-                        let result = rpc.get_block(slot).await;
+                    HttpRequest::Block { slot, tx } => {
+                        let result = http.get_block(slot).await;
                         let _ = tx.send(result);
                     }
                 }

@@ -77,24 +77,24 @@ pub struct ConfigSource {
     /// Tokio runtime: subscribe on new data, rpc requests, metrics server
     #[serde(default)]
     pub tokio: ConfigTokio,
-    pub rpc: ConfigSourceRpc,
+    pub http: ConfigSourceHttp,
     pub stream: ConfigSourceStream,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields, default)]
-pub struct ConfigSourceRpc {
-    pub url: String,
+pub struct ConfigSourceHttp {
+    pub rpc: String,
     #[serde(with = "humantime_serde")]
     pub timeout: Duration,
     #[serde(deserialize_with = "deserialize_num_str")]
     pub concurrency: usize,
 }
 
-impl Default for ConfigSourceRpc {
+impl Default for ConfigSourceHttp {
     fn default() -> Self {
         Self {
-            url: "http://127.0.0.1:8899".to_owned(),
+            rpc: "http://127.0.0.1:8899".to_owned(),
             timeout: Duration::from_secs(30),
             concurrency: 10,
         }
@@ -167,24 +167,24 @@ pub struct ConfigStorageBlocks {
     #[serde(deserialize_with = "deserialize_num_str")]
     pub max: usize,
     #[serde(
-        default = "ConfigStorageBlocks::default_rpc_getblock_max_retries",
+        default = "ConfigStorageBlocks::default_http_getblock_max_retries",
         deserialize_with = "deserialize_num_str"
     )]
-    pub rpc_getblock_max_retries: usize,
+    pub http_getblock_max_retries: usize,
     #[serde(
-        default = "ConfigStorageBlocks::default_rpc_getblock_backoff_init",
+        default = "ConfigStorageBlocks::default_http_getblock_backoff_init",
         with = "humantime_serde"
     )]
-    pub rpc_getblock_backoff_init: Duration,
+    pub http_getblock_backoff_init: Duration,
     pub files: Vec<ConfigStorageFile>,
 }
 
 impl ConfigStorageBlocks {
-    const fn default_rpc_getblock_max_retries() -> usize {
+    const fn default_http_getblock_max_retries() -> usize {
         10
     }
 
-    const fn default_rpc_getblock_backoff_init() -> Duration {
+    const fn default_http_getblock_backoff_init() -> Duration {
         Duration::from_millis(100)
     }
 }

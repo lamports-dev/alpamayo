@@ -11,9 +11,10 @@ source:
   tokio:
     worker_threads: 2 # Number of threads in Tokio runtime, by default all available cores
     affinity: 0-1 # Pin threads to specific CPUs, optional
-  # RPC endpoint, used for edge-cases, catch-up on restart / stream reconnect and backfilling
-  rpc:
-    url: http://127.0.0.1:8899/
+  # RPC endpoint, used for edge-cases, stream reconnect, catch-up on restart, and backfilling
+  # HttpGet endpoint can be used for catch-up on restart and backfilling
+  http:
+    rpc: http://127.0.0.1:8899/
     timeout: 30s
     concurrency: 10 # Max number of requests in progress at one moment
   # Geyser stream
@@ -46,8 +47,8 @@ storage:
     sync_to: 338_669_763
   blocks:
     max: 1_000 # Max number of stored slots, once limit is reached old blocks will be pruned
-    rpc_getblock_max_retries: 10 # Max retries when trying to fetch blocks from RPC
-    rpc_getblock_backoff_init: 100ms # Initial exponentional retry delay
+    http_getblock_max_retries: 10 # Max retries when trying to fetch blocks from RPC
+    http_getblock_backoff_init: 100ms # Initial exponentional retry delay
     # Files to store blocks in protobuf, can be on different disks
     # Used in round-robin schedule. Once all space is used old blocks will be pruned
     files:

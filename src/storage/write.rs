@@ -4,7 +4,7 @@ use {
         metrics::WRITE_BLOCK_SYNC_SECONDS,
         source::{
             block::BlockWithBinary,
-            rpc::GetBlockError,
+            http::GetBlockError,
             stream::{StreamSourceMessage, StreamSourceSlotStatus},
         },
         storage::{
@@ -13,7 +13,7 @@ use {
             memory::{MemoryConfirmedBlock, StorageMemory},
             rocksdb::{RocksdbRead, RocksdbWrite},
             slots::StoredSlots,
-            source::{RpcSourceConnected, RpcSourceConnectedError},
+            source::{HttpSourceConnected, HttpSourceConnectedError},
             sync::ReadWriteSyncMessage,
         },
         util::{HashMap, HashSet},
@@ -57,8 +57,8 @@ pub fn start(
     stored_slots: StoredSlots,
     db_write: RocksdbWrite,
     db_read: RocksdbRead,
-    rpc_storage_source: RpcSourceConnected,
-    rpc_concurrency: usize,
+    http_storage_source: HttpSourceConnected,
+    http_concurrency: usize,
     stream_start: Arc<Notify>,
     stream_rx: mpsc::Receiver<StreamSourceMessage>,
     sync_tx: broadcast::Sender<ReadWriteSyncMessage>,
@@ -77,8 +77,8 @@ pub fn start(
                         .expect("failed to set affinity")
                 }
 
-                let rpc_getblock_max_retries = config.blocks.rpc_getblock_max_retries;
-                let rpc_getblock_backoff_init = config.blocks.rpc_getblock_backoff_init;
+                let http_getblock_max_retries = config.blocks.http_getblock_max_retries;
+                let http_getblock_backoff_init = config.blocks.http_getblock_backoff_init;
 
                 let files = config.blocks.files.clone();
                 let blocks = StoredBlocksWrite::new(
@@ -164,10 +164,10 @@ pub fn start(
                     pop_slots_front,
                     config.backfilling.map(|config| config.sync_to),
                     stored_slots,
-                    rpc_concurrency,
-                    rpc_getblock_max_retries,
-                    rpc_getblock_backoff_init,
-                    Arc::new(rpc_storage_source),
+                    http_concurrency,
+                    http_getblock_max_retries,
+                    http_getblock_backoff_init,
+                    Arc::new(http_storage_source),
                     stream_start,
                     stream_rx,
                     blocks,
@@ -192,10 +192,10 @@ async fn start2(
     pop_slots_front: Option<usize>,
     mut backfill_upto: Option<Slot>,
     stored_slots: StoredSlots,
-    rpc_concurrency: usize,
-    rpc_getblock_max_retries: usize,
-    rpc_getblock_backoff_init: Duration,
-    rpc: Arc<RpcSourceConnected>,
+    http_concurrency: usize,
+    http_getblock_max_retries: usize,
+    http_getblock_backoff_init: Duration,
+    http: Arc<HttpSourceConnected>,
     stream_start: Arc<Notify>,
     mut stream_rx: mpsc::Receiver<StreamSourceMessage>,
     mut blocks: StoredBlocksWrite,
@@ -230,28 +230,28 @@ async fn start2(
 
     // check backfill_upto
     if let Some(backfill_upto) = backfill_upto {
-        let first_available_block = rpc.get_first_available_block().await?;
+        let first_available_block = http.get_first_available_block().await?;
         anyhow::ensure!(
             backfill_upto >= first_available_block,
             "trying to backfill to {backfill_upto} while first available is {first_available_block}"
         );
     }
 
-    // rpc blocks & queue of confirmed blocks
-    let mut rpc_blocks = RpcBlocks::new(
-        Arc::clone(&rpc),
-        rpc_concurrency,
-        rpc_getblock_max_retries,
-        rpc_getblock_backoff_init,
+    // http blocks & queue of confirmed blocks
+    let mut http_blocks = HttpBlocks::new(
+        Arc::clone(&http),
+        http_concurrency,
+        http_getblock_max_retries,
+        http_getblock_backoff_init,
     );
     let mut queued_slots_back = HashMap::<Slot, Option<Arc<BlockWithBinary>>>::default();
     let mut queued_slots_front = HashMap::<Slot, Option<Arc<BlockWithBinary>>>::default();
 
     // fill the gap between stored and new
-    let mut next_confirmed_slot = load_confirmed_slot(&rpc, &stored_slots, &sync_tx).await?;
+    let mut next_confirmed_slot = load_confirmed_slot(&http, &stored_slots, &sync_tx).await?;
     if let Some(slot) = blocks.get_front_slot() {
         let mut next_confirmed_slot_last_update = Instant::now();
-        let mut next_rpc_request_slot = slot + 1;
+        let mut next_request_slot = slot + 1;
         let mut next_database_slot = slot + 1;
         info!(
             next_database_slot,
@@ -269,7 +269,7 @@ async fn start2(
         loop {
             // update confirmed slot every 2s
             if next_confirmed_slot_last_update.elapsed() > Duration::from_secs(2) {
-                next_confirmed_slot = load_confirmed_slot(&rpc, &stored_slots, &sync_tx).await?;
+                next_confirmed_slot = load_confirmed_slot(&http, &stored_slots, &sync_tx).await?;
                 next_confirmed_slot_last_update = Instant::now();
                 info!(
                     slot_db = next_database_slot,
@@ -290,13 +290,13 @@ async fn start2(
             }
 
             // get blocks
-            while next_rpc_request_slot <= next_confirmed_slot && !rpc_blocks.is_full() {
-                rpc_blocks.fetch(next_rpc_request_slot);
-                next_rpc_request_slot += 1;
+            while next_request_slot <= next_confirmed_slot && !http_blocks.is_full() {
+                http_blocks.fetch(next_request_slot);
+                next_request_slot += 1;
             }
 
             // push block into the queue
-            match rpc_blocks.next().await {
+            match http_blocks.next().await {
                 Some(Ok((slot, block))) => {
                     if slot >= next_database_slot {
                         queued_slots_front.insert(slot, block.map(Arc::new));
@@ -333,8 +333,8 @@ async fn start2(
     loop {
         tokio::select! {
             biased;
-            // insert block requested from rpc
-            message = rpc_blocks.next() => match message {
+            // insert block requested via http/rpc
+            message = http_blocks.next() => match message {
                 Some(Ok((slot, block))) => {
                     if slot >= next_confirmed_slot {
                         queued_slots_front.insert(slot, block.map(Arc::new));
@@ -383,14 +383,14 @@ async fn start2(
                         if block.get_slot() > next_confirmed_slot {
                             for slot in next_confirmed_slot..block.get_slot() {
                                 if !queued_slots_front.contains_key(&slot) {
-                                    rpc_blocks.fetch(slot);
+                                    http_blocks.fetch(slot);
                                 }
                             }
                         }
 
                         match block {
                             MemoryConfirmedBlock::Missed { slot } => {
-                                rpc_blocks.fetch(slot);
+                                http_blocks.fetch(slot);
                             },
                             MemoryConfirmedBlock::Dead { slot } => {
                                 queued_slots_front.insert(slot, None);
@@ -445,8 +445,8 @@ async fn start2(
                     }
                 }
 
-                while next_back_request_slot >= backfill_upto_value && !rpc_blocks.is_full() {
-                    rpc_blocks.fetch(next_back_request_slot);
+                while next_back_request_slot >= backfill_upto_value && !http_blocks.is_full() {
+                    http_blocks.fetch(next_back_request_slot);
                     next_back_request_slot -= 1;
                 }
 
@@ -496,12 +496,12 @@ async fn start2(
 }
 
 async fn load_confirmed_slot(
-    rpc: &RpcSourceConnected,
+    http: &HttpSourceConnected,
     stored_slots: &StoredSlots,
     sync_tx: &broadcast::Sender<ReadWriteSyncMessage>,
 ) -> anyhow::Result<Slot> {
     let ts = Instant::now();
-    let (finalized_slot, confirmed_slot) = rpc.get_slots().await?;
+    let (finalized_slot, confirmed_slot) = http.get_slots().await?;
     // set finalized slot
     if finalized_slot >= stored_slots.first_available_load() {
         let _ = sync_tx.send(ReadWriteSyncMessage::SlotFinalized {
@@ -513,59 +513,61 @@ async fn load_confirmed_slot(
 }
 
 #[derive(Debug)]
-struct RpcBlocks {
-    rpc: Arc<RpcSourceConnected>,
-    rpc_concurrency: usize,
-    rpc_getblock_max_retries: usize,
-    rpc_getblock_backoff_init: Duration,
-    rpc_inprogress: Mutex<HashSet<Slot>>,
+struct HttpBlocks {
+    http: Arc<HttpSourceConnected>,
+    concurrency: usize,
+    getblock_max_retries: usize,
+    getblock_backoff_init: Duration,
+    inprogress: Mutex<HashSet<Slot>>,
     #[allow(clippy::type_complexity)]
-    rpc_requests: FuturesUnordered<
-        JoinHandle<Result<(Slot, Option<BlockWithBinary>), RpcSourceConnectedError<GetBlockError>>>,
+    requests: FuturesUnordered<
+        JoinHandle<
+            Result<(Slot, Option<BlockWithBinary>), HttpSourceConnectedError<GetBlockError>>,
+        >,
     >,
 }
 
-impl RpcBlocks {
+impl HttpBlocks {
     fn new(
-        rpc: Arc<RpcSourceConnected>,
-        rpc_concurrency: usize,
-        rpc_getblock_max_retries: usize,
-        rpc_getblock_backoff_init: Duration,
+        http: Arc<HttpSourceConnected>,
+        concurrency: usize,
+        getblock_max_retries: usize,
+        getblock_backoff_init: Duration,
     ) -> Self {
         Self {
-            rpc,
-            rpc_concurrency,
-            rpc_getblock_max_retries,
-            rpc_getblock_backoff_init,
-            rpc_inprogress: Mutex::default(),
-            rpc_requests: FuturesUnordered::default(),
+            http,
+            concurrency,
+            getblock_max_retries,
+            getblock_backoff_init,
+            inprogress: Mutex::default(),
+            requests: FuturesUnordered::default(),
         }
     }
 
     fn is_full(&self) -> bool {
-        self.rpc_requests.len() >= self.rpc_concurrency
+        self.requests.len() >= self.concurrency
     }
 
     fn fetch(&self, slot: Slot) {
-        let mut locked = self.rpc_inprogress.lock().expect("unpoisoned");
+        let mut locked = self.inprogress.lock().expect("unpoisoned");
         if !locked.insert(slot) {
             return;
         }
 
-        let rpc = Arc::clone(&self.rpc);
-        let mut max_retries = self.rpc_getblock_max_retries;
-        let mut backoff_wait = self.rpc_getblock_backoff_init;
-        self.rpc_requests.push(spawn_local(async move {
+        let http = Arc::clone(&self.http);
+        let mut max_retries = self.getblock_max_retries;
+        let mut backoff_wait = self.getblock_backoff_init;
+        self.requests.push(spawn_local(async move {
             loop {
-                match rpc.get_block(slot).await {
+                match http.get_block(slot).await {
                     Ok(block) => break Ok((slot, Some(block))),
                     Err(error) => {
-                        if matches!(error, RpcSourceConnectedError::SendError) {
+                        if matches!(error, HttpSourceConnectedError::SendError) {
                             break Err(error);
                         }
                         if matches!(
                             error,
-                            RpcSourceConnectedError::Error(GetBlockError::SlotSkipped(_))
+                            HttpSourceConnectedError::Error(GetBlockError::SlotSkipped(_))
                         ) {
                             break Ok((slot, None));
                         }
@@ -583,22 +585,22 @@ impl RpcBlocks {
     }
 }
 
-impl Stream for RpcBlocks {
+impl Stream for HttpBlocks {
     type Item = anyhow::Result<(Slot, Option<BlockWithBinary>)>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        if self.rpc_requests.is_empty() {
+        if self.requests.is_empty() {
             Poll::Pending
         } else {
             Poll::Ready(Some(
-                match futures::ready!(self.rpc_requests.poll_next_unpin(cx)) {
+                match futures::ready!(self.requests.poll_next_unpin(cx)) {
                     Some(Ok(Ok((slot, block)))) => {
-                        let mut locked = self.rpc_inprogress.lock().expect("unpoisoned");
+                        let mut locked = self.inprogress.lock().expect("unpoisoned");
                         locked.remove(&slot);
 
                         Ok((slot, block))
                     }
-                    Some(Ok(Err(RpcSourceConnectedError::SendError))) => return Poll::Ready(None),
+                    Some(Ok(Err(HttpSourceConnectedError::SendError))) => return Poll::Ready(None),
                     Some(Ok(Err(error))) => Err(error).context("failed to get confirmed block"),
                     Some(Err(error)) => Err(error).context("failed to join spawned task"),
                     None => unreachable!(),

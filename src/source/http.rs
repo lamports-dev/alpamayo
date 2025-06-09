@@ -1,5 +1,5 @@
 use {
-    crate::{config::ConfigSourceRpc, source::block::BlockWithBinary},
+    crate::{config::ConfigSourceHttp, source::block::BlockWithBinary},
     base64::{Engine, prelude::BASE64_STANDARD},
     solana_client::{
         client_error::{ClientError, ClientErrorKind},
@@ -76,20 +76,20 @@ pub enum BlockDecodeError {
     FailedTransactionReturnData,
 }
 
-pub struct RpcSource {
+pub struct HttpSource {
     client: RpcClient,
     semaphore: Semaphore,
 }
 
-impl fmt::Debug for RpcSource {
+impl fmt::Debug for HttpSource {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("RpcSource").finish()
+        f.debug_struct("HttpSource").finish()
     }
 }
 
-impl RpcSource {
-    pub async fn new(config: ConfigSourceRpc) -> Result<Self, ConnectError> {
-        let sender = HttpSender::new_with_timeout(config.url, config.timeout);
+impl HttpSource {
+    pub async fn new(config: ConfigSourceHttp) -> Result<Self, ConnectError> {
+        let sender = HttpSender::new_with_timeout(config.rpc, config.timeout);
         let client = RpcClient::new_sender(sender, RpcClientConfig::default());
 
         let version = client.get_version().await?;
