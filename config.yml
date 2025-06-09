@@ -12,9 +12,10 @@ source:
     worker_threads: 2 # Number of threads in Tokio runtime, by default all available cores
     affinity: 0-1 # Pin threads to specific CPUs, optional
   # RPC endpoint, used for edge-cases, stream reconnect, catch-up on restart, and backfilling
-  # HttpGet endpoint can be used for catch-up on restart and backfilling
+  # HttpGet endpoint can be used for catch-up on restart and backfilling (can be skipped)
   http:
     rpc: http://127.0.0.1:8899/
+    httpget: http://127.0.0.1:9000/
     timeout: 30s
     concurrency: 10 # Max number of requests in progress at one moment
   # Geyser stream

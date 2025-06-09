@@ -1,6 +1,8 @@
 use {
     crate::{config::ConfigSourceHttp, source::block::BlockWithBinary},
     base64::{Engine, prelude::BASE64_STANDARD},
+    prost::Message as _,
+    reqwest::{Client, StatusCode},
     solana_client::{
         client_error::{ClientError, ClientErrorKind},
         nonblocking::rpc_client::RpcClient,
@@ -22,6 +24,7 @@ use {
         transaction::Transaction,
         transaction_context::TransactionReturnData,
     },
+    solana_storage_proto::convert::generated,
     solana_transaction_status::{
         ConfirmedBlock, EncodedTransactionWithStatusMeta, InnerInstruction, InnerInstructions,
         TransactionDetails, TransactionStatusMeta, TransactionTokenBalance,
@@ -34,10 +37,15 @@ use {
     thiserror::Error,
     tokio::sync::Semaphore,
     tracing::{info, warn},
+    url::{ParseError, Url},
 };
 
 #[derive(Debug, Error)]
 pub enum ConnectError {
+    #[error(transparent)]
+    HttpUrl(#[from] ParseError),
+    #[error(transparent)]
+    Reqwest(#[from] reqwest::Error),
     #[error(transparent)]
     Client(#[from] ClientError),
 }
@@ -77,6 +85,7 @@ pub enum BlockDecodeError {
 }
 
 pub struct HttpSource {
+    httpurl: Option<(Url, Client)>,
     client: RpcClient,
     semaphore: Semaphore,
 }
@@ -89,6 +98,15 @@ impl fmt::Debug for HttpSource {
 
 impl HttpSource {
     pub async fn new(config: ConfigSourceHttp) -> Result<Self, ConnectError> {
+        let httpurl = config
+            .httpget
+            .map(|url| {
+                let url = Url::parse(&url)?;
+                let client = Client::builder().timeout(config.timeout).build()?;
+                Ok::<_, ConnectError>((url, client))
+            })
+            .transpose()?;
+
         let sender = HttpSender::new_with_timeout(config.rpc, config.timeout);
         let client = RpcClient::new_sender(sender, RpcClientConfig::default());
 
@@ -96,6 +114,7 @@ impl HttpSource {
         info!(version = version.solana_core, "connected to RPC");
 
         Ok(Self {
+            httpurl,
             client,
             semaphore: Semaphore::new(config.concurrency),
         })
@@ -117,8 +136,43 @@ impl HttpSource {
         self.client.get_first_available_block().await
     }
 
-    pub async fn get_block(&self, slot: Slot, httpget: bool) -> Result<BlockWithBinary, GetBlockError> {
+    pub async fn get_block(
+        &self,
+        slot: Slot,
+        httpget: bool,
+    ) -> Result<BlockWithBinary, GetBlockError> {
+        if httpget && self.httpurl.is_some() {
+            if let Some(block) = self.get_block_http(slot).await {
+                return Ok(block);
+            }
+        }
+
         self.get_block_rpc(slot).await
+    }
+
+    async fn get_block_http(&self, slot: Slot) -> Option<BlockWithBinary> {
+        let Some((url, client)) = self.httpurl.as_ref() else {
+            return None;
+        };
+
+        let url = url.join(&format!("block/{slot}")).ok()?;
+        let permit = self.semaphore.acquire().await.expect("unclosed");
+        let response = client.get(url).send().await.ok()?;
+        drop(permit);
+
+        if response.status() != StatusCode::OK {
+            return None;
+        }
+        let bytes = response.bytes().await.ok()?;
+
+        let block = generated::ConfirmedBlock::decode(bytes)
+            .ok()?
+            .try_into()
+            .ok()?;
+
+        Some(BlockWithBinary::new_from_confirmed_block_and_slot(
+            block, slot,
+        ))
     }
 
     async fn get_block_rpc(&self, slot: Slot) -> Result<BlockWithBinary, GetBlockError> {
