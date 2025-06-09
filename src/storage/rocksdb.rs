@@ -48,6 +48,10 @@ thread_local! {
     static HASHER: SeedableRandomState = SeedableRandomState::fixed();
 }
 
+fn make_hashed_key(bytes: &[u8]) -> [u8; 8] {
+    HASHER.with(|hasher| hasher.hash_one(bytes)).to_be_bytes()
+}
+
 trait ColumnName {
     const NAME: &'static str;
 }
@@ -232,8 +236,7 @@ impl ColumnName for TransactionIndex {
 
 impl TransactionIndex {
     pub fn encode(signature: &Signature) -> [u8; 8] {
-        let hash = HASHER.with(|hasher| hasher.hash_one(signature));
-        hash.to_be_bytes()
+        make_hashed_key(signature.as_ref())
     }
 }
 
@@ -288,7 +291,7 @@ impl ColumnName for SfaIndex {
 
 impl SfaIndex {
     pub fn address_hash(address: &Pubkey) -> [u8; 8] {
-        HASHER.with(|hasher| hasher.hash_one(address)).to_be_bytes()
+        make_hashed_key(address.as_ref())
     }
 
     pub fn concat(address_hash: [u8; 8], slot: Slot) -> [u8; 16] {
@@ -1303,7 +1306,7 @@ impl RocksdbRead {
                 }
                 ReadRequest::SignatureStatuses { signatures, tx } => {
                     let _ = tx
-                        .send(Self::spawn_signatire_statuses(&db, signatures))
+                        .send(Self::spawn_signature_statuses(&db, signatures))
                         .is_err();
                 }
                 ReadRequest::InflationReward {
@@ -1405,7 +1408,7 @@ impl RocksdbRead {
         Ok((signatures, finished))
     }
 
-    fn spawn_signatire_statuses(
+    fn spawn_signature_statuses(
         db: &DB,
         signatures: Vec<Signature>,
     ) -> anyhow::Result<Vec<(Signature, TransactionIndexValue<'static>)>> {
