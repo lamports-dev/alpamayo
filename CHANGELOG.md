@@ -16,6 +16,12 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Breaking
 
+## [0.11.0] - 2025-06-10
+
+### Features
+
+- alpamayo: use jemalloc ([#65](https://github.com/lamports-dev/alpamayo/pull/65))
+
 ## [0.10.0] - 2025-06-09
 
 ### Features
