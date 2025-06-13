@@ -315,13 +315,11 @@ impl SfaIndex {
 }
 
 #[derive(Debug)]
-pub struct SfaIndexValue<'a> {
-    signatures: Cow<'a, [SignatureStatus]>,
-}
+pub struct SfaIndexValue;
 
-impl SfaIndexValue<'_> {
-    fn encode(&self, buf: &mut Vec<u8>) {
-        for sig in self.signatures.iter() {
+impl SfaIndexValue {
+    fn encode(signatures: &[SignatureStatus], buf: &mut Vec<u8>) {
+        for sig in signatures {
             let mut fields = SfaIndexValueFlags::empty();
             if sig.err.is_some() {
                 fields |= SfaIndexValueFlags::ERR;
@@ -344,9 +342,10 @@ impl SfaIndexValue<'_> {
         }
     }
 
-    fn decode(mut slice: &[u8]) -> anyhow::Result<Self> {
-        let mut sigs = vec![];
-        while !slice.is_empty() {
+    fn decode(slice: &mut &[u8]) -> anyhow::Result<Option<SignatureStatus>> {
+        Ok(if slice.is_empty() {
+            None
+        } else {
             let flags =
                 SfaIndexValueFlags::from_bits(slice.try_get_u8().context("failed to read flags")?)
                     .context("invalid flags")?;
@@ -357,7 +356,7 @@ impl SfaIndexValue<'_> {
                 .context("failed to read signature")?;
 
             let err = if flags.contains(SfaIndexValueFlags::ERR) {
-                let size = decode_varint(&mut slice).context("failed to decode err size")? as usize;
+                let size = decode_varint(slice).context("failed to decode err size")? as usize;
                 anyhow::ensure!(slice.remaining() >= size, "not enough bytes for memo");
                 let err = bincode::deserialize(&slice[0..size]).context("failed to decode err")?;
                 slice.advance(size);
@@ -367,8 +366,7 @@ impl SfaIndexValue<'_> {
             };
 
             let memo = if flags.contains(SfaIndexValueFlags::MEMO) {
-                let size =
-                    decode_varint(&mut slice).context("failed to decode memo size")? as usize;
+                let size = decode_varint(slice).context("failed to decode memo size")? as usize;
                 anyhow::ensure!(slice.remaining() >= size, "not enough bytes for memo");
                 let memo =
                     String::from_utf8(slice[0..size].to_vec()).context("expect utf8 memo")?;
@@ -378,14 +376,11 @@ impl SfaIndexValue<'_> {
                 None
             };
 
-            sigs.push(SignatureStatus {
+            Some(SignatureStatus {
                 signature: signature.into(),
                 err,
                 memo,
-            });
-        }
-        Ok(Self {
-            signatures: Cow::Owned(sigs),
+            })
         })
     }
 }
@@ -740,10 +735,7 @@ impl RocksdbWrite {
                     }
                     for sfa in block.sfa.values() {
                         buf.clear();
-                        SfaIndexValue {
-                            signatures: Cow::Borrowed(sfa.signatures.as_slice()),
-                        }
-                        .encode(&mut buf);
+                        SfaIndexValue::encode(&sfa.signatures, &mut buf);
                         batch.put_cf(Rocksdb::cf_handle::<SfaIndex>(&db), sfa.key, &buf);
                     }
                     if tx.send(db.write(batch).map_err(Into::into)).is_err() {
@@ -1376,8 +1368,12 @@ impl RocksdbRead {
                 break;
             }
 
-            #[allow(clippy::unnecessary_to_owned)] // looks like clippy bug
-            for sigstatus in SfaIndexValue::decode(&value)?.signatures.into_owned() {
+            let mut slice = value.as_ref();
+            loop {
+                let Some(sigstatus) = SfaIndexValue::decode(&mut slice)? else {
+                    break;
+                };
+
                 if let Some(sigbefore) = before {
                     if sigstatus.signature == sigbefore {
                         before = None;

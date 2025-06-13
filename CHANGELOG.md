@@ -14,6 +14,8 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Features
 
+- storage: improve encoding/decoding of SFA ([#66](https://github.com/lamports-dev/alpamayo/pull/66))
+
 ### Breaking
 
 ## [0.11.0] - 2025-06-10
