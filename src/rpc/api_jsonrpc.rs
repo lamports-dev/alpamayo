@@ -604,11 +604,13 @@ impl RpcRequestBlockWorkRequest {
         encoding: UiTransactionEncoding,
         encoding_options: BlockEncodingOptions,
     ) -> RpcRequestResult {
-        // parse and encode
-        let block = Self::parse_and_encode(&bytes, &id, slot, encoding, encoding_options)?;
-
-        // serialize
-        Ok(jsonrpc_response_success(id, &block))
+        // parse, encode and serialize
+        Ok(
+            match Self::parse_and_encode(&bytes, &id, slot, encoding, encoding_options)? {
+                Ok(block) => jsonrpc_response_success(id, &block),
+                Err(error) => error,
+            },
+        )
     }
 
     fn parse_and_encode(

@@ -162,7 +162,7 @@ dependencies = [
 
 [[package]]
 name = "alpamayo"
-version = "0.11.0"
+version = "0.11.1"
 dependencies = [
  "affinity-linux",
  "anyhow",
