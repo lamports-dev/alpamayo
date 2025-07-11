@@ -1,7 +1,6 @@
 use {
     crate::{config::ConfigMetrics, storage::slots::StoredSlots, version::VERSION as VERSION_INFO},
     anyhow::Context,
-    hyper::body::Bytes,
     metrics::{counter, describe_counter, describe_gauge, describe_histogram},
     metrics_exporter_prometheus::{Matcher, PrometheusBuilder, PrometheusHandle},
     richat_shared::jsonrpc::metrics::{
@@ -94,7 +93,7 @@ pub async fn spawn_server(
         richat_shared::config::ConfigMetrics {
             endpoint: config.endpoint,
         },
-        move || Bytes::from(handle.render()), // metrics
+        move || handle.render().into_bytes(), // metrics
         || true,                              // health
         move || stored_slots.is_ready(),      // ready
         shutdown,

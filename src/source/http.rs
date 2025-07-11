@@ -333,6 +333,7 @@ impl HttpSource {
                 .map(Self::tx_meta_return_data_conv)
                 .transpose()?,
             compute_units_consumed: meta.compute_units_consumed.into(),
+            cost_units: meta.cost_units.into(),
         })
     }
 
