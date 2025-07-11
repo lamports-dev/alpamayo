@@ -19,6 +19,7 @@ use {
         encoding::{decode_varint, encode_varint},
     },
     quanta::Instant,
+    richat_shared::mutex_lock,
     rocksdb::{
         ColumnFamily, ColumnFamilyDescriptor, DB, DBCompressionType, Direction, IteratorMode,
         Options, WriteBatch,
@@ -1258,7 +1259,7 @@ pub struct RocksdbRead {
 impl RocksdbRead {
     fn spawn(db: Arc<DB>, read_rx: Arc<Mutex<mpsc::Receiver<ReadRequest>>>) {
         loop {
-            let lock = read_rx.lock().expect("unpanicked mutex");
+            let lock = mutex_lock(&read_rx);
             let Ok(request) = lock.recv() else {
                 break;
             };

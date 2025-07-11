@@ -1,6 +1,7 @@
 use {
     crate::{metrics::STORAGE_STORED_SLOTS, util::HashSet},
     metrics::{Gauge, gauge},
+    richat_shared::mutex_lock,
     solana_sdk::clock::Slot,
     std::{
         collections::BTreeMap,
@@ -152,7 +153,7 @@ impl StoredSlotsRead {
         index: usize,
         slot: Slot,
     ) -> bool {
-        let mut lock = map.lock().expect("unpanicked mutex");
+        let mut lock = mutex_lock(map);
 
         let entry = lock.entry(slot).or_default();
         entry.insert(index);
@@ -187,7 +188,7 @@ impl StoredSlotsRead {
                 &self.slots_confirmed,
                 &self.slots_finalized,
             ] {
-                let mut lock = map.lock().expect("unpanicked mutex");
+                let mut lock = mutex_lock(map);
                 loop {
                     match lock.first_key_value().map(|(slot, _)| *slot) {
                         Some(map_slot) if map_slot <= slot => {
@@ -205,10 +206,7 @@ impl StoredSlotsRead {
         if ready && !self.max_recent_blockhashes_ready {
             self.max_recent_blockhashes_ready = true;
 
-            let mut lock = self
-                .max_recent_blockhashes
-                .lock()
-                .expect("unpanicked mutex");
+            let mut lock = mutex_lock(&self.max_recent_blockhashes);
             *lock += 1;
 
             if *lock == self.total_readers {

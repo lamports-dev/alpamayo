@@ -30,7 +30,7 @@ use {
         ThreadPoolBuilder,
         iter::{IntoParallelIterator, ParallelIterator},
     },
-    richat_shared::{metrics::duration_to_seconds, shutdown::Shutdown},
+    richat_shared::{metrics::duration_to_seconds, mutex_lock, shutdown::Shutdown},
     solana_sdk::clock::Slot,
     solana_storage_proto::convert::generated,
     solana_transaction_status::ConfirmedBlock,
@@ -549,7 +549,7 @@ impl HttpBlocks {
     }
 
     fn fetch(&self, slot: Slot, httpget: bool) {
-        let mut locked = self.inprogress.lock().expect("unpoisoned");
+        let mut locked = mutex_lock(&self.inprogress);
         if !locked.insert(slot) {
             return;
         }
@@ -595,7 +595,7 @@ impl Stream for HttpBlocks {
             Poll::Ready(Some(
                 match futures::ready!(self.requests.poll_next_unpin(cx)) {
                     Some(Ok(Ok((slot, block)))) => {
-                        let mut locked = self.inprogress.lock().expect("unpoisoned");
+                        let mut locked = mutex_lock(&self.inprogress);
                         locked.remove(&slot);
 
                         Ok((slot, block))
