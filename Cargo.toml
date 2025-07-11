@@ -32,7 +32,7 @@ jsonrpsee-types = "0.24.8"
 libc = "0.2.170"
 maplit = "1.0.2"
 metrics = "0.24.1"
-metrics-exporter-prometheus = { version = "0.16.2", default-features = false }
+metrics-exporter-prometheus = { version = "0.17.2", default-features = false }
 num_cpus = "1.16.0"
 prost = "0.11.9"
 quanta = "0.12.5"
