@@ -53,10 +53,9 @@ impl StorageFilesRead {
 
         async move {
             let Some(file) = file else {
-                return Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    format!("failed to get file for id#{storage_id}"),
-                ));
+                return Err(io::Error::other(format!(
+                    "failed to get file for id#{storage_id}"
+                )));
             };
 
             let buffer = Vec::with_capacity(size as usize);

@@ -180,6 +180,7 @@ dependencies = [
  "signal-hook",
  "solana-client",
  "solana-compute-budget",
+ "solana-compute-budget-interface",
  "solana-rpc-client",
  "solana-rpc-client-api",
  "solana-sdk",

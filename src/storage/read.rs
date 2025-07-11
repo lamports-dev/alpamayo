@@ -676,8 +676,7 @@ impl ReadRequest {
                     }
                     StorageBlockLocationResult::SlotMismatch => {
                         error!(slot, "item/slot mismatch");
-                        let _ = tx.send(ReadResultBlock::ReadError(io::Error::new(
-                            io::ErrorKind::Other,
+                        let _ = tx.send(ReadResultBlock::ReadError(io::Error::other(
                             "item/slot mismatch",
                         )));
                         return None;
@@ -750,7 +749,7 @@ impl ReadRequest {
                             StorageBlockLocationResult::SlotMismatch => {
                                 error!(slot = slot, "item/slot mismatch");
                                 let _ = tx.send(ReadResultBlockHeight::ReadError(anyhow::anyhow!(
-                                    io::Error::new(io::ErrorKind::Other, "item/slot mismatch",)
+                                    io::Error::other("item/slot mismatch",)
                                 )));
                                 return None;
                             }
@@ -821,8 +820,7 @@ impl ReadRequest {
                         StorageBlockLocationResult::Dead => ReadResultBlockTime::Dead,
                         StorageBlockLocationResult::SlotMismatch => {
                             error!(slot = slot, "item/slot mismatch");
-                            ReadResultBlockTime::ReadError(anyhow::anyhow!(io::Error::new(
-                                io::ErrorKind::Other,
+                            ReadResultBlockTime::ReadError(anyhow::anyhow!(io::Error::other(
                                 "item/slot mismatch",
                             )))
                         }
@@ -1139,10 +1137,7 @@ impl ReadRequest {
                         StorageBlockLocationResult::SlotMismatch => {
                             error!(slot = sig.slot, "item/slot mismatch");
                             Some(Err(ReadResultSignaturesForAddress::ReadError(
-                                anyhow::anyhow!(io::Error::new(
-                                    io::ErrorKind::Other,
-                                    "item/slot mismatch",
-                                )),
+                                anyhow::anyhow!(io::Error::other("item/slot mismatch",)),
                             )))
                         }
                         StorageBlockLocationResult::Found(location) => {
@@ -1343,7 +1338,7 @@ impl ReadRequest {
                     StorageBlockLocationResult::SlotMismatch => {
                         error!(slot = index.slot, "item/slot mismatch");
                         let _ = tx.send(ReadResultTransaction::ReadError(anyhow::anyhow!(
-                            io::Error::new(io::ErrorKind::Other, "item/slot mismatch",)
+                            io::Error::other("item/slot mismatch",)
                         )));
                         return None;
                     }

@@ -162,9 +162,9 @@ mod compute_budget_processor {
             DEFAULT_INSTRUCTION_COMPUTE_UNIT_LIMIT, MAX_COMPUTE_UNIT_LIMIT, MAX_HEAP_FRAME_BYTES,
             MIN_HEAP_FRAME_BYTES,
         },
+        solana_compute_budget_interface::ComputeBudgetInstruction,
         solana_sdk::{
             borsh1::try_from_slice_unchecked,
-            compute_budget::{self, ComputeBudgetInstruction},
             instruction::{CompiledInstruction, InstructionError},
             pubkey::Pubkey,
             transaction::TransactionError,
@@ -187,7 +187,7 @@ mod compute_budget_processor {
         let mut updated_loaded_accounts_data_size_limit = None;
 
         for (i, (program_id, instruction)) in instructions.enumerate() {
-            if compute_budget::check_id(program_id) {
+            if solana_compute_budget_interface::check_id(program_id) {
                 let invalid_instruction_data_error = TransactionError::InstructionError(
                     i as u8,
                     InstructionError::InvalidInstructionData,

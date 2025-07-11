@@ -440,10 +440,7 @@ impl ConfigRpcUpstream {
             "HTTP/2.0" => Version::HTTP_2,
             "HTTP/3.0" => Version::HTTP_3,
             value => {
-                return Err(de::Error::custom(format!(
-                    "unknown HTTP version: {}",
-                    value
-                )));
+                return Err(de::Error::custom(format!("unknown HTTP version: {value}")));
             }
         })
     }

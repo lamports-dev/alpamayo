@@ -40,6 +40,7 @@ use {
     url::{ParseError, Url},
 };
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Error)]
 pub enum ConnectError {
     #[error(transparent)]
@@ -50,6 +51,7 @@ pub enum ConnectError {
     Client(#[from] ClientError),
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Error)]
 pub enum GetBlockError {
     #[error(transparent)]
