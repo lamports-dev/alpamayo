@@ -16,6 +16,12 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Breaking
 
+## [0.12.1] - 2025-07-15
+
+### Features
+
+- storage: pass base block in partitioned inflation reward ([#69](https://github.com/lamports-dev/alpamayo/pull/69))
+
 ## [0.12.0] - 2025-07-11
 
 ### Features

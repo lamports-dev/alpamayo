@@ -1,6 +1,6 @@
 [package]
 name = "alpamayo"
-version = "0.12.0"
+version = "0.12.1"
 authors = ["Lamports Dev"]
 edition = "2024"
 description = "Part of Solana RPC stack for sealed data"

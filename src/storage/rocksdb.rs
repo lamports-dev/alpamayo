@@ -1485,7 +1485,7 @@ impl RocksdbRead {
             addresses,
             rewards,
             missed,
-            base: None,
+            base: base_with_hasher.map(|(base, _hasher)| base),
         })
     }
 
