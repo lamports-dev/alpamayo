@@ -1,8 +1,8 @@
 use {
     crate::{
-        config::{ConfigRpc, ConfigRpcCallJson},
+        config::{ConfigRpc, ConfigRpcCallJson, ConfigRpcUpstreams},
         metrics::RPC_WORKERS_CPU_SECONDS_TOTAL,
-        rpc::{upstream::RpcClientJsonrpc, workers::WorkRequest},
+        rpc::{upstream::RpcClientJsonrpcManager, workers::WorkRequest},
         storage::{
             read::{
                 ReadRequest, ReadResultBlock, ReadResultBlockHeight, ReadResultBlockTime,
@@ -97,7 +97,7 @@ pub struct State {
     grpf_percentile: bool,
     requests_tx: mpsc::Sender<ReadRequest>,
     db_write_inflation_reward: RocksdbWriteInflationReward,
-    upstream: Option<RpcClientJsonrpc>,
+    upstream_manager: Option<RpcClientJsonrpcManager>,
     workers: Sender<WorkRequest>,
 }
 
@@ -109,11 +109,25 @@ impl State {
         db_write_inflation_reward: RocksdbWriteInflationReward,
         workers: Sender<WorkRequest>,
     ) -> anyhow::Result<Self> {
-        let upstream = config
-            .upstream_jsonrpc
-            .map(|config_upstream| RpcClientJsonrpc::new(config_upstream, config.gcn_cache_ttl))
-            .transpose()?;
+        // Initialize upstream manager - handle both new multiple upstream config and legacy single upstream
+        let upstream_manager = if let Some(config_upstreams) = config.upstream_jsonrpc_multiple {
+            // Use the new multiple upstream configuration
+            Some(RpcClientJsonrpcManager::new(config_upstreams, config.gcn_cache_ttl)?)
+        } else if let Some(config_upstream) = config.upstream_jsonrpc {
+            // Convert legacy single upstream configuration to new format for backward compatibility
+            let mut endpoints = std::collections::HashMap::new();
+            endpoints.insert("default".to_string(), config_upstream);
+            let legacy_config = ConfigRpcUpstreams {
+                default: "default".to_string(),
+                endpoints,
+                method_routing: std::collections::HashMap::new(),
+            };
+            Some(RpcClientJsonrpcManager::new(legacy_config, config.gcn_cache_ttl)?)
+        } else {
+            None
+        };
 
+        // Check if upstream is required for cached methods
         if config
             .calls_jsonrpc
             .intersection(&HashSet::from([
@@ -124,7 +138,7 @@ impl State {
             .is_some()
         {
             anyhow::ensure!(
-                upstream.is_some(),
+                upstream_manager.is_some(),
                 "upstream required for cached methods like `getClusterNodes`"
             );
         }
@@ -138,7 +152,7 @@ impl State {
             grpf_percentile: config.grpf_percentile,
             requests_tx,
             db_write_inflation_reward,
-            upstream,
+            upstream_manager,
             workers,
         })
     }
@@ -517,11 +531,12 @@ impl RpcRequestHandler for RpcRequestBlock {
 
 impl RpcRequestBlock {
     async fn fetch_upstream(self, deadline: Instant) -> RpcRequestResult {
-        if let Some(upstream) = (!self.upstream_disabled)
-            .then_some(self.state.upstream.as_ref())
-            .flatten()
-        {
-            upstream
+        if self.upstream_disabled {
+            return Ok(Self::error_skipped_long_term_storage(self.id, self.slot));
+        }
+
+        if let Some(upstream_manager) = self.state.upstream_manager.as_ref() {
+            return upstream_manager
                 .get_block(
                     self.x_subscription_id,
                     deadline,
@@ -531,10 +546,10 @@ impl RpcRequestBlock {
                     self.encoding,
                     self.encoding_options,
                 )
-                .await
-        } else {
-            Ok(Self::error_skipped_long_term_storage(self.id, self.slot))
+                .await;
         }
+
+        Ok(Self::error_skipped_long_term_storage(self.id, self.slot))
     }
 
     fn error_not_available(id: Id<'static>, slot: Slot) -> Vec<u8> {
@@ -813,12 +828,9 @@ impl RpcRequestHandler for RpcRequestBlocks {
 
         // some slot will be removed while we pass request, send to upstream
         let first_available_slot = self.state.stored_slots.first_available_load() + 32;
-        if self.start_slot < first_available_slot {
-            if let Some(upstream) = (!self.upstream_disabled)
-                .then_some(self.state.upstream.as_ref())
-                .flatten()
-            {
-                return upstream
+        if self.start_slot < first_available_slot && !self.upstream_disabled {
+            if let Some(upstream_manager) = self.state.upstream_manager.as_ref() {
+                return upstream_manager
                     .get_blocks(
                         Arc::clone(&self.x_subscription_id),
                         deadline,
@@ -1028,16 +1040,17 @@ impl RpcRequestHandler for RpcRequestBlockTime {
 
 impl RpcRequestBlockTime {
     async fn fetch_upstream(self, deadline: Instant) -> RpcRequestResult {
-        if let Some(upstream) = (!self.upstream_disabled)
-            .then_some(self.state.upstream.as_ref())
-            .flatten()
-        {
-            upstream
-                .get_block_time(self.x_subscription_id, deadline, &self.id, self.slot)
-                .await
-        } else {
-            Ok(jsonrpc_response_success(self.id, json!(None::<()>)))
+        if self.upstream_disabled {
+            return Ok(jsonrpc_response_success(self.id, json!(None::<()>)));
         }
+
+        if let Some(upstream_manager) = self.state.upstream_manager.as_ref() {
+            return upstream_manager
+                .get_block_time(self.x_subscription_id, deadline, &self.id, self.slot)
+                .await;
+        }
+
+        Ok(jsonrpc_response_success(self.id, json!(None::<()>)))
     }
 }
 
@@ -1066,13 +1079,14 @@ impl RpcRequestHandler for RpcRequestClusterNodes {
     async fn process(self) -> RpcRequestResult {
         let deadline = Instant::now() + self.state.request_timeout;
 
-        let Some(upstream) = self.state.upstream.as_ref() else {
-            unreachable!();
-        };
+        if let Some(upstream_manager) = self.state.upstream_manager.as_ref() {
+            return upstream_manager
+                .get_cluster_nodes(self.x_subscription_id, deadline, self.id)
+                .await;
+        }
 
-        upstream
-            .get_cluster_nodes(self.x_subscription_id, deadline, self.id)
-            .await
+        // No upstream configured
+        anyhow::bail!("upstream required for getClusterNodes but none configured")
     }
 }
 
@@ -1103,19 +1117,25 @@ impl RpcRequestHandler for RpcRequestFirstAvailableBlock {
     async fn process(self) -> RpcRequestResult {
         let deadline = Instant::now() + self.state.request_timeout;
 
-        if let Some(upstream) = (!self.upstream_disabled)
-            .then_some(self.state.upstream.as_ref())
-            .flatten()
-        {
-            upstream
-                .get_first_available_block(self.x_subscription_id, deadline, &self.id)
-                .await
-        } else {
-            Ok(jsonrpc_response_success(
+        if self.upstream_disabled {
+            return Ok(jsonrpc_response_success(
                 self.id,
                 json!(self.state.stored_slots.first_available_load()),
-            ))
+            ));
         }
+
+        // Try the new upstream manager first
+        if let Some(upstream_manager) = self.state.upstream_manager.as_ref() {
+            return upstream_manager
+                .get_first_available_block(self.x_subscription_id, deadline, &self.id)
+                .await;
+        }
+
+        // No upstream configured, return first available slot from storage
+        Ok(jsonrpc_response_success(
+            self.id,
+            json!(self.state.stored_slots.first_available_load()),
+        ))
     }
 }
 
@@ -1435,16 +1455,16 @@ impl RpcRequestInflationReward {
     ) -> anyhow::Result<Result<Vec<Slot>, Vec<u8>>> {
         // some slot will be removed while we pass request, send to upstream
         let first_available_slot = self.state.stored_slots.first_available_load() + 150;
-        if start_slot < first_available_slot {
-            if let Some(upstream) = (!self.upstream_disabled)
-                .then_some(self.state.upstream.as_ref())
-                .flatten()
-            {
-                return upstream
+        if start_slot < first_available_slot && !self.upstream_disabled {
+            // Try the new upstream manager first
+            if let Some(upstream_manager) = self.state.upstream_manager.as_ref() {
+                return upstream_manager
                     .get_blocks_parsed(deadline, &self.id, start_slot, limit)
                     .await
                     .map_err(|error| anyhow::anyhow!(error));
             }
+
+            // No upstream configured, continue with local storage
         }
 
         // request
@@ -1543,25 +1563,31 @@ impl RpcRequestInflationReward {
         deadline: Instant,
         slot: Slot,
     ) -> anyhow::Result<Result<UiConfirmedBlock, Vec<u8>>> {
-        if let Some(upstream) = (!self.upstream_disabled)
-            .then_some(self.state.upstream.as_ref())
-            .flatten()
-        {
-            match upstream.get_block_rewards(deadline, &self.id, slot).await {
-                Ok(Ok(Some(block))) => Ok(Ok(block)),
-                Ok(Ok(None)) => Ok(Err(RpcRequestBlock::error_not_available(
+        if self.upstream_disabled {
+            return Ok(Err(RpcRequestBlock::error_skipped_long_term_storage(
+                self.id.clone(),
+                slot,
+            )));
+        }
+
+        // Try the new upstream manager first
+        if let Some(upstream_manager) = self.state.upstream_manager.as_ref() {
+            match upstream_manager.get_block_rewards(deadline, &self.id, slot).await {
+                Ok(Ok(Some(block))) => return Ok(Ok(block)),
+                Ok(Ok(None)) => return Ok(Err(RpcRequestBlock::error_not_available(
                     self.id.clone(),
                     slot,
                 ))),
-                Ok(Err(error)) => Ok(Err(error)),
-                Err(error) => anyhow::bail!(error),
+                Ok(Err(error)) => return Ok(Err(error)),
+                Err(error) => return Err(error.into()),
             }
-        } else {
-            Ok(Err(RpcRequestBlock::error_skipped_long_term_storage(
-                self.id.clone(),
-                slot,
-            )))
         }
+
+        // No upstream configured
+        Ok(Err(RpcRequestBlock::error_skipped_long_term_storage(
+            self.id.clone(),
+            slot,
+        )))
     }
 
     fn filter_rewards<F>(
@@ -1780,22 +1806,24 @@ impl RpcRequestHandler for RpcRequestLeaderSchedule {
     async fn process(self) -> RpcRequestResult {
         let deadline = Instant::now() + self.state.request_timeout;
 
-        let Some(upstream) = self.state.upstream.as_ref() else {
-            unreachable!();
-        };
+        // Try the new upstream manager first
+        if let Some(upstream_manager) = self.state.upstream_manager.as_ref() {
+            let epoch = self.state.epoch_schedule.get_epoch(self.slot);
+            return upstream_manager
+                .get_leader_schedule(
+                    self.x_subscription_id,
+                    deadline,
+                    self.id,
+                    epoch,
+                    self.slot,
+                    self.is_processed,
+                    self.identity,
+                )
+                .await;
+        }
 
-        let epoch = self.state.epoch_schedule.get_epoch(self.slot);
-        upstream
-            .get_leader_schedule(
-                self.x_subscription_id,
-                deadline,
-                self.id,
-                epoch,
-                self.slot,
-                self.is_processed,
-                self.identity,
-            )
-            .await
+        // No upstream configured
+        anyhow::bail!("upstream required for getLeaderSchedule but none configured")
     }
 }
 
@@ -2048,8 +2076,9 @@ impl RpcRequestSignaturesForAddress {
     ) -> anyhow::Result<
         Result<(Id<'static>, Vec<RpcConfirmedTransactionStatusWithSignature>), Vec<u8>>,
     > {
-        if let Some(upstream) = self.state.upstream.as_ref() {
-            let bytes = upstream
+        // Try the new upstream manager first
+        if let Some(upstream_manager) = self.state.upstream_manager.as_ref() {
+            let bytes = upstream_manager
                 .get_signatures_for_address(
                     self.x_subscription_id,
                     deadline,
@@ -2062,19 +2091,20 @@ impl RpcRequestSignaturesForAddress {
                 )
                 .await?;
 
-            let result: Response<Vec<RpcConfirmedTransactionStatusWithSignature>> =
-                serde_json::from_slice(&bytes)
-                    .map_err(|_error| anyhow::anyhow!("failed to parse json from upstream"))?;
+                let result: Response<Vec<RpcConfirmedTransactionStatusWithSignature>> =
+                    serde_json::from_slice(&bytes)
+                        .map_err(|_error| anyhow::anyhow!("failed to parse json from upstream"))?;
 
-            let value = match result.payload {
-                ResponsePayload::Success(value) => value,
-                ResponsePayload::Error(_) => return Ok(Err(bytes.to_vec())),
-            };
+                let value = match result.payload {
+                    ResponsePayload::Success(value) => value,
+                    ResponsePayload::Error(_) => return Ok(Err(bytes.to_vec())),
+                };
 
-            Ok(Ok((self.id, value.into_owned())))
-        } else {
-            Ok(Ok((self.id, vec![])))
+                return Ok(Ok((self.id, value.into_owned())));
         }
+
+        // No upstream configured, return empty result
+        Ok(Ok((self.id, vec![])))
     }
 }
 
@@ -2182,7 +2212,7 @@ impl RpcRequestHandler for RpcRequestSignatureStatuses {
 
         if self.search_transaction_history
             && !self.upstream_disabled
-            && self.state.upstream.is_some()
+            && self.state.upstream_manager.is_some()
             && statuses.iter().any(|status| status.is_none())
         {
             let mut signatures_history = Vec::new();
@@ -2221,8 +2251,9 @@ impl RpcRequestSignatureStatuses {
         deadline: Instant,
         signatures: Vec<&Signature>,
     ) -> anyhow::Result<Result<Vec<Option<TransactionStatus>>, Vec<u8>>> {
-        if let Some(upstream) = self.state.upstream.as_ref() {
-            let bytes = upstream
+        // Try the new upstream manager first
+        if let Some(upstream_manager) = self.state.upstream_manager.as_ref() {
+            let bytes = upstream_manager
                 .get_signature_statuses(
                     Arc::clone(&self.x_subscription_id),
                     deadline,
@@ -2231,21 +2262,22 @@ impl RpcRequestSignatureStatuses {
                 )
                 .await?;
 
-            let result: Response<RpcResponse<Vec<Option<TransactionStatus>>>> =
-                serde_json::from_slice(&bytes)
-                    .map_err(|_error| anyhow::anyhow!("failed to parse json from upstream"))?;
+                let result: Response<RpcResponse<Vec<Option<TransactionStatus>>>> =
+                    serde_json::from_slice(&bytes)
+                        .map_err(|_error| anyhow::anyhow!("failed to parse json from upstream"))?;
 
-            if let ResponsePayload::Error(_) = &result.payload {
-                return Ok(Err(bytes.to_vec()));
-            }
+                if let ResponsePayload::Error(_) = &result.payload {
+                    return Ok(Err(bytes.to_vec()));
+                }
 
-            let ResponsePayload::Success(value) = result.payload else {
-                unreachable!();
-            };
-            Ok(Ok(value.into_owned().value))
-        } else {
-            Ok(Ok(vec![]))
+                let ResponsePayload::Success(value) = result.payload else {
+                    unreachable!();
+                };
+                return Ok(Ok(value.into_owned().value));
         }
+
+        // No upstream configured, return empty result
+        Ok(Ok(vec![]))
     }
 }
 
@@ -2410,11 +2442,15 @@ impl RpcRequestHandler for RpcRequestTransaction {
 
 impl RpcRequestTransaction {
     async fn fetch_upstream(self, deadline: Instant) -> RpcRequestResult {
-        if let Some(upstream) = (!self.upstream_disabled)
-            .then_some(self.state.upstream.as_ref())
-            .flatten()
-        {
-            upstream
+        if self.upstream_disabled {
+            return Ok(jsonrpc_response_error_custom(
+                self.id,
+                RpcCustomError::TransactionHistoryNotAvailable,
+            ));
+        }
+
+        if let Some(upstream_manager) = self.state.upstream_manager.as_ref() {
+            return upstream_manager
                 .get_transaction(
                     self.x_subscription_id,
                     deadline,
@@ -2424,13 +2460,13 @@ impl RpcRequestTransaction {
                     self.encoding,
                     self.max_supported_transaction_version,
                 )
-                .await
-        } else {
-            Ok(jsonrpc_response_error_custom(
-                self.id,
-                RpcCustomError::TransactionHistoryNotAvailable,
-            ))
+                .await;
         }
+
+        Ok(jsonrpc_response_error_custom(
+            self.id,
+            RpcCustomError::TransactionHistoryNotAvailable,
+        ))
     }
 }
 

@@ -116,12 +116,22 @@ rpc:
     user_agent: alpamayo/v0.1.0
     version: HTTP/1.1
     timeout: 30s
-  # fallback for JSON-RPC methods
-  upstream_jsonrpc:
-    endpoint: http://127.0.0.1:8899
-    user_agent: alpamayo/v0.1.0
-    version: HTTP/1.1
-    timeout: 30s
+  # Multiple upstream JSON-RPC configuration
+  # This allows routing different RPC methods to different upstream endpoints
+  upstream_jsonrpc_multiple:
+    default: "main"  # Default upstream for methods not explicitly routed
+    endpoints:
+      main:  # Primary upstream endpoint
+        endpoint: http://127.0.0.1:8899
+        user_agent: alpamayo/v0.1.0
+        version: HTTP/1.1
+        timeout: 30s
+    method_routing:
+      # Add method-specific routing here if needed
+      # Example:
+      # getBlock: "archive"
+      # getTransaction: "archive"
+      # getSlot: "fast"
   # getBlock and getTransactions requires a lot of CPU time to decode protobuf, encode to requested format, serialize data
   # getBlock can requires more than 100ms to do all work, it would be good to have these threads separated from everything rest
   # for example, you can pin:

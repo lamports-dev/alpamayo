@@ -216,7 +216,7 @@ impl State {
             .then_some(self.upstream.as_ref())
             .flatten()
         {
-            upstream.get_block(x_subscription_id, deadline, slot).await
+            upstream.get_block(x_subscription_id, "httpget", deadline, slot).await
         } else {
             Self::block_error_skipped_long_term_storage(slot)
         }
@@ -318,7 +318,7 @@ impl State {
             .flatten()
         {
             upstream
-                .get_transaction(x_subscription_id, deadline, signature)
+                .get_transaction(x_subscription_id, "httpget", deadline, signature)
                 .await
         } else {
             Self::transaction_error_history_not_available()
