@@ -78,7 +78,7 @@ use {
         sync::{mpsc, oneshot},
         time::sleep,
     },
-    tracing::error,
+    tracing::{debug, error},
 };
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -112,9 +112,11 @@ impl State {
         // Initialize upstream manager - handle both new multiple upstream config and legacy single upstream
         let upstream_manager = if let Some(config_upstreams) = config.upstream_jsonrpc_multiple {
             // Use the new multiple upstream configuration
+            debug!("Initializing RpcClientJsonrpcManager with multiple upstream configuration");
             Some(RpcClientJsonrpcManager::new(config_upstreams, config.gcn_cache_ttl)?)
         } else if let Some(config_upstream) = config.upstream_jsonrpc {
             // Convert legacy single upstream configuration to new format for backward compatibility
+            debug!("Converting legacy single upstream configuration to multiple upstream format");
             let mut endpoints = std::collections::HashMap::new();
             endpoints.insert("default".to_string(), config_upstream);
             let legacy_config = ConfigRpcUpstreams {
@@ -124,6 +126,7 @@ impl State {
             };
             Some(RpcClientJsonrpcManager::new(legacy_config, config.gcn_cache_ttl)?)
         } else {
+            debug!("No upstream JSON-RPC configuration provided");
             None
         };
 

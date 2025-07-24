@@ -36,7 +36,7 @@ use {
         time::{Duration, Instant},
     },
     tokio::{sync::Mutex, time::timeout_at},
-    tracing::error,
+    tracing::{debug, error},
     url::Url,
 };
 
@@ -1093,11 +1093,43 @@ impl RpcClientJsonrpcManager {
             method_routing.insert(method, upstream);
         }
         
-        Ok(Self {
-            default_upstream: config.default,
+        let manager = Self {
+            default_upstream: config.default.clone(),
             clients,
             method_routing,
-        })
+        };
+        
+        // Log the routing configuration at startup
+        debug!(
+            default_upstream = %manager.default_upstream,
+            upstream_count = %manager.clients.len(),
+            "Created RpcClientJsonrpcManager with multiple upstream configuration"
+        );
+        
+        // Log each configured upstream
+        for (name, client) in &manager.clients {
+            debug!(
+                upstream_name = %name,
+                endpoint = %client.inner.endpoint,
+                is_default = (name == &manager.default_upstream),
+                "Configured upstream endpoint"
+            );
+        }
+        
+        // Log method routing rules
+        if manager.method_routing.is_empty() {
+            debug!("No method-specific routing configured, all methods will use default upstream");
+        } else {
+            for (method, upstream) in &manager.method_routing {
+                debug!(
+                    method = %method,
+                    upstream = %upstream,
+                    "Method-specific routing configured"
+                );
+            }
+        }
+        
+        Ok(manager)
     }
     
     /// Get the appropriate client for a given method name
@@ -1107,6 +1139,13 @@ impl RpcClientJsonrpcManager {
             .get(method)
             .map(|s| s.as_str())
             .unwrap_or(&self.default_upstream);
+        
+        debug!(
+            method = %method,
+            upstream = %upstream_name,
+            is_method_specific = self.method_routing.contains_key(method),
+            "Selected upstream for method"
+        );
         
         self.clients.get(upstream_name)
     }
@@ -1157,6 +1196,17 @@ impl RpcClientJsonrpcManager {
         encoding_options: BlockEncodingOptions,
     ) -> RpcClientJsonrpcResult {
         let upstream_name = self.get_upstream_name_for_method("getBlock");
+        let is_default = upstream_name == self.default_upstream && !self.method_routing.contains_key("getBlock");
+        
+        debug!(
+            method = "getBlock",
+            upstream = %upstream_name,
+            routing_type = if is_default { "default" } else { "method-specific" },
+            x_subscription_id = %x_subscription_id,
+            slot = %slot,
+            "Routing JSON-RPC request to upstream"
+        );
+        
         if let Some(client) = self.get_client_for_method("getBlock") {
             client.get_block(x_subscription_id, upstream_name, deadline, id, slot, commitment, encoding, encoding_options).await
         } else {
@@ -1179,6 +1229,17 @@ impl RpcClientJsonrpcManager {
             RpcRequestBlocksUntil::Limit(_) => "getBlocksWithLimit",
         };
         let upstream_name = self.get_upstream_name_for_method(method);
+        let is_default = upstream_name == self.default_upstream && !self.method_routing.contains_key(method);
+        
+        debug!(
+            method = %method,
+            upstream = %upstream_name,
+            routing_type = if is_default { "default" } else { "method-specific" },
+            x_subscription_id = %x_subscription_id,
+            start_slot = %start_slot,
+            "Routing JSON-RPC request to upstream"
+        );
+        
         if let Some(client) = self.get_client_for_method(method) {
             client.get_blocks(x_subscription_id, upstream_name, deadline, id, start_slot, until, commitment).await
         } else {
@@ -1195,6 +1256,17 @@ impl RpcClientJsonrpcManager {
         slot: Slot,
     ) -> RpcClientJsonrpcResult {
         let upstream_name = self.get_upstream_name_for_method("getBlockTime");
+        let is_default = upstream_name == self.default_upstream && !self.method_routing.contains_key("getBlockTime");
+        
+        debug!(
+            method = "getBlockTime",
+            upstream = %upstream_name,
+            routing_type = if is_default { "default" } else { "method-specific" },
+            x_subscription_id = %x_subscription_id,
+            slot = %slot,
+            "Routing JSON-RPC request to upstream"
+        );
+        
         if let Some(client) = self.get_client_for_method("getBlockTime") {
             client.get_block_time(x_subscription_id, upstream_name, deadline, id, slot).await
         } else {
@@ -1210,6 +1282,16 @@ impl RpcClientJsonrpcManager {
         id: Id<'static>,
     ) -> RpcClientJsonrpcResult {
         let upstream_name = self.get_upstream_name_for_method("getClusterNodes");
+        let is_default = upstream_name == self.default_upstream && !self.method_routing.contains_key("getClusterNodes");
+        
+        debug!(
+            method = "getClusterNodes",
+            upstream = %upstream_name,
+            routing_type = if is_default { "default" } else { "method-specific" },
+            x_subscription_id = %x_subscription_id,
+            "Routing JSON-RPC request to upstream"
+        );
+        
         if let Some(client) = self.get_client_for_method("getClusterNodes") {
             client.get_cluster_nodes(x_subscription_id, upstream_name, deadline, id).await
         } else {
@@ -1225,6 +1307,16 @@ impl RpcClientJsonrpcManager {
         id: &Id<'static>,
     ) -> RpcClientJsonrpcResult {
         let upstream_name = self.get_upstream_name_for_method("getFirstAvailableBlock");
+        let is_default = upstream_name == self.default_upstream && !self.method_routing.contains_key("getFirstAvailableBlock");
+        
+        debug!(
+            method = "getFirstAvailableBlock",
+            upstream = %upstream_name,
+            routing_type = if is_default { "default" } else { "method-specific" },
+            x_subscription_id = %x_subscription_id,
+            "Routing JSON-RPC request to upstream"
+        );
+        
         if let Some(client) = self.get_client_for_method("getFirstAvailableBlock") {
             client.get_first_available_block(x_subscription_id, upstream_name, deadline, id).await
         } else {
@@ -1245,6 +1337,18 @@ impl RpcClientJsonrpcManager {
         identity: Option<String>,
     ) -> RpcClientJsonrpcResult {
         let upstream_name = self.get_upstream_name_for_method("getLeaderSchedule");
+        let is_default = upstream_name == self.default_upstream && !self.method_routing.contains_key("getLeaderSchedule");
+        
+        debug!(
+            method = "getLeaderSchedule",
+            upstream = %upstream_name,
+            routing_type = if is_default { "default" } else { "method-specific" },
+            x_subscription_id = %x_subscription_id,
+            epoch = %epoch,
+            slot = %slot,
+            "Routing JSON-RPC request to upstream"
+        );
+        
         if let Some(client) = self.get_client_for_method("getLeaderSchedule") {
             client.get_leader_schedule(x_subscription_id, upstream_name, deadline, id, epoch, slot, is_processed, identity).await
         } else {
@@ -1266,6 +1370,18 @@ impl RpcClientJsonrpcManager {
         commitment: CommitmentConfig,
     ) -> RpcClientJsonrpcResult {
         let upstream_name = self.get_upstream_name_for_method("getSignaturesForAddress");
+        let is_default = upstream_name == self.default_upstream && !self.method_routing.contains_key("getSignaturesForAddress");
+        
+        debug!(
+            method = "getSignaturesForAddress",
+            upstream = %upstream_name,
+            routing_type = if is_default { "default" } else { "method-specific" },
+            x_subscription_id = %x_subscription_id,
+            address = %address,
+            limit = %limit,
+            "Routing JSON-RPC request to upstream"
+        );
+        
         if let Some(client) = self.get_client_for_method("getSignaturesForAddress") {
             client.get_signatures_for_address(x_subscription_id, upstream_name, deadline, id, address, before, until, limit, commitment).await
         } else {
@@ -1282,6 +1398,17 @@ impl RpcClientJsonrpcManager {
         signatures: Vec<&Signature>,
     ) -> RpcClientJsonrpcResult {
         let upstream_name = self.get_upstream_name_for_method("getSignatureStatuses");
+        let is_default = upstream_name == self.default_upstream && !self.method_routing.contains_key("getSignatureStatuses");
+        
+        debug!(
+            method = "getSignatureStatuses",
+            upstream = %upstream_name,
+            routing_type = if is_default { "default" } else { "method-specific" },
+            x_subscription_id = %x_subscription_id,
+            signature_count = %signatures.len(),
+            "Routing JSON-RPC request to upstream"
+        );
+        
         if let Some(client) = self.get_client_for_method("getSignatureStatuses") {
             client.get_signature_statuses(x_subscription_id, upstream_name, deadline, id, signatures).await
         } else {
@@ -1302,6 +1429,17 @@ impl RpcClientJsonrpcManager {
         max_supported_transaction_version: Option<u8>,
     ) -> RpcClientJsonrpcResult {
         let upstream_name = self.get_upstream_name_for_method("getTransaction");
+        let is_default = upstream_name == self.default_upstream && !self.method_routing.contains_key("getTransaction");
+        
+        debug!(
+            method = "getTransaction",
+            upstream = %upstream_name,
+            routing_type = if is_default { "default" } else { "method-specific" },
+            x_subscription_id = %x_subscription_id,
+            signature = %signature,
+            "Routing JSON-RPC request to upstream"
+        );
+        
         if let Some(client) = self.get_client_for_method("getTransaction") {
             client.get_transaction(x_subscription_id, upstream_name, deadline, id, signature, commitment, encoding, max_supported_transaction_version).await
         } else {
@@ -1318,6 +1456,17 @@ impl RpcClientJsonrpcManager {
         limit: usize,
     ) -> anyhow::Result<Result<Vec<Slot>, Vec<u8>>> {
         let upstream_name = self.get_upstream_name_for_method("getBlocksWithLimit");
+        let is_default = upstream_name == self.default_upstream && !self.method_routing.contains_key("getBlocksWithLimit");
+        
+        debug!(
+            method = "getBlocksWithLimit",
+            upstream = %upstream_name,
+            routing_type = if is_default { "default" } else { "method-specific" },
+            start_slot = %start_slot,
+            limit = %limit,
+            "Routing JSON-RPC request to upstream (internal call)"
+        );
+        
         if let Some(client) = self.get_client_for_method("getBlocksWithLimit") {
             client.get_blocks_parsed(upstream_name, deadline, id, start_slot, limit).await
         } else {
@@ -1333,6 +1482,16 @@ impl RpcClientJsonrpcManager {
         slot: Slot,
     ) -> anyhow::Result<Result<Option<UiConfirmedBlock>, Vec<u8>>> {
         let upstream_name = self.get_upstream_name_for_method("getBlock");
+        let is_default = upstream_name == self.default_upstream && !self.method_routing.contains_key("getBlock");
+        
+        debug!(
+            method = "getBlock",
+            upstream = %upstream_name,
+            routing_type = if is_default { "default" } else { "method-specific" },
+            slot = %slot,
+            "Routing JSON-RPC request to upstream (rewards only)"
+        );
+        
         if let Some(client) = self.get_client_for_method("getBlock") {
             client.get_block_rewards(upstream_name, deadline, id, slot).await
         } else {
