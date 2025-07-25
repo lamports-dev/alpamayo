@@ -273,6 +273,24 @@ impl RpcClientJsonrpcInner {
     }
 
     async fn call(&self, x_subscription_id: &str, upstream_name: &str, body: String) -> RpcClientJsonrpcResultRaw {
+        // Extract method name from JSON body for logging
+        let method = if let Ok(json_body) = serde_json::from_str::<serde_json::Value>(&body) {
+            json_body.get("method")
+                .and_then(|m| m.as_str())
+                .unwrap_or("unknown")
+                .to_string()
+        } else {
+            "unknown".to_string()
+        };
+        
+        debug!(
+            method = %method,
+            upstream = %upstream_name,
+            endpoint = %self.endpoint,
+            x_subscription_id = %x_subscription_id,
+            "Making JSON-RPC request to upstream"
+        );
+        
         let request = self
             .client
             .post(&self.endpoint)
