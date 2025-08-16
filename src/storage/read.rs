@@ -1133,26 +1133,31 @@ impl ReadRequest {
 
                 let result = match signatures
                     .into_iter()
-                    .filter_map(|mut sig| match blocks.get_block_location(sig.slot) {
-                        StorageBlockLocationResult::SlotMismatch => {
-                            error!(slot = sig.slot, "item/slot mismatch");
-                            Some(Err(ReadResultSignaturesForAddress::ReadError(
-                                anyhow::anyhow!(io::Error::other("item/slot mismatch",)),
-                            )))
+                    .filter_map(|mut sig| {
+                        if sig.block_time.is_some() {
+                            return Some(Ok(sig));
                         }
-                        StorageBlockLocationResult::Found(location) => {
-                            sig.block_time = location.block_time;
-                            sig.confirmation_status =
-                                Some(if sig.slot <= storage_processed.finalized_slot {
-                                    TransactionConfirmationStatus::Finalized
-                                } else {
-                                    TransactionConfirmationStatus::Confirmed
-                                });
-                            Some(Ok(sig))
-                        }
-                        _ => {
-                            finished = false;
-                            None
+
+                        match blocks.get_block_location(sig.slot) {
+                            StorageBlockLocationResult::SlotMismatch => {
+                                Some(Err(ReadResultSignaturesForAddress::ReadError(
+                                    anyhow::anyhow!(io::Error::other("item/slot mismatch",)),
+                                )))
+                            }
+                            StorageBlockLocationResult::Found(location) => {
+                                sig.block_time = location.block_time;
+                                sig.confirmation_status =
+                                    Some(if sig.slot <= storage_processed.finalized_slot {
+                                        TransactionConfirmationStatus::Finalized
+                                    } else {
+                                        TransactionConfirmationStatus::Confirmed
+                                    });
+                                Some(Ok(sig))
+                            }
+                            _ => {
+                                finished = false;
+                                None
+                            }
                         }
                     })
                     .collect::<Result<Vec<_>, _>>()

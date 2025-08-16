@@ -16,6 +16,12 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Breaking
 
+## [0.13.0] - 2025-08-16
+
+### Fixes
+
+- rpc: fix gSFA block_time extraction ([#71](https://github.com/lamports-dev/alpamayo/pull/71))
+
 ## [0.12.1] - 2025-07-15
 
 ### Features
