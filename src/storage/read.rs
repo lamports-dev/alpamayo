@@ -582,6 +582,7 @@ pub enum ReadRequest {
         limit: usize,
         tx: oneshot::Sender<ReadResultSignaturesForAddress>,
         x_subscription_id: Arc<str>,
+        uuid: String,
     },
     SignaturesForAddress2 {
         deadline: Instant,
@@ -592,12 +593,16 @@ pub enum ReadRequest {
         signatures: Vec<RpcConfirmedTransactionStatusWithSignature>,
         tx: oneshot::Sender<ReadResultSignaturesForAddress>,
         x_subscription_id: Arc<str>,
+        uuid: String,
+        highest_slot: u64,
     },
     SignaturesForAddress3 {
         deadline: Instant,
         signatures: Vec<RpcConfirmedTransactionStatusWithSignature>,
         finished: bool,
         tx: oneshot::Sender<ReadResultSignaturesForAddress>,
+        uuid: String,
+        highest_slot: u64,
     },
     SignatureStatuses {
         deadline: Instant,
@@ -936,6 +941,7 @@ impl ReadRequest {
                 limit,
                 tx,
                 x_subscription_id,
+                uuid,
             } => {
                 if deadline < Instant::now() {
                     let _ = tx.send(ReadResultSignaturesForAddress::Timeout);
@@ -1032,6 +1038,8 @@ impl ReadRequest {
                                     signatures,
                                     tx,
                                     x_subscription_id,
+                                    uuid,
+                                    highest_slot,
                                 });
                             }
                             // found but not satisfy commitment, return empty vec
@@ -1041,11 +1049,14 @@ impl ReadRequest {
                                 before: None,
                             },
                             // not found, maybe upstream storage have an index
-                            Ok(Ok(None)) => ReadResultSignaturesForAddress::Signatures {
-                                signatures: vec![],
-                                finished: false,
-                                before: Some(before),
-                            },
+                            Ok(Ok(None)) => {
+                                tracing::info!(uuid, "unfinished, slot before signature not found");
+                                ReadResultSignaturesForAddress::Signatures {
+                                    signatures: vec![],
+                                    finished: false,
+                                    before: Some(before),
+                                }
+                            }
                             Ok(Err(error)) => ReadResultSignaturesForAddress::ReadError(error),
                             Err(_error) => ReadResultSignaturesForAddress::Timeout,
                         };
@@ -1063,6 +1074,8 @@ impl ReadRequest {
                         signatures,
                         tx,
                         x_subscription_id,
+                        uuid,
+                        highest_slot,
                     }))))
                 }
             }
@@ -1075,6 +1088,8 @@ impl ReadRequest {
                 signatures,
                 tx,
                 x_subscription_id,
+                uuid,
+                highest_slot,
             } => {
                 if deadline < Instant::now() {
                     let _ = tx.send(ReadResultSignaturesForAddress::Timeout);
@@ -1102,11 +1117,16 @@ impl ReadRequest {
 
                     match result {
                         Ok(Ok((signatures, finished))) => {
+                            if !finished {
+                                tracing::info!(uuid, "unfinished, not enough signatures");
+                            }
                             Some(ReadRequest::SignaturesForAddress3 {
                                 deadline,
                                 signatures,
                                 finished,
                                 tx,
+                                uuid,
+                                highest_slot,
                             })
                         }
                         Ok(Err(error)) => {
@@ -1125,6 +1145,8 @@ impl ReadRequest {
                 signatures,
                 mut finished,
                 tx,
+                uuid,
+                highest_slot,
             } => {
                 if deadline < Instant::now() {
                     let _ = tx.send(ReadResultSignaturesForAddress::Timeout);
@@ -1136,6 +1158,14 @@ impl ReadRequest {
                     .filter_map(|mut sig| {
                         if sig.block_time.is_some() {
                             return Some(Ok(sig));
+                        }
+                        if sig.confirmation_status.is_some() {
+                            tracing::info!(
+                                uuid,
+                                slot = sig.slot,
+                                signature = sig.signature,
+                                "unfinished, block_time is none / confirmation_status some"
+                            );
                         }
 
                         match blocks.get_block_location(sig.slot) {
@@ -1154,7 +1184,18 @@ impl ReadRequest {
                                     });
                                 Some(Ok(sig))
                             }
-                            _ => {
+                            status => {
+                                tracing::info!(
+                                    uuid,
+                                    ?status,
+                                    slot = sig.slot,
+                                    highest_slot,
+                                    signature = sig.signature,
+                                    confirmed_slot = storage_processed.confirmed_slot,
+                                    confirmed_in_process_slot =
+                                        confirmed_in_process.as_ref().map(|(slot, _)| *slot),
+                                    "unfinished, get_block_location"
+                                );
                                 finished = false;
                                 None
                             }

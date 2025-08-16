@@ -1982,6 +1982,8 @@ impl RpcRequestHandler for RpcRequestSignaturesForAddress {
     async fn process(self) -> RpcRequestResult {
         let deadline = Instant::now() + self.state.request_timeout;
 
+        let uuid = uuid::Uuid::new_v4().to_string();
+
         // request
         let (tx, rx) = oneshot::channel();
         anyhow::ensure!(
@@ -1996,6 +1998,7 @@ impl RpcRequestHandler for RpcRequestSignaturesForAddress {
                     limit: self.limit,
                     tx,
                     x_subscription_id: Arc::clone(&self.x_subscription_id),
+                    uuid: uuid.clone(),
                 })
                 .await
                 .is_ok(),
@@ -2018,6 +2021,12 @@ impl RpcRequestHandler for RpcRequestSignaturesForAddress {
 
         let limit = self.limit - signatures.len();
         let id = if !finished && !self.upstream_disabled && limit > 0 {
+            tracing::info!(
+                uuid,
+                address = ?self.address,
+                limit = self.limit,
+                "gsfa: fetch upstream, requires {limit}"
+            );
             if !signatures.is_empty() {
                 before = signatures
                     .last()
