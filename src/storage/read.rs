@@ -323,10 +323,10 @@ impl StorageProcessed {
     }
 
     fn mark_dead(&mut self, slot: Slot) {
-        if self.blocks.insert(slot, None).is_some() {
-            if let Some(block) = self.recent_blocks.remove(&slot) {
-                self.remove_signatures(block);
-            }
+        if self.blocks.insert(slot, None).is_some()
+            && let Some(block) = self.recent_blocks.remove(&slot)
+        {
+            self.remove_signatures(block);
         }
         self.update_processed();
     }
@@ -650,15 +650,14 @@ impl ReadRequest {
 
                 if let Some((confirmed_in_process_slot, confirmed_in_process_block)) =
                     confirmed_in_process
+                    && *confirmed_in_process_slot == slot
                 {
-                    if *confirmed_in_process_slot == slot {
-                        let _ = tx.send(if let Some(block) = confirmed_in_process_block {
-                            ReadResultBlock::Block(block.protobuf.clone())
-                        } else {
-                            ReadResultBlock::Dead
-                        });
-                        return None;
-                    }
+                    let _ = tx.send(if let Some(block) = confirmed_in_process_block {
+                        ReadResultBlock::Block(block.protobuf.clone())
+                    } else {
+                        ReadResultBlock::Dead
+                    });
+                    return None;
                 }
 
                 let location = match blocks.get_block_location(slot) {
@@ -947,53 +946,51 @@ impl ReadRequest {
 
                 // try to get from current processing confirmed block
                 let highest_slot = if commitment.is_confirmed() {
-                    if let Some((confirmed_in_process_slot, Some(block))) = confirmed_in_process {
-                        if let Some(sfa) = block.sfa.get(&address) {
-                            let skip_count = match before {
-                                Some(sig) => {
-                                    if let Some(index) =
-                                        sfa.signatures.iter().position(|sfa| sfa.signature == sig)
-                                    {
-                                        before = None; // reset before because we found it
-                                        index + 1
-                                    } else {
-                                        sfa.signatures.len() // skip signatures if before not found
-                                    }
-                                }
-                                None => 0, // add all signatures if no before arg
-                            };
-
-                            let mut finished = false;
-                            for item in sfa.signatures.iter().skip(skip_count) {
-                                if item.signature == until {
-                                    finished = true;
-                                    break;
-                                }
-
-                                signatures.push(RpcConfirmedTransactionStatusWithSignature {
-                                    signature: item.signature.to_string(),
-                                    slot: *confirmed_in_process_slot,
-                                    err: item.err.clone(),
-                                    memo: item.memo.clone(),
-                                    block_time: block.block_time,
-                                    confirmation_status: Some(
-                                        TransactionConfirmationStatus::Confirmed,
-                                    ),
-                                });
-
-                                if signatures.len() == signatures.capacity() {
-                                    finished = true;
-                                    break;
+                    if let Some((confirmed_in_process_slot, Some(block))) = confirmed_in_process
+                        && let Some(sfa) = block.sfa.get(&address)
+                    {
+                        let skip_count = match before {
+                            Some(sig) => {
+                                if let Some(index) =
+                                    sfa.signatures.iter().position(|sfa| sfa.signature == sig)
+                                {
+                                    before = None; // reset before because we found it
+                                    index + 1
+                                } else {
+                                    sfa.signatures.len() // skip signatures if before not found
                                 }
                             }
-                            if finished {
-                                let _ = tx.send(ReadResultSignaturesForAddress::Signatures {
-                                    signatures,
-                                    finished: true,
-                                    before: None,
-                                });
-                                return None;
+                            None => 0, // add all signatures if no before arg
+                        };
+
+                        let mut finished = false;
+                        for item in sfa.signatures.iter().skip(skip_count) {
+                            if item.signature == until {
+                                finished = true;
+                                break;
                             }
+
+                            signatures.push(RpcConfirmedTransactionStatusWithSignature {
+                                signature: item.signature.to_string(),
+                                slot: *confirmed_in_process_slot,
+                                err: item.err.clone(),
+                                memo: item.memo.clone(),
+                                block_time: block.block_time,
+                                confirmation_status: Some(TransactionConfirmationStatus::Confirmed),
+                            });
+
+                            if signatures.len() == signatures.capacity() {
+                                finished = true;
+                                break;
+                            }
+                        }
+                        if finished {
+                            let _ = tx.send(ReadResultSignaturesForAddress::Signatures {
+                                signatures,
+                                finished: true,
+                                before: None,
+                            });
+                            return None;
                         }
                     }
                     storage_processed.confirmed_slot
@@ -1281,15 +1278,15 @@ impl ReadRequest {
                     return None;
                 }
 
-                if let Some((confirmed_in_process_slot, Some(block))) = confirmed_in_process {
-                    if let Some(transaction) = block.transactions.get(&signature) {
-                        let _ = tx.send(ReadResultTransaction::Transaction {
-                            slot: *confirmed_in_process_slot,
-                            block_time: block.block_time,
-                            bytes: transaction.protobuf.clone(),
-                        });
-                        return None;
-                    }
+                if let Some((confirmed_in_process_slot, Some(block))) = confirmed_in_process
+                    && let Some(transaction) = block.transactions.get(&signature)
+                {
+                    let _ = tx.send(ReadResultTransaction::Transaction {
+                        slot: *confirmed_in_process_slot,
+                        block_time: block.block_time,
+                        bytes: transaction.protobuf.clone(),
+                    });
+                    return None;
                 }
 
                 let read_fut = match db_read.read_tx_index(signature) {

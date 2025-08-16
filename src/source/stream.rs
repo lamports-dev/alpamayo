@@ -307,11 +307,10 @@ impl Stream for StreamSource {
                         if status == SlotStatusProto::SlotCreatedBank {
                             if slot_info.parent.is_none()
                                 && slot_info.status == SlotStatusProto::SlotCreatedBank
+                                && let Some(parent) = parent
                             {
-                                if let Some(parent) = parent {
-                                    slot_info.parent = Some(parent);
-                                    continue;
-                                }
+                                slot_info.parent = Some(parent);
+                                continue;
                             }
 
                             if first_processed <= slot {
@@ -380,10 +379,10 @@ impl Stream for StreamSource {
                                         index,
                                         TransactionWithBinary::new(slot, tx, Some(is_vote)),
                                     ));
-                                    if let Some(first_processed) = first_processed {
-                                        if slot <= first_processed {
-                                            continue;
-                                        }
+                                    if let Some(first_processed) = first_processed
+                                        && slot <= first_processed
+                                    {
+                                        continue;
                                     }
                                     match slot_info.try_build_block() {
                                         Some(Ok(block)) => {
@@ -410,10 +409,10 @@ impl Stream for StreamSource {
                         let entry = this.slots.entry(slot);
                         let slot_info = entry.or_insert_with(|| SlotInfo::new(slot));
                         slot_info.block_meta = Some(block_meta);
-                        if let Some(first_processed) = first_processed {
-                            if slot <= first_processed {
-                                continue;
-                            }
+                        if let Some(first_processed) = first_processed
+                            && slot <= first_processed
+                        {
+                            continue;
                         }
                         match slot_info.try_build_block() {
                             Some(Ok(block)) => Ok(StreamSourceMessage::Block { slot, block }),

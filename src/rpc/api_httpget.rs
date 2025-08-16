@@ -91,30 +91,28 @@ impl State {
     ) -> Option<BoxFuture<'static, HttpResult<RpcResponse>>> {
         let path = req.uri().path();
 
-        if let Some(re) = &self.supported_calls.get_block {
-            if let Some(slot) = re.captures(path).and_then(|c| c.get(1).map(|m| m.as_str())) {
-                if let Ok(slot) = Slot::from_str(slot) {
-                    return Some(Box::pin(async move {
-                        match self.process_block(req, slot).await {
-                            Ok(response) => response,
-                            Err(error) => response_500(error),
-                        }
-                    }));
+        if let Some(re) = &self.supported_calls.get_block
+            && let Some(slot) = re.captures(path).and_then(|c| c.get(1).map(|m| m.as_str()))
+            && let Ok(slot) = Slot::from_str(slot)
+        {
+            return Some(Box::pin(async move {
+                match self.process_block(req, slot).await {
+                    Ok(response) => response,
+                    Err(error) => response_500(error),
                 }
-            }
+            }));
         }
 
-        if let Some(re) = &self.supported_calls.get_transaction {
-            if let Some(slot) = re.captures(path).and_then(|c| c.get(1).map(|m| m.as_str())) {
-                if let Ok(signature) = Signature::from_str(slot) {
-                    return Some(Box::pin(async move {
-                        match self.process_transaction(req, signature).await {
-                            Ok(response) => response,
-                            Err(error) => response_500(error),
-                        }
-                    }));
+        if let Some(re) = &self.supported_calls.get_transaction
+            && let Some(slot) = re.captures(path).and_then(|c| c.get(1).map(|m| m.as_str()))
+            && let Ok(signature) = Signature::from_str(slot)
+        {
+            return Some(Box::pin(async move {
+                match self.process_transaction(req, signature).await {
+                    Ok(response) => response,
+                    Err(error) => response_500(error),
                 }
-            }
+            }));
         }
 
         if path == "/version" {
