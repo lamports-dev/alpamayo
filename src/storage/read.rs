@@ -992,8 +992,10 @@ impl ReadRequest {
                             });
                             return None;
                         }
+                        storage_processed.confirmed_slot - 1 // because we already processed this slot
+                    } else {
+                        storage_processed.confirmed_slot
                     }
-                    storage_processed.confirmed_slot
                 } else {
                     storage_processed.finalized_slot
                 };
