@@ -16,6 +16,12 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Breaking
 
+## [0.13.1] - 2025-08-20
+
+### Fixes
+
+- rpc: fix gSFA duplicated entries for confirmed block ([#72](https://github.com/lamports-dev/alpamayo/pull/72))
+
 ## [0.13.0] - 2025-08-16
 
 ### Fixes
