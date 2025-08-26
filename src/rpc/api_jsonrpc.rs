@@ -26,15 +26,13 @@ use {
     },
     metrics::gauge,
     prost::Message,
-    richat_shared::{
-        jsonrpc::{
-            helpers::{
-                jsonrpc_error_invalid_params, jsonrpc_response_error,
-                jsonrpc_response_error_custom, jsonrpc_response_success, to_vec,
-            },
-            requests::{RpcRequestResult, RpcRequestsProcessor},
+    richat_metrics::duration_to_seconds,
+    richat_shared::jsonrpc::{
+        helpers::{
+            jsonrpc_error_invalid_params, jsonrpc_response_error, jsonrpc_response_error_custom,
+            jsonrpc_response_success, to_vec,
         },
-        metrics::duration_to_seconds,
+        requests::{RpcRequestResult, RpcRequestsProcessor},
     },
     serde::{Deserialize, Serialize, de},
     serde_json::json,

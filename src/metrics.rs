@@ -89,8 +89,8 @@ pub async fn spawn_server(
         }
     });
 
-    richat_shared::metrics::spawn_server(
-        richat_shared::config::ConfigMetrics {
+    richat_metrics::spawn_server(
+        richat_metrics::ConfigMetrics {
             endpoint: config.endpoint,
         },
         move || handle.render().into_bytes(), // metrics

@@ -18,7 +18,7 @@ use {
         stream::{FuturesUnordered, StreamExt},
     },
     metrics::gauge,
-    richat_shared::metrics::duration_to_seconds,
+    richat_metrics::duration_to_seconds,
     solana_rpc_client_api::response::{
         RpcConfirmedTransactionStatusWithSignature, RpcPrioritizationFee,
     },
