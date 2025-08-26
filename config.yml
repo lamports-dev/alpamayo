@@ -9,13 +9,13 @@ metrics:
 source:
   # Tokio runtime for RPC requests and Geyser stream
   tokio:
-    worker_threads: 2 # Number of threads in Tokio runtime, by default all available cores
-    affinity: 0-1 # Pin threads to specific CPUs, optional
+    worker_threads: null # Number of threads in Tokio runtime, by default all available cores
+    affinity: null # Pin threads to specific CPUs, optional (taskset syntax)
   # RPC endpoint, used for edge-cases, stream reconnect, catch-up on restart, and backfilling
   # HttpGet endpoint can be used for catch-up on restart and backfilling (can be skipped)
   http:
     rpc: http://127.0.0.1:8899/
-    httpget: http://127.0.0.1:9000/
+    httpget: null
     timeout: 30s
     concurrency: 10 # Max number of requests in progress at one moment
   # Geyser stream
@@ -37,15 +37,16 @@ source:
     tcp_keepalive: 15s
     tcp_nodelay: true
     timeout: null
-    max_decoding_message_size: 16_777_216 # 16MiB, should be enough (max account data length is 10MiB)
+    max_decoding_message_size: 4_194_304 # 4MiB, better set to 16MiB (because account messages can be more than 10MiB)
     compression: # Optional compression, not recommended due to high traffic volume
-      accept: ["gzip", "zstd"]
-      send: ["gzip", "zstd"]
+      accept: [] # valid: gzip, zstd
+      send: [] # valid: gzip, zstd
     x_token: null
 storage:
   # Backfill db to specified slot, if missed no backfilling at all
-  backfilling:
-    sync_to: 338_669_763
+  # If you want to reach max blocks then set to 0 would be easiest solution
+  # backfilling:
+  #   sync_to: 338_669_763
   blocks:
     max: 1_000 # Max number of stored slots, once limit is reached old blocks will be pruned
     http_getblock_max_retries: 10 # Max retries when trying to fetch blocks from RPC
@@ -61,12 +62,12 @@ storage:
     path: ./db/alpamayo/rocksdb # Rocksdb location, don't forget to increase `max_open_files`
     index_slot_compression: none # Slot info (transactions and touched addresses) compression: none, snappy, zlib, bz2, lz4, lz4hc, zstd
     index_sfa_compression: none # Address signatures per slot compression: none, snappy, zlib, bz2, lz4, lz4hc, zstd
-    read_workers: 8 # Number of threads used to read data from Rocksdb, by default number of CPUs on the system
+    read_workers: null # Number of threads used to read data from Rocksdb, by default number of CPUs on the system
   write:
-    affinity: 2 # Optional affinity of write thread, used to build blocks and write them to storage files
+    affinity: null # Optional affinity of write thread, used to build blocks and write them to storage files
   read:
     threads: 1 # Number of single-threaded tokio runtimes used to read data from storage files
-    affinity: 3-4 # Optional affinity of read tokio runtimes
+    affinity: null # Optional affinity of read tokio runtimes
     # Max number of async requests handled by every read thread
     # async requests: getBlock, getInflationReward, getSignaturesForAddress, getSignatureStatuses, getTransaction
     thread_max_async_requests: 1024
@@ -76,8 +77,8 @@ rpc:
   endpoint: 127.0.0.1:9000 # RPC endpoint, implement same JSON-RPC API as Agave
   # RPC Tokio runtime, used to parse requests, serialize responses
   tokio:
-    worker_threads: 2 # Number of threads in Tokio runtime, by default all available cores
-    affinity: 5-6 # Pin threads to specified CPUs, optional
+    worker_threads: null # Number of threads in Tokio runtime, by default all available cores
+    affinity: null # Pin threads to specified CPUs, optional
   body_limit: 50KiB # JSON-RPC body limit
   request_timeout: 60s
   # httpget is plain HTTP interface with protobuf in response, allow to server blocks up to 15 times faster
@@ -105,23 +106,23 @@ rpc:
     - getTransaction
     - getVersion
     - isBlockhashValid
-  gsfa_limit: 1000 # Max limit in `getSignaturesForAddress`, default value in Agave is 1000
+  gsfa_limit: 1_000 # Max limit in `getSignaturesForAddress`, default value in Agave is 1000
   gss_transaction_history: true # Allow to handle `getSignatureStatus` from storage, not only from latest 300 slots
   grpf_percentile: true # Allow to use `percentile` option in `getRecentPrioritizationFees`
   gcn_cache_ttl: 1s # TTL for cached `getClusterNodes`
-  request_channel_capacity: 4096 # Queue size of requests to read threads (be aware, one JSON-RPC request can contain multiple requests)
+  request_channel_capacity: 4_096 # Queue size of requests to read threads (be aware, one JSON-RPC request can contain multiple requests)
   # fallback for httpget
-  upstream_httpget:
-    endpoint: http://127.0.0.1:8899
-    user_agent: alpamayo/v0.1.0
-    version: HTTP/1.1
-    timeout: 30s
+  # upstream_httpget:
+  #   endpoint: http://127.0.0.1:8899
+  #   user_agent: alpamayo/v0.1.0
+  #   version: HTTP/1.1
+  #   timeout: 30s
   # fallback for JSON-RPC methods
-  upstream_jsonrpc:
-    endpoint: http://127.0.0.1:8899
-    user_agent: alpamayo/v0.1.0
-    version: HTTP/1.1
-    timeout: 30s
+  # upstream_jsonrpc:
+  #   endpoint: http://127.0.0.1:8899
+  #   user_agent: alpamayo/v0.1.0
+  #   version: HTTP/1.1
+  #   timeout: 30s
   # getBlock and getTransactions requires a lot of CPU time to decode protobuf, encode to requested format, serialize data
   # getBlock can requires more than 100ms to do all work, it would be good to have these threads separated from everything rest
   # for example, you can pin:
@@ -129,6 +130,6 @@ rpc:
   #   - rpc runtime to another pool of CPUs
   #   - workers to some CPUs from rpc runtime
   workers:
-    threads: 8 # Number of workers, by default number of CPUs
-    affinity: 7-14 # Optional threads affinity
-    channel_size: 4096 # Queue size to worker threads
+    threads: null # Number of workers, by default number of CPUs
+    affinity: null # Optional threads affinity
+    channel_size: 4_096 # Queue size to worker threads
