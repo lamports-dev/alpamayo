@@ -348,15 +348,14 @@ impl StoredBlocksRead {
             RpcRequestBlocksUntil::Limit(limit) => limit,
         });
 
-        let mut index = (self.tail + (start_slot - tail.slot) as usize - 1) % self.blocks.len();
+        let mut index = (self.tail + (start_slot - tail.slot) as usize) % self.blocks.len();
         loop {
-            index = (index + 1) % self.blocks.len(); // increase for normal and dead
-
             let block = self.blocks[index];
             if !block.exists {
                 break;
             }
             if block.dead {
+                index = (index + 1) % self.blocks.len();
                 continue;
             }
 
@@ -367,6 +366,8 @@ impl StoredBlocksRead {
                 RpcRequestBlocksUntil::Limit(limit) if blocks.len() == limit => break,
                 _ => {}
             }
+
+            index = (index + 1) % self.blocks.len();
         }
 
         Ok(blocks)
