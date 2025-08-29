@@ -16,6 +16,12 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Breaking
 
+## [0.14.1] - 2025-08-29
+
+### Fixes
+
+- rpc: fix gIR / gBWL ([#77](https://github.com/lamports-dev/alpamayo/pull/74))
+
 ## [0.14.0] - 2025-08-26
 
 ### Features

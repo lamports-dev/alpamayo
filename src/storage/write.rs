@@ -510,7 +510,7 @@ async fn load_confirmed_slot(
             slot: finalized_slot,
         });
     }
-    info!(elapsed = ?ts.elapsed(), finalized_slot, confirmed_slot, "load finalized & confirmed slots");
+    info!(elapsed = ?ts.elapsed(), finalized_slot, confirmed_slot, "received finalized & confirmed slots from RPC");
     Ok(confirmed_slot)
 }
 
