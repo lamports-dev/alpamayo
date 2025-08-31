@@ -189,7 +189,7 @@ impl StorageMemory {
             }
 
             panic!(
-                "failed to get next block, gen_next_slot = {}, first_slot = {first_slot}, confirmed slot = {}, confirmed block = {}, confirmed dead = {}",
+                "failed to get next block, gen next slot = {}, first slot = {first_slot}, confirmed slot = {}, confirmed block = {}, confirmed dead = {}",
                 self.gen_next_slot,
                 item.slot,
                 item.block.is_some(),
