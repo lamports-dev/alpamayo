@@ -2,7 +2,6 @@ use {
     crate::source::block::BlockWithBinary,
     solana_sdk::clock::Slot,
     std::{collections::VecDeque, sync::Arc},
-    tracing::error,
 };
 
 #[derive(Debug)]
@@ -69,6 +68,11 @@ pub struct StorageMemory {
 impl StorageMemory {
     // create empty slots
     fn add_slot(&mut self, slot: Slot) -> Option<&mut BlockInfo> {
+        // initialize
+        if self.gen_next_slot == 0 {
+            self.gen_next_slot = slot;
+        }
+
         // drop if we already reported about that slot
         if slot < self.gen_next_slot {
             return None;
@@ -110,10 +114,6 @@ impl StorageMemory {
             assert!(!item.dead, "trying to mark dead slot as confirmed");
             item.confirmed = true;
             self.confirmed = slot;
-
-            if self.gen_next_slot == 0 {
-                self.gen_next_slot = slot;
-            }
         }
     }
 
@@ -134,7 +134,8 @@ impl StorageMemory {
             .find_map(|(index, block)| block.confirmed.then_some(index))?;
 
         let block = loop {
-            match &self.blocks[confirmed_index].block {
+            let item = &self.blocks[confirmed_index];
+            match &item.block {
                 Some(block) => {
                     // update confirmed index
                     if first_slot <= block.parent_slot {
@@ -170,11 +171,6 @@ impl StorageMemory {
                             MemoryConfirmedBlock::missed_or_dead(slot, dead)
                         };
                     }
-
-                    error!(
-                        gen_next_slot = self.gen_next_slot,
-                        "unexpected gen_next_slot for confirmed_index with existed block"
-                    );
                 }
                 None => {
                     // we don't have any info, definitely missed
@@ -189,15 +185,16 @@ impl StorageMemory {
                             self.blocks.pop_front().expect("existed");
                         break MemoryConfirmedBlock::missed_or_dead(slot, dead);
                     }
-
-                    error!(
-                        gen_next_slot = self.gen_next_slot,
-                        "unexpected gen_next_slot for confirmed_index"
-                    );
                 }
             }
 
-            return None;
+            panic!(
+                "failed to get next block, gen next slot = {}, first slot = {first_slot}, confirmed slot = {}, confirmed block = {}, confirmed dead = {}",
+                self.gen_next_slot,
+                item.slot,
+                item.block.is_some(),
+                item.dead,
+            );
         };
 
         self.gen_next_slot += 1;

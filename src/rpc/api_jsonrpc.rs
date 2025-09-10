@@ -26,15 +26,13 @@ use {
     },
     metrics::gauge,
     prost::Message,
-    richat_shared::{
-        jsonrpc::{
-            helpers::{
-                jsonrpc_error_invalid_params, jsonrpc_response_error,
-                jsonrpc_response_error_custom, jsonrpc_response_success, to_vec,
-            },
-            requests::{RpcRequestResult, RpcRequestsProcessor},
+    richat_metrics::duration_to_seconds,
+    richat_shared::jsonrpc::{
+        helpers::{
+            jsonrpc_error_invalid_params, jsonrpc_response_error, jsonrpc_response_error_custom,
+            jsonrpc_response_success, to_vec,
         },
-        metrics::duration_to_seconds,
+        requests::{RpcRequestResult, RpcRequestsProcessor},
     },
     serde::{Deserialize, Serialize, de},
     serde_json::json,
@@ -844,7 +842,23 @@ impl RpcRequestHandler for RpcRequestBlocks {
                     )
                     .await;
             }
+
+            if let Some(upstream) = self.state.upstream.as_ref() {
+                return upstream
+                    .get_blocks(
+                        Arc::clone(&self.x_subscription_id),
+                        deadline,
+                        &self.id,
+                        self.start_slot,
+                        self.until,
+                        self.commitment,
+                    )
+                    .await;
+            }
+
+            // No upstream configured, continue with local storage
         }
+
 
         // request
         let (tx, rx) = oneshot::channel();
@@ -1247,13 +1261,12 @@ impl RpcRequestHandler for RpcRequestInflationReward {
                 missed,
                 base,
             }) => {
-                if !missed.is_empty() {
-                    if let Err(error) = self
+                if !missed.is_empty()
+                    && let Err(error) = self
                         .get_inflation_reward(deadline, addresses, &mut rewards, missed, base)
                         .await?
-                    {
-                        return Ok(error);
-                    }
+                {
+                    return Ok(error);
                 }
                 rewards
             }
@@ -1459,7 +1472,7 @@ impl RpcRequestInflationReward {
         // some slot will be removed while we pass request, send to upstream
         let first_available_slot = self.state.stored_slots.first_available_load() + 150;
         if start_slot < first_available_slot && !self.upstream_disabled {
-            // Try the new upstream manager first
+            // Prefer the new upstream manager if configured
             if let Some(upstream_manager) = self.state.upstream_manager.as_ref() {
                 return upstream_manager
                     .get_blocks_parsed(deadline, &self.id, start_slot, limit)
@@ -1467,8 +1480,17 @@ impl RpcRequestInflationReward {
                     .map_err(|error| anyhow::anyhow!(error));
             }
 
+            // Fallback to legacy single-upstream
+            if let Some(upstream) = self.state.upstream.as_ref() {
+                return upstream
+                    .get_blocks_parsed(deadline, &self.id, start_slot, limit)
+                    .await
+                    .map_err(|error| anyhow::anyhow!(error));
+            }
+
             // No upstream configured, continue with local storage
         }
+
 
         // request
         let (tx, rx) = oneshot::channel();
@@ -1776,10 +1798,10 @@ impl RpcRequestHandler for RpcRequestLeaderSchedule {
         let (slot, maybe_config) = options.map(|options| options.unzip()).unwrap_or_default();
         let config = maybe_config.or(config).unwrap_or_default();
 
-        if let Some(identity) = &config.identity {
-            if let Err(error) = verify_pubkey(identity) {
-                return Err(jsonrpc_response_error(id, error));
-            }
+        if let Some(identity) = &config.identity
+            && let Err(error) = verify_pubkey(identity)
+        {
+            return Err(jsonrpc_response_error(id, error));
         }
 
         let (slot, is_processed) = match slot {
@@ -1888,16 +1910,16 @@ impl RpcRequestHandler for RpcRequestRecentPrioritizationFees {
 
         let percentile = if state.grpf_percentile {
             let RpcRecentPrioritizationFeesConfig { percentile } = config.unwrap_or_default();
-            if let Some(percentile) = percentile {
-                if percentile > 10_000 {
-                    return Err(jsonrpc_response_error(
-                        id,
-                        jsonrpc_error_invalid_params::<()>(
-                            "Percentile is too big; max value is 10000",
-                            None,
-                        ),
-                    ));
-                }
+            if let Some(percentile) = percentile
+                && percentile > 10_000
+            {
+                return Err(jsonrpc_response_error(
+                    id,
+                    jsonrpc_error_invalid_params::<()>(
+                        "Percentile is too big; max value is 10000",
+                        None,
+                    ),
+                ));
             }
             percentile
         } else {
@@ -2317,13 +2339,13 @@ impl RpcRequestHandler for RpcRequestSlot {
             CommitmentLevel::Finalized => state.stored_slots.finalized_load(),
         };
 
-        if let Some(min_context_slot) = min_context_slot {
-            if context_slot < min_context_slot {
-                return Err(jsonrpc_response_error_custom(
-                    id,
-                    RpcCustomError::MinContextSlotNotReached { context_slot },
-                ));
-            }
+        if let Some(min_context_slot) = min_context_slot
+            && context_slot < min_context_slot
+        {
+            return Err(jsonrpc_response_error_custom(
+                id,
+                RpcCustomError::MinContextSlotNotReached { context_slot },
+            ));
         }
 
         Err(jsonrpc_response_success(id, context_slot))

@@ -30,7 +30,8 @@ use {
         ThreadPoolBuilder,
         iter::{IntoParallelIterator, ParallelIterator},
     },
-    richat_shared::{metrics::duration_to_seconds, mutex_lock, shutdown::Shutdown},
+    richat_metrics::duration_to_seconds,
+    richat_shared::{mutex_lock, shutdown::Shutdown},
     solana_sdk::clock::Slot,
     solana_storage_proto::convert::generated,
     solana_transaction_status::ConfirmedBlock,
@@ -338,10 +339,11 @@ async fn start2(
                 Some(Ok((slot, block))) => {
                     if slot >= next_confirmed_slot {
                         queued_slots_front.insert(slot, block.map(Arc::new));
-                    } else if let Some(next_back_slot) = next_back_slot {
-                        if slot <= next_back_slot && backfill_upto.is_some() {
-                            queued_slots_back.insert(slot, block.map(Arc::new));
-                        }
+                    } else if let Some(next_back_slot) = next_back_slot
+                        && slot <= next_back_slot
+                        && backfill_upto.is_some()
+                    {
+                        queued_slots_back.insert(slot, block.map(Arc::new));
                     }
                 }
                 Some(Err(error)) => return Err(error),
@@ -432,17 +434,17 @@ async fn start2(
                 if backfill_ts.is_none() {
                     backfill_ts = Some((slot, Instant::now()));
                 }
-                if let Some((slot2, ts)) = backfill_ts {
-                    if ts.elapsed() > Duration::from_secs(5) {
-                        info!(
-                            sync_to = backfill_upto_value,
-                            left = slot - backfill_upto_value,
-                            added = slot2 - slot,
-                            sync_rate = (slot2 - slot) as f64 / ts.elapsed().as_secs() as f64,
-                            "backfilling progress"
-                        );
-                        backfill_ts = Some((slot, Instant::now()));
-                    }
+                if let Some((slot2, ts)) = backfill_ts
+                    && ts.elapsed() > Duration::from_secs(5)
+                {
+                    info!(
+                        sync_to = backfill_upto_value,
+                        left = slot - backfill_upto_value,
+                        added = slot2 - slot,
+                        sync_rate = (slot2 - slot) as f64 / ts.elapsed().as_secs() as f64,
+                        "backfilling progress"
+                    );
+                    backfill_ts = Some((slot, Instant::now()));
                 }
 
                 while next_back_request_slot >= backfill_upto_value && !http_blocks.is_full() {
@@ -508,7 +510,7 @@ async fn load_confirmed_slot(
             slot: finalized_slot,
         });
     }
-    info!(elapsed = ?ts.elapsed(), finalized_slot, confirmed_slot, "load finalized & confirmed slots");
+    info!(elapsed = ?ts.elapsed(), finalized_slot, confirmed_slot, "received finalized & confirmed slots from RPC");
     Ok(confirmed_slot)
 }
 

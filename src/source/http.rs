@@ -143,10 +143,11 @@ impl HttpSource {
         slot: Slot,
         httpget: bool,
     ) -> Result<BlockWithBinary, GetBlockError> {
-        if httpget && self.httpurl.is_some() {
-            if let Some(block) = self.get_block_http(slot).await {
-                return Ok(block);
-            }
+        if httpget
+            && self.httpurl.is_some()
+            && let Some(block) = self.get_block_http(slot).await
+        {
+            return Ok(block);
         }
 
         self.get_block_rpc(slot).await

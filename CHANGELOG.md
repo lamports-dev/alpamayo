@@ -12,9 +12,35 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Fixes
 
+- storage: panic on unexpected state in MemoryStorage ([#75](https://github.com/lamports-dev/alpamayo/pull/75))
+
 ### Features
 
 ### Breaking
+
+## [0.14.1] - 2025-08-29
+
+### Fixes
+
+- rpc: fix gIR / gBWL ([#74](https://github.com/lamports-dev/alpamayo/pull/74))
+
+## [0.14.0] - 2025-08-26
+
+### Features
+
+- alpamayo: update richat to v5 ([#73](https://github.com/lamports-dev/alpamayo/pull/73))
+
+## [0.13.1] - 2025-08-20
+
+### Fixes
+
+- rpc: fix gSFA duplicated entries for confirmed block ([#72](https://github.com/lamports-dev/alpamayo/pull/72))
+
+## [0.13.0] - 2025-08-16
+
+### Fixes
+
+- rpc: fix gSFA block_time extraction ([#71](https://github.com/lamports-dev/alpamayo/pull/71))
 
 ## [0.12.1] - 2025-07-15
 

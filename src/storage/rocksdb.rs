@@ -926,14 +926,14 @@ impl RocksdbWrite {
                 "trying to push back invalid slot: {slot}, expected {next_slot}"
             );
         }
-        if let Some((back_slot, back_height)) = blocks.get_back_height() {
-            if let Some(block) = &block {
-                let block_height = block.block_height.expect("should have height");
-                anyhow::ensure!(
-                    block_height + 1 == back_height,
-                    "trying to push back block with invalid height: {block_height} (slot {slot}), current: {back_height} (slot {back_slot})",
-                );
-            }
+        if let Some((back_slot, back_height)) = blocks.get_back_height()
+            && let Some(block) = &block
+        {
+            let block_height = block.block_height.expect("should have height");
+            anyhow::ensure!(
+                block_height + 1 == back_height,
+                "trying to push back block with invalid height: {block_height} (slot {slot}), current: {back_height} (slot {back_slot})",
+            );
         }
 
         // make sure that we not reached blocks limit
@@ -1018,14 +1018,14 @@ impl RocksdbWrite {
                 "trying to push front invalid slot: {slot}, expected {next_slot}"
             );
         }
-        if let Some((front_slot, front_height)) = blocks.get_front_height() {
-            if let Some(block) = &block {
-                let block_height = block.block_height.expect("should have height");
-                anyhow::ensure!(
-                    front_height + 1 == block_height,
-                    "trying to push front block with invalid height: {block_height} (slot {slot}), current: {front_height} (slot {front_slot})"
-                );
-            }
+        if let Some((front_slot, front_height)) = blocks.get_front_height()
+            && let Some(block) = &block
+        {
+            let block_height = block.block_height.expect("should have height");
+            anyhow::ensure!(
+                front_height + 1 == block_height,
+                "trying to push front block with invalid height: {block_height} (slot {slot}), current: {front_height} (slot {front_slot})"
+            );
         }
 
         // get some space if we reached blocks limit
