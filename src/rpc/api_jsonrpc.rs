@@ -845,7 +845,6 @@ impl RpcRequestHandler for RpcRequestBlocks {
 
         }
 
-
         // request
         let (tx, rx) = oneshot::channel();
         anyhow::ensure!(
@@ -1467,7 +1466,6 @@ impl RpcRequestInflationReward {
             }
 
         }
-
 
         // request
         let (tx, rx) = oneshot::channel();
