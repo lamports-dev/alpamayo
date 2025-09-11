@@ -843,20 +843,6 @@ impl RpcRequestHandler for RpcRequestBlocks {
                     .await;
             }
 
-            if let Some(upstream) = self.state.upstream.as_ref() {
-                return upstream
-                    .get_blocks(
-                        Arc::clone(&self.x_subscription_id),
-                        deadline,
-                        &self.id,
-                        self.start_slot,
-                        self.until,
-                        self.commitment,
-                    )
-                    .await;
-            }
-
-            // No upstream configured, continue with local storage
         }
 
 
@@ -1480,15 +1466,6 @@ impl RpcRequestInflationReward {
                     .map_err(|error| anyhow::anyhow!(error));
             }
 
-            // Fallback to legacy single-upstream
-            if let Some(upstream) = self.state.upstream.as_ref() {
-                return upstream
-                    .get_blocks_parsed(deadline, &self.id, start_slot, limit)
-                    .await
-                    .map_err(|error| anyhow::anyhow!(error));
-            }
-
-            // No upstream configured, continue with local storage
         }
 
 
