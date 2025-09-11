@@ -843,22 +843,7 @@ impl RpcRequestHandler for RpcRequestBlocks {
                     .await;
             }
 
-            if let Some(upstream) = self.state.upstream.as_ref() {
-                return upstream
-                    .get_blocks(
-                        Arc::clone(&self.x_subscription_id),
-                        deadline,
-                        &self.id,
-                        self.start_slot,
-                        self.until,
-                        self.commitment,
-                    )
-                    .await;
-            }
-
-            // No upstream configured, continue with local storage
         }
-
 
         // request
         let (tx, rx) = oneshot::channel();
@@ -1472,7 +1457,7 @@ impl RpcRequestInflationReward {
         // some slot will be removed while we pass request, send to upstream
         let first_available_slot = self.state.stored_slots.first_available_load() + 150;
         if start_slot < first_available_slot && !self.upstream_disabled {
-            // Prefer the new upstream manager if configured
+            // Try the new upstream manager first
             if let Some(upstream_manager) = self.state.upstream_manager.as_ref() {
                 return upstream_manager
                     .get_blocks_parsed(deadline, &self.id, start_slot, limit)
@@ -1480,17 +1465,7 @@ impl RpcRequestInflationReward {
                     .map_err(|error| anyhow::anyhow!(error));
             }
 
-            // Fallback to legacy single-upstream
-            if let Some(upstream) = self.state.upstream.as_ref() {
-                return upstream
-                    .get_blocks_parsed(deadline, &self.id, start_slot, limit)
-                    .await
-                    .map_err(|error| anyhow::anyhow!(error));
-            }
-
-            // No upstream configured, continue with local storage
         }
-
 
         // request
         let (tx, rx) = oneshot::channel();
