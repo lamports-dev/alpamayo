@@ -1458,7 +1458,7 @@ impl RpcRequestInflationReward {
         // some slot will be removed while we pass request, send to upstream
         let first_available_slot = self.state.stored_slots.first_available_load() + 150;
         if start_slot < first_available_slot && !self.upstream_disabled {
-            // Prefer the new upstream manager if configured
+            // Try the new upstream manager first
             if let Some(upstream_manager) = self.state.upstream_manager.as_ref() {
                 return upstream_manager
                     .get_blocks_parsed(deadline, &self.id, start_slot, limit)
