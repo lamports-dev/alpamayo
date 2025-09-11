@@ -112,11 +112,11 @@ rpc:
   gcn_cache_ttl: 1s # TTL for cached `getClusterNodes`
   request_channel_capacity: 4_096 # Queue size of requests to read threads (be aware, one JSON-RPC request can contain multiple requests)
   # fallback for httpget
-  # upstream_httpget:
-  #   endpoint: http://127.0.0.1:8899
-  #   user_agent: alpamayo/v0.1.0
-  #   version: HTTP/1.1
-  #   timeout: 30s
+  upstream_httpget:
+    endpoint: http://127.0.0.1:8899
+    user_agent: alpamayo/v0.1.0
+    version: HTTP/1.1
+    timeout: 30s
   # Multiple upstream JSON-RPC configuration
   # This allows routing different RPC methods to different upstream endpoints
   upstream_jsonrpc_multiple:
