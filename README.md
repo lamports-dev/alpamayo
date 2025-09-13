@@ -6,6 +6,8 @@ Please use issues only for reporting bugs or discussing feature-related topics. 
 
 ## Sponsored by
 
+- [Triton One](https://triton.one/) — https://x.com/_fanatid/status/1956431719961166218
+
 ## Supported methods
 
 ### Solana Rpc methods:
