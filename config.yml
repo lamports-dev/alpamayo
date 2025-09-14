@@ -80,6 +80,10 @@ rpc:
     worker_threads: null # Number of threads in Tokio runtime, by default all available cores
     affinity: null # Pin threads to specified CPUs, optional
   body_limit: 50KiB # JSON-RPC body limit
+  extra_headers: # Extra headers added to response
+    # access-control-allow-origin: "*"
+    # access-control-max-age: 86400
+    # access-control-allow-methods: OPTIONS, POST
   request_timeout: 60s
   # httpget is plain HTTP interface with protobuf in response, allow to server blocks up to 15 times faster
   # `/block/${slot}` — block request

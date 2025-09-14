@@ -137,7 +137,7 @@ dependencies = [
 
 [[package]]
 name = "alpamayo"
-version = "0.14.1"
+version = "0.14.2"
 dependencies = [
  "affinity-linux",
  "anyhow",
@@ -3957,9 +3957,9 @@ dependencies = [
 
 [[package]]
 name = "richat-shared"
-version = "5.0.0"
+version = "5.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "263e48126dfd1fd271966729dd2d91ef48814c3c872949e3ca10c5118dbd31af"
+checksum = "b2ad4a234f8278e77d974a8b00eca7a8982d405be21af26b61df048b39c31706"
 dependencies = [
  "affinity-linux",
  "anyhow",

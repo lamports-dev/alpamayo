@@ -1,6 +1,10 @@
 use {
     crate::{storage::files::StorageId, version::VERSION},
     human_size::Size,
+    hyper::{
+        HeaderMap,
+        header::{HeaderName, HeaderValue},
+    },
     reqwest::Version,
     richat_client::grpc::ConfigGrpcClient,
     richat_shared::config::{ConfigTokio, deserialize_affinity, deserialize_num_str},
@@ -11,7 +15,7 @@ use {
     },
     solana_rpc_client_api::request::MAX_GET_CONFIRMED_SIGNATURES_FOR_ADDRESS2_LIMIT,
     std::{
-        collections::HashSet,
+        collections::{HashMap, HashSet},
         fs::read_to_string as read_to_string_sync,
         net::{IpAddr, Ipv4Addr, SocketAddr},
         path::{Path, PathBuf},
@@ -297,12 +301,15 @@ pub struct ConfigRpc {
     /// Tokio runtime for RPC
     #[serde(default)]
     pub tokio: ConfigTokio,
+    /// Max body size limit in bytes
     #[serde(
         default = "ConfigRpc::default_body_limit",
         deserialize_with = "deserialize_humansize_usize"
     )]
-    /// Max body size limit in bytes
     pub body_limit: usize,
+    /// Extra headers added to response
+    #[serde(deserialize_with = "ConfigRpc::deserialize_extra_headers")]
+    pub extra_headers: HeaderMap,
     /// Request timeout
     #[serde(
         default = "ConfigRpc::default_request_timeout",
@@ -350,6 +357,22 @@ pub struct ConfigRpc {
 impl ConfigRpc {
     const fn default_body_limit() -> usize {
         50 * 1024 // 50KiB
+    }
+
+    fn deserialize_extra_headers<'de, D>(deserializer: D) -> Result<HeaderMap, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let mut map = HeaderMap::new();
+        for (key, value) in HashMap::<String, String>::deserialize(deserializer)? {
+            map.insert(
+                HeaderName::try_from(&key)
+                    .map_err(|_| de::Error::custom("failed to parse header key: {key}"))?,
+                HeaderValue::try_from(&value)
+                    .map_err(|_| de::Error::custom("failed to parse header value: {value}"))?,
+            );
+        }
+        Ok(map)
     }
 
     const fn default_request_timeout() -> Duration {

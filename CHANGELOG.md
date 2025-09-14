@@ -12,11 +12,19 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Fixes
 
+### Features
+
+### Breaking
+
+## [0.14.2] - 2025-09-13
+
+### Fixes
+
 - storage: panic on unexpected state in MemoryStorage ([#75](https://github.com/lamports-dev/alpamayo/pull/75))
 
 ### Features
 
-### Breaking
+- rpc: allow extra headers in response ([#78](https://github.com/lamports-dev/alpamayo/pull/78))
 
 ## [0.14.1] - 2025-08-29
 

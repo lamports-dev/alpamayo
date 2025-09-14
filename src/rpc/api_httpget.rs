@@ -14,7 +14,7 @@ use {
     futures::future::BoxFuture,
     http_body_util::{BodyExt, Full as BodyFull},
     hyper::{
-        StatusCode,
+        HeaderMap, StatusCode,
         body::{Body, Bytes, Incoming as BodyIncoming},
         http::Result as HttpResult,
     },
@@ -60,6 +60,7 @@ impl SupportedCalls {
 #[derive(Debug)]
 pub struct State {
     stored_slots: StoredSlots,
+    extra_headers: HeaderMap,
     request_timeout: Duration,
     supported_calls: SupportedCalls,
     requests_tx: mpsc::Sender<ReadRequest>,
@@ -74,6 +75,7 @@ impl State {
     ) -> anyhow::Result<Self> {
         Ok(Self {
             stored_slots,
+            extra_headers: config.extra_headers.clone(),
             request_timeout: config.request_timeout,
             supported_calls: SupportedCalls::new(&config.calls_httpget)?,
             requests_tx,
@@ -124,6 +126,7 @@ impl State {
                         "git": VERSION.git,
                     })
                     .to_string(),
+                    &self.extra_headers,
                 )
             }));
         }

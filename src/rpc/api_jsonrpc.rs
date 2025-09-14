@@ -156,7 +156,8 @@ pub fn create_request_processor(
         db_write_inflation_reward,
         workers,
     )?;
-    let mut processor = RpcRequestsProcessor::new(config.body_limit, Arc::new(state));
+    let mut processor =
+        RpcRequestsProcessor::new(config.body_limit, Arc::new(state), config.extra_headers);
 
     let calls = &config.calls_jsonrpc;
     if calls.contains(&ConfigRpcCallJson::GetBlock) {
