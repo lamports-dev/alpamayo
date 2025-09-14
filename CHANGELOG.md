@@ -16,6 +16,12 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Breaking
 
+## [0.15.0] - 2025-09-14
+
+### Features
+
+- rpc: support multiple upstreams ([#79](https://github.com/lamports-dev/alpamayo/pull/79))
+
 ## [0.14.2] - 2025-09-13
 
 ### Fixes

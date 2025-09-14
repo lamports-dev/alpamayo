@@ -66,7 +66,6 @@ use {
         UiConfirmedBlock, UiTransactionEncoding,
     },
     std::{
-        collections::HashSet,
         future::Future,
         str::FromStr,
         sync::Arc,
@@ -95,7 +94,7 @@ pub struct State {
     grpf_percentile: bool,
     requests_tx: mpsc::Sender<ReadRequest>,
     db_write_inflation_reward: RocksdbWriteInflationReward,
-    upstream: Option<RpcClientJsonrpc>,
+    upstreams: Vec<RpcClientJsonrpc>,
     workers: Sender<WorkRequest>,
 }
 
@@ -107,23 +106,27 @@ impl State {
         db_write_inflation_reward: RocksdbWriteInflationReward,
         workers: Sender<WorkRequest>,
     ) -> anyhow::Result<Self> {
-        let upstream = config
+        let upstreams = config
             .upstream_jsonrpc
+            .into_iter()
             .map(|config_upstream| RpcClientJsonrpc::new(config_upstream, config.gcn_cache_ttl))
-            .transpose()?;
+            .collect::<Result<Vec<_>, _>>()?;
 
         if config
             .calls_jsonrpc
-            .intersection(&HashSet::from([
-                ConfigRpcCallJson::GetClusterNodes,
-                ConfigRpcCallJson::GetLeaderSchedule,
-            ]))
-            .next()
-            .is_some()
+            .contains(&ConfigRpcCallJson::GetClusterNodes)
+            || config
+                .calls_jsonrpc
+                .contains(&ConfigRpcCallJson::GetLeaderSchedule)
         {
             anyhow::ensure!(
-                upstream.is_some(),
-                "upstream required for cached methods like `getClusterNodes`"
+                upstreams
+                    .iter()
+                    .any(|upstream| upstream.calls.contains(&ConfigRpcCallJson::GetClusterNodes))
+                    && upstreams.iter().any(|upstream| upstream
+                        .calls
+                        .contains(&ConfigRpcCallJson::GetLeaderSchedule)),
+                "at least one upstream should support `getClusterNodes` and `GetLeaderSchedule`"
             );
         }
 
@@ -136,9 +139,15 @@ impl State {
             grpf_percentile: config.grpf_percentile,
             requests_tx,
             db_write_inflation_reward,
-            upstream,
+            upstreams,
             workers,
         })
+    }
+
+    fn get_upstream(&self, call: ConfigRpcCallJson) -> Option<&RpcClientJsonrpc> {
+        self.upstreams
+            .iter()
+            .find(|upstream| upstream.calls.contains(&call))
     }
 }
 
@@ -517,7 +526,7 @@ impl RpcRequestHandler for RpcRequestBlock {
 impl RpcRequestBlock {
     async fn fetch_upstream(self, deadline: Instant) -> RpcRequestResult {
         if let Some(upstream) = (!self.upstream_disabled)
-            .then_some(self.state.upstream.as_ref())
+            .then(|| self.state.get_upstream(ConfigRpcCallJson::GetBlock))
             .flatten()
         {
             upstream
@@ -814,7 +823,7 @@ impl RpcRequestHandler for RpcRequestBlocks {
         let first_available_slot = self.state.stored_slots.first_available_load() + 32;
         if self.start_slot < first_available_slot
             && let Some(upstream) = (!self.upstream_disabled)
-                .then_some(self.state.upstream.as_ref())
+                .then(|| self.state.get_upstream(ConfigRpcCallJson::GetBlocks))
                 .flatten()
         {
             return upstream
@@ -1027,7 +1036,7 @@ impl RpcRequestHandler for RpcRequestBlockTime {
 impl RpcRequestBlockTime {
     async fn fetch_upstream(self, deadline: Instant) -> RpcRequestResult {
         if let Some(upstream) = (!self.upstream_disabled)
-            .then_some(self.state.upstream.as_ref())
+            .then(|| self.state.get_upstream(ConfigRpcCallJson::GetBlockTime))
             .flatten()
         {
             upstream
@@ -1064,7 +1073,7 @@ impl RpcRequestHandler for RpcRequestClusterNodes {
     async fn process(self) -> RpcRequestResult {
         let deadline = Instant::now() + self.state.request_timeout;
 
-        let Some(upstream) = self.state.upstream.as_ref() else {
+        let Some(upstream) = self.state.get_upstream(ConfigRpcCallJson::GetClusterNodes) else {
             unreachable!();
         };
 
@@ -1102,7 +1111,10 @@ impl RpcRequestHandler for RpcRequestFirstAvailableBlock {
         let deadline = Instant::now() + self.state.request_timeout;
 
         if let Some(upstream) = (!self.upstream_disabled)
-            .then_some(self.state.upstream.as_ref())
+            .then(|| {
+                self.state
+                    .get_upstream(ConfigRpcCallJson::GetFirstAvailableBlock)
+            })
             .flatten()
         {
             upstream
@@ -1434,7 +1446,10 @@ impl RpcRequestInflationReward {
         let first_available_slot = self.state.stored_slots.first_available_load() + 150;
         if start_slot < first_available_slot
             && let Some(upstream) = (!self.upstream_disabled)
-                .then_some(self.state.upstream.as_ref())
+                .then(|| {
+                    self.state
+                        .get_upstream(ConfigRpcCallJson::GetBlocksWithLimit)
+                })
                 .flatten()
         {
             return upstream
@@ -1540,7 +1555,7 @@ impl RpcRequestInflationReward {
         slot: Slot,
     ) -> anyhow::Result<Result<UiConfirmedBlock, Vec<u8>>> {
         if let Some(upstream) = (!self.upstream_disabled)
-            .then_some(self.state.upstream.as_ref())
+            .then(|| self.state.get_upstream(ConfigRpcCallJson::GetBlock))
             .flatten()
         {
             match upstream.get_block_rewards(deadline, &self.id, slot).await {
@@ -1776,7 +1791,10 @@ impl RpcRequestHandler for RpcRequestLeaderSchedule {
     async fn process(self) -> RpcRequestResult {
         let deadline = Instant::now() + self.state.request_timeout;
 
-        let Some(upstream) = self.state.upstream.as_ref() else {
+        let Some(upstream) = self
+            .state
+            .get_upstream(ConfigRpcCallJson::GetLeaderSchedule)
+        else {
             unreachable!();
         };
 
@@ -2044,7 +2062,10 @@ impl RpcRequestSignaturesForAddress {
     ) -> anyhow::Result<
         Result<(Id<'static>, Vec<RpcConfirmedTransactionStatusWithSignature>), Vec<u8>>,
     > {
-        if let Some(upstream) = self.state.upstream.as_ref() {
+        if let Some(upstream) = self
+            .state
+            .get_upstream(ConfigRpcCallJson::GetSignaturesForAddress)
+        {
             let bytes = upstream
                 .get_signatures_for_address(
                     self.x_subscription_id,
@@ -2178,7 +2199,10 @@ impl RpcRequestHandler for RpcRequestSignatureStatuses {
 
         if self.search_transaction_history
             && !self.upstream_disabled
-            && self.state.upstream.is_some()
+            && self
+                .state
+                .get_upstream(ConfigRpcCallJson::GetSignatureStatuses)
+                .is_some()
             && statuses.iter().any(|status| status.is_none())
         {
             let mut signatures_history = Vec::new();
@@ -2217,7 +2241,10 @@ impl RpcRequestSignatureStatuses {
         deadline: Instant,
         signatures: Vec<&Signature>,
     ) -> anyhow::Result<Result<Vec<Option<TransactionStatus>>, Vec<u8>>> {
-        if let Some(upstream) = self.state.upstream.as_ref() {
+        if let Some(upstream) = self
+            .state
+            .get_upstream(ConfigRpcCallJson::GetSignatureStatuses)
+        {
             let bytes = upstream
                 .get_signature_statuses(
                     Arc::clone(&self.x_subscription_id),
@@ -2407,7 +2434,7 @@ impl RpcRequestHandler for RpcRequestTransaction {
 impl RpcRequestTransaction {
     async fn fetch_upstream(self, deadline: Instant) -> RpcRequestResult {
         if let Some(upstream) = (!self.upstream_disabled)
-            .then_some(self.state.upstream.as_ref())
+            .then(|| self.state.get_upstream(ConfigRpcCallJson::GetTransaction))
             .flatten()
         {
             upstream

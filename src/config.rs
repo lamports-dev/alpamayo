@@ -308,7 +308,7 @@ pub struct ConfigRpc {
     )]
     pub body_limit: usize,
     /// Extra headers added to response
-    #[serde(deserialize_with = "ConfigRpc::deserialize_extra_headers")]
+    #[serde(default, deserialize_with = "ConfigRpc::deserialize_extra_headers")]
     pub extra_headers: HeaderMap,
     /// Request timeout
     #[serde(
@@ -345,10 +345,10 @@ pub struct ConfigRpc {
     pub request_channel_capacity: usize,
     /// In case of removed data upstream would be used to fetch data
     #[serde(default)]
-    pub upstream_httpget: Option<ConfigRpcUpstream>,
+    pub upstream_httpget: Vec<ConfigRpcUpstream>,
     /// In case of removed data upstream would be used to fetch data
     #[serde(default)]
-    pub upstream_jsonrpc: Option<ConfigRpcUpstream>,
+    pub upstream_jsonrpc: Vec<ConfigRpcUpstream>,
     /// Thread pool to parse / encode data
     #[serde(default)]
     pub workers: ConfigRpcWorkers,
@@ -429,9 +429,36 @@ pub enum ConfigRpcCallJson {
     IsBlockhashValid,
 }
 
+impl ConfigRpcCallJson {
+    fn all() -> impl Iterator<Item = Self> {
+        [
+            Self::GetBlock,
+            Self::GetBlockHeight,
+            Self::GetBlocks,
+            Self::GetBlocksWithLimit,
+            Self::GetBlockTime,
+            Self::GetClusterNodes,
+            Self::GetFirstAvailableBlock,
+            Self::GetInflationReward,
+            Self::GetLatestBlockhash,
+            Self::GetLeaderSchedule,
+            Self::GetRecentPrioritizationFees,
+            Self::GetSignaturesForAddress,
+            Self::GetSignatureStatuses,
+            Self::GetSlot,
+            Self::GetTransaction,
+            Self::GetVersion,
+            Self::IsBlockhashValid,
+        ]
+        .into_iter()
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct ConfigRpcUpstream {
+    pub name: String,
+    pub calls: HashSet<ConfigRpcCallJson>,
     pub endpoint: String,
     pub user_agent: String,
     #[serde(deserialize_with = "ConfigRpcUpstream::deserialize_version")]
@@ -443,6 +470,8 @@ pub struct ConfigRpcUpstream {
 impl Default for ConfigRpcUpstream {
     fn default() -> Self {
         Self {
+            name: "main".to_owned(),
+            calls: ConfigRpcCallJson::all().collect(),
             endpoint: "http://127.0.0.1:8899".to_owned(),
             user_agent: format!("alpamayo/v{}", VERSION.package),
             version: Version::default(),

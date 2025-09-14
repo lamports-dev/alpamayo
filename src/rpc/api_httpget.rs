@@ -1,6 +1,6 @@
 use {
     crate::{
-        config::{ConfigRpc, ConfigRpcCallHttpGet},
+        config::{ConfigRpc, ConfigRpcCallHttpGet, ConfigRpcCallJson},
         rpc::{
             api::{X_ERROR, X_SLOT},
             upstream::RpcClientHttpget,
@@ -64,7 +64,7 @@ pub struct State {
     request_timeout: Duration,
     supported_calls: SupportedCalls,
     requests_tx: mpsc::Sender<ReadRequest>,
-    upstream: Option<RpcClientHttpget>,
+    upstreams: Vec<RpcClientHttpget>,
 }
 
 impl State {
@@ -79,11 +79,11 @@ impl State {
             request_timeout: config.request_timeout,
             supported_calls: SupportedCalls::new(&config.calls_httpget)?,
             requests_tx,
-            upstream: config
+            upstreams: config
                 .upstream_httpget
-                .clone()
-                .map(RpcClientHttpget::new)
-                .transpose()?,
+                .iter()
+                .map(|config| RpcClientHttpget::new(config.clone()))
+                .collect::<Result<_, _>>()?,
         })
     }
 
@@ -214,7 +214,11 @@ impl State {
         slot: Slot,
     ) -> anyhow::Result<HttpResult<RpcResponse>> {
         if let Some(upstream) = (!upstream_disabled)
-            .then_some(self.upstream.as_ref())
+            .then(|| {
+                self.upstreams
+                    .iter()
+                    .find(|upstream| upstream.calls.contains(&ConfigRpcCallJson::GetBlock))
+            })
             .flatten()
         {
             upstream.get_block(x_subscription_id, deadline, slot).await
@@ -315,7 +319,11 @@ impl State {
         signature: Signature,
     ) -> anyhow::Result<HttpResult<RpcResponse>> {
         if let Some(upstream) = (!upstream_disabled)
-            .then_some(self.upstream.as_ref())
+            .then(|| {
+                self.upstreams
+                    .iter()
+                    .find(|upstream| upstream.calls.contains(&ConfigRpcCallJson::GetTransaction))
+            })
             .flatten()
         {
             upstream

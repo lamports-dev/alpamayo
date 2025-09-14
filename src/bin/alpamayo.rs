@@ -57,10 +57,11 @@ fn main() {
 fn try_main() -> anyhow::Result<()> {
     let args = Args::parse();
     let config = Config::load_from_file(&args.config)
-        .with_context(|| format!("failed to load config from {}", args.config))?;
+        .with_context(|| format!("failed to load config from {}", args.config))
+        .unwrap();
 
     // Setup logs
-    alpamayo::log::setup(config.logs.json)?;
+    alpamayo::log::setup(config.logs.json).unwrap();
     info!("version: {} / {}", VERSION.version, VERSION.git);
 
     let metrics_handle = metrics::setup()?;

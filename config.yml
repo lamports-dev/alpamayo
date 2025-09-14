@@ -117,16 +117,39 @@ rpc:
   request_channel_capacity: 4_096 # Queue size of requests to read threads (be aware, one JSON-RPC request can contain multiple requests)
   # fallback for httpget
   # upstream_httpget:
-  #   endpoint: http://127.0.0.1:8899
-  #   user_agent: alpamayo/v0.1.0
-  #   version: HTTP/1.1
-  #   timeout: 30s
+  #   - name: main
+  #     calls:
+  #       - getBlock
+  #       - getTransaction
+  #     endpoint: http://127.0.0.1:8899
+  #     user_agent: alpamayo/v0.1.0
+  #     version: HTTP/1.1
+  #     timeout: 30s
   # fallback for JSON-RPC methods
   # upstream_jsonrpc:
-  #   endpoint: http://127.0.0.1:8899
-  #   user_agent: alpamayo/v0.1.0
-  #   version: HTTP/1.1
-  #   timeout: 30s
+  #   - name: main
+  #     calls:
+  #       - getBlock
+  #       - getBlockHeight
+  #       - getBlocks
+  #       - getBlocksWithLimit
+  #       - getBlockTime
+  #       - getClusterNodes
+  #       - getFirstAvailableBlock
+  #       - getInflationReward
+  #       - getLatestBlockhash
+  #       - getLeaderSchedule
+  #       - getRecentPrioritizationFees
+  #       - getSignaturesForAddress
+  #       - getSignatureStatuses
+  #       - getSlot
+  #       - getTransaction
+  #       - getVersion
+  #       - isBlockhashValid
+  #     endpoint: http://127.0.0.1:8899
+  #     user_agent: alpamayo/v0.1.0
+  #     version: HTTP/1.1
+  #     timeout: 30s
   # getBlock and getTransactions requires a lot of CPU time to decode protobuf, encode to requested format, serialize data
   # getBlock can requires more than 100ms to do all work, it would be good to have these threads separated from everything rest
   # for example, you can pin:

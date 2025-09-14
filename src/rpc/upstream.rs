@@ -1,6 +1,6 @@
 use {
     crate::{
-        config::ConfigRpcUpstream,
+        config::{ConfigRpcCallJson, ConfigRpcUpstream},
         metrics::RPC_UPSTREAM_REQUESTS_TOTAL,
         rpc::{
             api::{X_ERROR, X_SLOT},
@@ -32,6 +32,7 @@ use {
     solana_transaction_status::{BlockEncodingOptions, UiConfirmedBlock, UiTransactionEncoding},
     std::{
         borrow::Cow,
+        collections::HashSet,
         sync::Arc,
         time::{Duration, Instant},
     },
@@ -41,6 +42,7 @@ use {
 
 #[derive(Debug)]
 pub struct RpcClientHttpget {
+    pub calls: HashSet<ConfigRpcCallJson>,
     client: Client,
     url: Url,
     version: Version,
@@ -54,6 +56,7 @@ impl RpcClientHttpget {
             .build()?;
 
         Ok(Self {
+            calls: config.calls,
             client,
             url: config.endpoint.parse()?,
             version: config.version,
@@ -245,6 +248,7 @@ type CachedEpochSchedule =
 #[derive(Debug)]
 pub struct RpcClientJsonrpc {
     inner: Arc<RpcClientJsonrpcInner>,
+    pub calls: HashSet<ConfigRpcCallJson>,
     cache_cluster_nodes: CachedRequests<Vec<RpcContactInfo>>,
     cache_epoch_schedule: Arc<Mutex<HashMap<Epoch, CachedEpochSchedule>>>,
 }
@@ -262,6 +266,7 @@ impl RpcClientJsonrpc {
                 endpoint: config.endpoint,
                 version: config.version,
             }),
+            calls: config.calls.clone(),
             cache_cluster_nodes: CachedRequests::new(gcn_cache_ttl),
             cache_epoch_schedule: Arc::default(),
         })
