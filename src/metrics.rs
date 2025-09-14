@@ -19,7 +19,7 @@ pub const WRITE_BLOCK_SYNC_SECONDS: &str = "write_block_sync_seconds";
 
 pub const RPC_WORKERS_CPU_SECONDS_TOTAL: &str = "rpc_workers_cpu_seconds_total"; // x_subscription_id, method
 
-pub const RPC_UPSTREAM_REQUESTS_TOTAL: &str = "rpc_upstream_requests_total"; // x_subscription_id, method
+pub const RPC_UPSTREAM_REQUESTS_TOTAL: &str = "rpc_upstream_requests_total"; // x_subscription_id, upstream, method
 
 pub fn setup() -> anyhow::Result<PrometheusHandle> {
     let handle = PrometheusBuilder::new()
@@ -69,7 +69,7 @@ pub fn setup() -> anyhow::Result<PrometheusHandle> {
 
     describe_counter!(
         RPC_UPSTREAM_REQUESTS_TOTAL,
-        "Number of RPC requests to upstream by x-subscription-id and method"
+        "Number of RPC requests to upstream by x-subscription-id, upstream name and method"
     );
 
     Ok(handle)
