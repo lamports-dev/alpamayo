@@ -42,7 +42,7 @@ use {
 
 #[derive(Debug)]
 pub struct RpcClientHttpget {
-    pub calls: HashSet<ConfigRpcCallJson>,
+    calls: HashSet<ConfigRpcCallJson>,
     name: Arc<str>,
     client: Client,
     url: Url,
@@ -63,6 +63,10 @@ impl RpcClientHttpget {
             url: config.endpoint.parse()?,
             version: config.version,
         })
+    }
+
+    pub fn is_supported(&self, call: ConfigRpcCallJson) -> bool {
+        self.calls.contains(&call)
     }
 
     pub async fn get_block(
@@ -252,7 +256,7 @@ type CachedEpochSchedule =
 #[derive(Debug)]
 pub struct RpcClientJsonrpc {
     inner: Arc<RpcClientJsonrpcInner>,
-    pub calls: HashSet<ConfigRpcCallJson>,
+    calls: HashSet<ConfigRpcCallJson>,
     name: Arc<str>,
     cache_cluster_nodes: CachedRequests<Vec<RpcContactInfo>>,
     cache_epoch_schedule: Arc<Mutex<HashMap<Epoch, CachedEpochSchedule>>>,
@@ -276,6 +280,10 @@ impl RpcClientJsonrpc {
             cache_cluster_nodes: CachedRequests::new(gcn_cache_ttl),
             cache_epoch_schedule: Arc::default(),
         })
+    }
+
+    pub fn is_supported(&self, call: ConfigRpcCallJson) -> bool {
+        self.calls.contains(&call)
     }
 
     #[allow(clippy::too_many_arguments)]

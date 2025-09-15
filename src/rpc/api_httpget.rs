@@ -217,7 +217,7 @@ impl State {
             .then(|| {
                 self.upstreams
                     .iter()
-                    .find(|upstream| upstream.calls.contains(&ConfigRpcCallJson::GetBlock))
+                    .find(|upstream| upstream.is_supported(ConfigRpcCallJson::GetBlock))
             })
             .flatten()
         {
@@ -322,7 +322,7 @@ impl State {
             .then(|| {
                 self.upstreams
                     .iter()
-                    .find(|upstream| upstream.calls.contains(&ConfigRpcCallJson::GetTransaction))
+                    .find(|upstream| upstream.is_supported(ConfigRpcCallJson::GetTransaction))
             })
             .flatten()
         {

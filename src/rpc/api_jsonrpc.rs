@@ -122,10 +122,10 @@ impl State {
             anyhow::ensure!(
                 upstreams
                     .iter()
-                    .any(|upstream| upstream.calls.contains(&ConfigRpcCallJson::GetClusterNodes))
-                    && upstreams.iter().any(|upstream| upstream
-                        .calls
-                        .contains(&ConfigRpcCallJson::GetLeaderSchedule)),
+                    .any(|upstream| upstream.is_supported(ConfigRpcCallJson::GetClusterNodes))
+                    && upstreams
+                        .iter()
+                        .any(|upstream| upstream.is_supported(ConfigRpcCallJson::GetLeaderSchedule)),
                 "at least one upstream should support `getClusterNodes` and `GetLeaderSchedule`"
             );
         }
@@ -147,7 +147,7 @@ impl State {
     fn get_upstream(&self, call: ConfigRpcCallJson) -> Option<&RpcClientJsonrpc> {
         self.upstreams
             .iter()
-            .find(|upstream| upstream.calls.contains(&call))
+            .find(|upstream| upstream.is_supported(call))
     }
 }
 
