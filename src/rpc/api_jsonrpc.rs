@@ -1296,12 +1296,10 @@ impl RpcRequestInflationReward {
             let mut partition_index_addresses: HashMap<usize, Vec<usize>> = HashMap::default();
             for index in missed {
                 let partition_index = hasher.clone().hash_address_to_partition(&addresses[index]);
-                if partition_index < num_partitions {
-                    partition_index_addresses
-                        .entry(partition_index)
-                        .or_insert_with(|| Vec::with_capacity(4))
-                        .push(index);
-                }
+                partition_index_addresses
+                    .entry(partition_index)
+                    .or_insert_with(|| Vec::with_capacity(4))
+                    .push(index);
             }
 
             // fetch blocks with rewards

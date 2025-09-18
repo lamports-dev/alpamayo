@@ -12,6 +12,8 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Fixes
 
+- rpc: remove not required partition index check ([#80](https://github.com/lamports-dev/alpamayo/pull/80))
+
 ### Features
 
 ### Breaking
