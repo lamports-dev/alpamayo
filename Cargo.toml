@@ -1,6 +1,6 @@
 [package]
 name = "alpamayo"
-version = "0.15.0"
+version = "0.16.0"
 authors = ["Lamports Dev"]
 edition = "2024"
 description = "Part of Solana RPC stack for sealed data"
@@ -28,7 +28,7 @@ humantime-serde = "1.1.1"
 hyper = "1.6.0"
 hyper-util = { version = "0.1.10", features = ["server-auto", "server-graceful"] }
 json5 = "0.4.1"
-jsonrpsee-types = "0.24.8"
+jsonrpsee-types = "0.26.0"
 libc = "0.2.170"
 maplit = "1.0.2"
 metrics = "0.24.1"
@@ -40,28 +40,31 @@ rand = "0.9.1"
 rayon = "1.10.0"
 regex = "1.11.1"
 reqwest = "0.12.14"
-richat-client = "5.0.0"
+richat-client = { version = "6.0.0", git = "https://github.com/lamports-dev/richat.git", rev = "ea5cac0" }
 richat-metrics = "1.0.1"
-richat-proto = "5.0.0"
-richat-shared = { version = "5.1.0", default-features = false, features = ["config", "jsonrpc", "shutdown", "version"] }
+richat-proto = { version = "6.0.0", git = "https://github.com/lamports-dev/richat.git", rev = "ea5cac0" }
+richat-shared = { version = "6.0.0", git = "https://github.com/lamports-dev/richat.git", rev = "ea5cac0", default-features = false, features = ["config", "jsonrpc", "version"] }
 rocksdb = "0.24.0"
 serde = { version = "1.0.218", features = ["derive"] }
 serde_json = "1.0.139"
 serde_yaml = "0.9.33"
 signal-hook = "0.3.17"
-solana-client = "~2.3.3"
-solana-compute-budget = "~2.3.3"
-solana-compute-budget-interface = "~2.2.2"
-solana-rpc-client = "~2.3.3"
-solana-rpc-client-api = "=2.3.3"
-solana-sdk = "~2.3.1"
-solana-storage-proto = "~2.3.3"
-solana-transaction-status = "~2.3.3"
-solana-version = "~2.3.3"
+solana-client = "~3.0.4"
+solana-commitment-config = "3.0.0"
+solana-compute-budget = "~3.0.4"
+solana-compute-budget-interface = { version = "3.0.0", features = ["borsh"] }
+solana-rpc-client = "~3.0.4"
+solana-rpc-client-api = "~3.0.4"
+solana-sdk = "3.0.0"
+solana-storage-proto = "~3.0.4"
+solana-transaction-context = "~3.0.4"
+solana-transaction-status = "~3.0.4"
+solana-version = "~3.0.4"
 thiserror = "2.0.11"
 tikv-jemallocator = { version = "0.6.0", features = ["unprefixed_malloc_on_supported_platforms"] }
 tokio = "1.43.0"
 tokio-uring = "0.5.0"
+tokio-util = "0.7.16"
 tonic = "0.14.1"
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["ansi", "env-filter", "json"] }

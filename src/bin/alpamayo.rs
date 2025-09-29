@@ -4,7 +4,6 @@ use {
     clap::Parser,
     futures::future::{FutureExt, TryFutureExt, ready, try_join_all},
     quanta::Instant,
-    richat_shared::shutdown::Shutdown,
     signal_hook::{consts::SIGINT, iterator::Signals},
     std::{
         sync::Arc,
@@ -12,6 +11,7 @@ use {
         time::Duration,
     },
     tokio::sync::{Mutex, Notify, broadcast, mpsc},
+    tokio_util::sync::CancellationToken,
     tracing::{error, info, warn},
 };
 
@@ -74,7 +74,7 @@ fn try_main() -> anyhow::Result<()> {
 
     // Shutdown channel/flag
     let mut threads = Vec::<(String, _)>::with_capacity(8);
-    let shutdown = Shutdown::new();
+    let shutdown = CancellationToken::new();
 
     // Source / storage write channels
     let stream_start = Arc::new(Notify::new());
@@ -115,11 +115,15 @@ fn try_main() -> anyhow::Result<()> {
                 .and_then(ready)
                 .boxed();
 
-                let server_fut =
-                    metrics::spawn_server(config.metrics, metrics_handle, stored_slots, shutdown)
-                        .await?
-                        .map_err(anyhow::Error::from)
-                        .boxed();
+                let server_fut = metrics::spawn_server(
+                    config.metrics,
+                    metrics_handle,
+                    stored_slots,
+                    shutdown.cancelled_owned(),
+                )
+                .await?
+                .map_err(anyhow::Error::from)
+                .boxed();
 
                 try_join_all(vec![source_fut, server_fut]).await.map(|_| ())
             })
@@ -197,12 +201,12 @@ fn try_main() -> anyhow::Result<()> {
         for signal in signals.pending() {
             match signal {
                 SIGINT => {
-                    if shutdown.is_set() {
+                    if shutdown.is_cancelled() {
                         warn!("SIGINT received again, shutdown now");
                         break 'outer;
                     }
                     info!("SIGINT received...");
-                    shutdown.shutdown();
+                    shutdown.cancel();
                 }
                 _ => unreachable!(),
             }

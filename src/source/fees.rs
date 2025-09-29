@@ -164,9 +164,8 @@ mod compute_budget_processor {
         },
         solana_compute_budget_interface::ComputeBudgetInstruction,
         solana_sdk::{
-            borsh1::try_from_slice_unchecked,
-            instruction::{CompiledInstruction, InstructionError},
-            pubkey::Pubkey,
+            borsh1::try_from_slice_unchecked, instruction::InstructionError,
+            message::compiled_instruction::CompiledInstruction, pubkey::Pubkey,
             transaction::TransactionError,
         },
     };
@@ -248,6 +247,6 @@ mod compute_budget_processor {
     }
 
     fn sanitize_requested_heap_size(bytes: u32) -> bool {
-        (MIN_HEAP_FRAME_BYTES..=MAX_HEAP_FRAME_BYTES).contains(&bytes) && bytes % 1024 == 0
+        (MIN_HEAP_FRAME_BYTES..=MAX_HEAP_FRAME_BYTES).contains(&bytes) && bytes.is_multiple_of(1024)
     }
 }

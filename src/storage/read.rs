@@ -19,12 +19,12 @@ use {
     },
     metrics::gauge,
     richat_metrics::duration_to_seconds,
+    solana_commitment_config::{CommitmentConfig, CommitmentLevel},
     solana_rpc_client_api::response::{
         RpcConfirmedTransactionStatusWithSignature, RpcPrioritizationFee,
     },
     solana_sdk::{
         clock::{Epoch, MAX_PROCESSING_AGE, MAX_RECENT_BLOCKHASHES, Slot, UnixTimestamp},
-        commitment_config::{CommitmentConfig, CommitmentLevel},
         pubkey::Pubkey,
         signature::Signature,
         transaction::TransactionError,
@@ -973,7 +973,7 @@ impl ReadRequest {
                             signatures.push(RpcConfirmedTransactionStatusWithSignature {
                                 signature: item.signature.to_string(),
                                 slot: *confirmed_in_process_slot,
-                                err: item.err.clone(),
+                                err: item.err.clone().map(Into::into),
                                 memo: item.memo.clone(),
                                 block_time: block.block_time,
                                 confirmation_status: Some(TransactionConfirmationStatus::Confirmed),

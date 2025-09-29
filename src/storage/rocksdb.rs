@@ -1390,7 +1390,7 @@ impl RocksdbRead {
                 signatures.push(RpcConfirmedTransactionStatusWithSignature {
                     signature: sigstatus.signature.to_string(),
                     slot,
-                    err: sigstatus.err,
+                    err: sigstatus.err.map(Into::into),
                     memo: sigstatus.memo,
                     block_time: None,
                     confirmation_status: None,

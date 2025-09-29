@@ -31,7 +31,7 @@ use {
         iter::{IntoParallelIterator, ParallelIterator},
     },
     richat_metrics::duration_to_seconds,
-    richat_shared::{mutex_lock, shutdown::Shutdown},
+    richat_shared::mutex_lock,
     solana_sdk::clock::Slot,
     solana_storage_proto::convert::generated,
     solana_transaction_status::ConfirmedBlock,
@@ -47,6 +47,7 @@ use {
         task::{JoinHandle, spawn_local},
         time::sleep,
     },
+    tokio_util::sync::CancellationToken,
     tracing::{info, warn},
 };
 
@@ -63,7 +64,7 @@ pub fn start(
     stream_start: Arc<Notify>,
     stream_rx: mpsc::Receiver<StreamSourceMessage>,
     sync_tx: broadcast::Sender<ReadWriteSyncMessage>,
-    shutdown: Shutdown,
+    shutdown: CancellationToken,
 ) -> anyhow::Result<thread::JoinHandle<anyhow::Result<()>>> {
     thread::Builder::new()
         .name("alpStorageWrt".to_owned())
@@ -203,7 +204,7 @@ async fn start2(
     db_write: RocksdbWrite,
     storage_files: &mut StorageFilesWrite,
     sync_tx: broadcast::Sender<ReadWriteSyncMessage>,
-    shutdown: Shutdown,
+    shutdown: CancellationToken,
 ) -> anyhow::Result<()> {
     let metric_storage_block_sync = histogram!(WRITE_BLOCK_SYNC_SECONDS);
 
@@ -330,7 +331,6 @@ async fn start2(
     let mut next_back_request_slot = Slot::MAX;
     let mut backfill_ts = None;
 
-    tokio::pin!(shutdown);
     loop {
         tokio::select! {
             biased;
@@ -405,7 +405,7 @@ async fn start2(
                 }
                 None => return Ok(()),
             },
-            () = &mut shutdown => return Ok(()),
+            () = shutdown.cancelled() => return Ok(()),
         }
 
         // save new blocks

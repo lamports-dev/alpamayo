@@ -5,9 +5,9 @@ use {
     },
     crossbeam::channel::{self, Receiver, RecvTimeoutError, Sender},
     futures::future::{BoxFuture, FutureExt, TryFutureExt, try_join_all},
-    richat_shared::shutdown::Shutdown,
     std::{thread::Builder, time::Duration},
     tokio::{task::JoinError, time::sleep},
+    tokio_util::sync::CancellationToken,
 };
 
 pub enum WorkRequest {
@@ -18,7 +18,7 @@ pub enum WorkRequest {
 #[allow(clippy::type_complexity)]
 pub fn start(
     config: ConfigRpcWorkers,
-    shutdown: Shutdown,
+    shutdown: CancellationToken,
 ) -> anyhow::Result<(
     Sender<WorkRequest>,
     BoxFuture<'static, Result<(), JoinError>>,
@@ -56,7 +56,7 @@ pub fn start(
 
             async move {
                 while !th.is_finished() {
-                    let ms = if shutdown.is_set() { 10 } else { 500 };
+                    let ms = if shutdown.is_cancelled() { 10 } else { 500 };
                     sleep(Duration::from_millis(ms)).await;
                 }
                 th.join().expect("failed to join thread")
@@ -68,12 +68,12 @@ pub fn start(
     Ok((tx, try_join_all(jhs).map_ok(|_| ()).boxed()))
 }
 
-fn wrk_loop(rx: Receiver<WorkRequest>, shutdown: Shutdown) {
+fn wrk_loop(rx: Receiver<WorkRequest>, shutdown: CancellationToken) {
     loop {
         let request = match rx.recv_timeout(Duration::from_millis(500)) {
             Ok(request) => request,
             Err(RecvTimeoutError::Timeout) => {
-                if shutdown.is_set() {
+                if shutdown.is_cancelled() {
                     return;
                 } else {
                     continue;
