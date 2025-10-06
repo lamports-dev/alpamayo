@@ -12,11 +12,16 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Fixes
 
-- rpc: remove not required partition index check ([#81](https://github.com/lamports-dev/alpamayo/pull/81))
-
 ### Features
 
 ### Breaking
+
+## [0.15.1] - 2025-10-07
+
+### Fixes
+
+- rpc: remove not required partition index check ([#81](https://github.com/lamports-dev/alpamayo/pull/81))
+- storage: fix substract overflow ([#83](https://github.com/lamports-dev/alpamayo/pull/83))
 
 ## [0.15.0] - 2025-09-15
 
