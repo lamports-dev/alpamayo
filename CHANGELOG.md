@@ -18,15 +18,16 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## [0.16.0] - 2025-??-??
 
-### Fixes
-
-- rpc: remove not required partition index check ([#81](https://github.com/lamports-dev/alpamayo/pull/81))
-
-### Features
-
 ### Breaking
 
 - alpamayo: upgrade to agave 3.0 ([#82](https://github.com/lamports-dev/alpamayo/pull/82))
+
+## [0.15.1] - 2025-10-07
+
+### Fixes
+
+- rpc: remove not required partition index check ([#81](https://github.com/lamports-dev/alpamayo/pull/81))
+- storage: fix substract overflow ([#84](https://github.com/lamports-dev/alpamayo/pull/84))
 
 ## [0.15.0] - 2025-09-15
 
