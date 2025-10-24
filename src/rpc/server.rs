@@ -11,9 +11,9 @@ use {
         rt::tokio::{TokioExecutor, TokioIo},
         server::conn::auto::Builder as ServerBuilder,
     },
-    richat_shared::shutdown::Shutdown,
     std::sync::Arc,
     tokio::{net::TcpListener, sync::mpsc, task::JoinError},
+    tokio_util::sync::CancellationToken,
     tracing::{debug, error, info},
 };
 
@@ -22,7 +22,7 @@ pub async fn spawn(
     stored_slots: StoredSlots,
     requests_tx: mpsc::Sender<ReadRequest>,
     db_write_inflation_reward: RocksdbWriteInflationReward,
-    shutdown: Shutdown,
+    shutdown: CancellationToken,
 ) -> anyhow::Result<impl Future<Output = Result<(), JoinError>>> {
     let (workers_tx, workers_jhs) = workers::start(config.workers.clone(), shutdown.clone())?;
 
@@ -46,7 +46,6 @@ pub async fn spawn(
         let http = ServerBuilder::new(TokioExecutor::new());
         let graceful = hyper_util::server::graceful::GracefulShutdown::new();
 
-        tokio::pin!(shutdown);
         loop {
             let stream = tokio::select! {
                 incoming = listener.accept() => match incoming {
@@ -59,7 +58,7 @@ pub async fn spawn(
                         break;
                     }
                 },
-                () = &mut shutdown => break,
+                () = shutdown.cancelled() => break,
             };
 
             let service = service_fn({

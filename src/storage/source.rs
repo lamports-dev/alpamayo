@@ -8,7 +8,6 @@ use {
         },
     },
     futures::stream::StreamExt,
-    richat_shared::shutdown::Shutdown,
     solana_client::client_error::ClientError,
     solana_sdk::clock::Slot,
     std::sync::Arc,
@@ -17,6 +16,7 @@ use {
         sync::{Notify, mpsc, oneshot},
         time::sleep,
     },
+    tokio_util::sync::CancellationToken,
     tracing::error,
 };
 
@@ -101,7 +101,7 @@ pub async fn start(
     mut http_rx: mpsc::Receiver<HttpRequest>,
     stream_start: Arc<Notify>,
     stream_tx: mpsc::Sender<StreamSourceMessage>,
-    shutdown: Shutdown,
+    shutdown: CancellationToken,
 ) -> anyhow::Result<()> {
     let http = Arc::new(HttpSource::new(config.http).await?);
     let stream = start_stream(config.stream, stream_tx, stream_start);
@@ -112,12 +112,12 @@ pub async fn start(
     let mut finished = false;
     while !finished {
         finished = tokio::select! {
-            () = &mut shutdown => true,
+            () = shutdown.cancelled() => true,
             item = http_rx.recv() => handle_http(item, Arc::clone(&http)),
             result = &mut stream => return result,
         };
     }
-    shutdown.shutdown();
+    shutdown.cancel();
 
     Ok(())
 }

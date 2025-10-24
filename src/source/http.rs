@@ -15,16 +15,18 @@ use {
         },
         rpc_request::RpcError,
     },
+    solana_commitment_config::CommitmentConfig,
     solana_rpc_client::http_sender::HttpSender,
     solana_sdk::{
         clock::Slot,
-        commitment_config::CommitmentConfig,
-        instruction::CompiledInstruction,
-        message::{Message, VersionedMessage, v0::LoadedAddresses},
+        message::{
+            Message, VersionedMessage, compiled_instruction::CompiledInstruction,
+            v0::LoadedAddresses,
+        },
         transaction::Transaction,
-        transaction_context::TransactionReturnData,
     },
     solana_storage_proto::convert::generated,
+    solana_transaction_context::TransactionReturnData,
     solana_transaction_status::{
         ConfirmedBlock, EncodedTransactionWithStatusMeta, InnerInstruction, InnerInstructions,
         TransactionDetails, TransactionStatusMeta, TransactionTokenBalance,
@@ -191,41 +193,31 @@ impl HttpSource {
 
         let block = match response {
             Ok(block) => block,
-            // not confirmed yet?
-            Err(ClientError {
-                kind:
+            Err(error) => {
+                match error.kind() {
+                    // not confirmed yet?
                     ClientErrorKind::RpcError(RpcError::RpcResponseError {
                         code: JSON_RPC_SERVER_ERROR_BLOCK_NOT_AVAILABLE,
                         ..
-                    }),
-                ..
-            }) => {
-                return Err(GetBlockError::BlockNotAvailable(slot));
-            }
-            // dead
-            Err(ClientError {
-                kind:
+                    }) => {
+                        return Err(GetBlockError::BlockNotAvailable(slot));
+                    }
+                    // dead
                     ClientErrorKind::RpcError(RpcError::RpcResponseError {
                         code: JSON_RPC_SERVER_ERROR_SLOT_SKIPPED,
                         ..
-                    }),
-                ..
-            }) => {
-                return Err(GetBlockError::SlotSkipped(slot));
-            }
-            // missed
-            Err(ClientError {
-                kind:
+                    }) => {
+                        return Err(GetBlockError::SlotSkipped(slot));
+                    }
+                    // missed
                     ClientErrorKind::RpcError(RpcError::RpcResponseError {
                         code: JSON_RPC_SERVER_ERROR_LONG_TERM_STORAGE_SLOT_SKIPPED,
                         ..
-                    }),
-                ..
-            }) => {
-                return Err(GetBlockError::SlotSkipped(slot));
-            }
-            Err(error) => {
-                return Err(error.into());
+                    }) => {
+                        return Err(GetBlockError::SlotSkipped(slot));
+                    }
+                    _ => return Err(error.into()),
+                }
             }
         };
 
@@ -303,7 +295,7 @@ impl HttpSource {
         };
 
         Ok(TransactionStatusMeta {
-            status: meta.status,
+            status: meta.status.map_err(Into::into),
             fee: meta.fee,
             pre_balances: meta.pre_balances,
             post_balances: meta.post_balances,

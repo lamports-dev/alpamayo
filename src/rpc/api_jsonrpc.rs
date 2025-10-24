@@ -21,7 +21,7 @@ use {
     crossbeam::channel::{Sender, TrySendError},
     futures::future::BoxFuture,
     jsonrpsee_types::{
-        Id, Params, Request, Response, ResponsePayload, TwoPointZero,
+        Extensions, Id, Params, Request, Response, ResponsePayload, TwoPointZero,
         error::{ErrorObjectOwned, INVALID_PARAMS_MSG},
     },
     metrics::gauge,
@@ -36,6 +36,7 @@ use {
     },
     serde::{Deserialize, Serialize, de},
     serde_json::json,
+    solana_commitment_config::{CommitmentConfig, CommitmentLevel},
     solana_rpc_client_api::{
         config::{
             RpcBlockConfig, RpcBlocksConfigWrapper, RpcContextConfig, RpcEncodingConfigWrapper,
@@ -51,7 +52,6 @@ use {
     },
     solana_sdk::{
         clock::{Epoch, Slot, UnixTimestamp},
-        commitment_config::{CommitmentConfig, CommitmentLevel},
         epoch_rewards_hasher::EpochRewardsHasher,
         epoch_schedule::EpochSchedule,
         hash::Hash,
@@ -292,6 +292,7 @@ where
             jsonrpc: Some(TwoPointZero),
             payload: ResponsePayload::<()>::error(error),
             id: request.id,
+            extensions: Extensions::default(),
         })),
     }
 }
