@@ -40,10 +40,10 @@ rand = "0.9.1"
 rayon = "1.10.0"
 regex = "1.11.1"
 reqwest = "0.12.14"
-richat-client = { version = "6.0.0", git = "https://github.com/lamports-dev/richat.git", rev = "ea5cac0" }
+richat-client = "6.0.0"
 richat-metrics = "1.0.1"
-richat-proto = { version = "6.0.0", git = "https://github.com/lamports-dev/richat.git", rev = "ea5cac0" }
-richat-shared = { version = "6.0.0", git = "https://github.com/lamports-dev/richat.git", rev = "ea5cac0", default-features = false, features = ["config", "jsonrpc", "version"] }
+richat-proto = "6.0.0"
+richat-shared = { version = "6.0.0", default-features = false, features = ["config", "jsonrpc", "version"] }
 rocksdb = "0.24.0"
 serde = { version = "1.0.218", features = ["derive"] }
 serde_json = "1.0.139"

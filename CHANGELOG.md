@@ -16,7 +16,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Breaking
 
-## [0.16.0] - 2025-??-??
+## [0.16.0] - 2025-10-24
 
 ### Breaking
 
