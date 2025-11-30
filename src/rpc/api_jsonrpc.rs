@@ -126,7 +126,7 @@ impl State {
                     && upstreams
                         .iter()
                         .any(|upstream| upstream.is_supported(ConfigRpcCallJson::GetLeaderSchedule)),
-                "at least one upstream should support `getClusterNodes` and `GetLeaderSchedule`"
+                "at least one upstream should support `getClusterNodes` and `getLeaderSchedule`"
             );
         }
 
