@@ -80,7 +80,7 @@ pub fn setup() -> anyhow::Result<PrometheusHandle> {
     );
     describe_histogram!(
         RPC_UPSTREAM_DURATION_SECONDS,
-        "RPC request time to upstream by x-subscription-method, upstream name and method"
+        "RPC request time to upstream by x-subscription-id, upstream name and method"
     );
 
     Ok(handle)
