@@ -20,6 +20,7 @@ pub const WRITE_BLOCK_SYNC_SECONDS: &str = "write_block_sync_seconds";
 pub const RPC_WORKERS_CPU_SECONDS_TOTAL: &str = "rpc_workers_cpu_seconds_total"; // x_subscription_id, method
 
 pub const RPC_UPSTREAM_REQUESTS_TOTAL: &str = "rpc_upstream_requests_total"; // x_subscription_id, upstream, method
+pub const RPC_UPSTREAM_DURATION_SECONDS: &str = "rpc_upstream_duration_seconds"; // x_subscription_id, upstream, method
 
 pub fn setup() -> anyhow::Result<PrometheusHandle> {
     let handle = PrometheusBuilder::new()
@@ -29,6 +30,12 @@ pub fn setup() -> anyhow::Result<PrometheusHandle> {
         )?
         .set_buckets_for_metric(
             Matcher::Full(RPC_REQUESTS_DURATION_SECONDS.to_owned()),
+            &[
+                0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0,
+            ],
+        )?
+        .set_buckets_for_metric(
+            Matcher::Full(RPC_UPSTREAM_DURATION_SECONDS.to_owned()),
             &[
                 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0,
             ],
@@ -70,6 +77,10 @@ pub fn setup() -> anyhow::Result<PrometheusHandle> {
     describe_counter!(
         RPC_UPSTREAM_REQUESTS_TOTAL,
         "Number of RPC requests to upstream by x-subscription-id, upstream name and method"
+    );
+    describe_histogram!(
+        RPC_UPSTREAM_DURATION_SECONDS,
+        "RPC request time to upstream by x-subscription-method, upstream name and method"
     );
 
     Ok(handle)

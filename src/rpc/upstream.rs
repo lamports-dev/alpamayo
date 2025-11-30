@@ -1,7 +1,7 @@
 use {
     crate::{
         config::{ConfigRpcCallJson, ConfigRpcUpstream},
-        metrics::RPC_UPSTREAM_REQUESTS_TOTAL,
+        metrics::{RPC_UPSTREAM_DURATION_SECONDS, RPC_UPSTREAM_REQUESTS_TOTAL},
         rpc::{
             api::{X_ERROR, X_SLOT},
             api_jsonrpc::RpcRequestBlocksUntil,
@@ -12,9 +12,10 @@ use {
     http_body_util::{BodyExt, Full as BodyFull},
     hyper::{body::Bytes, http::Result as HttpResult},
     jsonrpsee_types::{Id, Response, ResponsePayload},
-    metrics::counter,
+    metrics::{counter, histogram},
     quanta::Instant as QInstant,
     reqwest::{Client, StatusCode, Version, header::CONTENT_TYPE},
+    richat_metrics::duration_to_seconds,
     richat_shared::jsonrpc::helpers::{RpcResponse, X_SUBSCRIPTION_ID, jsonrpc_response_success},
     serde::de::DeserializeOwned,
     serde_json::json,
@@ -111,18 +112,27 @@ impl RpcClientHttpget {
         method: &'static str,
         deadline: Instant,
     ) -> anyhow::Result<HttpResult<RpcResponse>> {
+        let ts = Instant::now();
         let result = match timeout_at(deadline.into(), self.call(url, &x_subscription_id)).await {
             Ok(result) => result,
             Err(_timeout) => anyhow::bail!("upstream timeout"),
         };
+        let elapsed = duration_to_seconds(ts.elapsed());
 
         counter!(
             RPC_UPSTREAM_REQUESTS_TOTAL,
-            "x_subscription_id" => x_subscription_id,
+            "x_subscription_id" => Arc::clone(&x_subscription_id),
             "upstream" => Arc::clone(&self.name),
             "method" => method,
         )
         .increment(1);
+        histogram!(
+            RPC_UPSTREAM_DURATION_SECONDS,
+            "x_subscription_id" => x_subscription_id,
+            "upstream" => Arc::clone(&self.name),
+            "method" => method,
+        )
+        .record(elapsed);
 
         result
     }
@@ -229,15 +239,24 @@ impl RpcClientJsonrpcInner {
         method: &'static str,
         body: String,
     ) -> RpcClientJsonrpcResultRaw {
+        let ts = Instant::now();
         let result = self.call2(&x_subscription_id, body).await;
+        let elapsed = duration_to_seconds(ts.elapsed());
 
         counter!(
             RPC_UPSTREAM_REQUESTS_TOTAL,
-            "x_subscription_id" => x_subscription_id,
+            "x_subscription_id" => Arc::clone(&x_subscription_id),
             "upstream" => Arc::clone(&self.name),
             "method" => method,
         )
         .increment(1);
+        histogram!(
+            RPC_UPSTREAM_DURATION_SECONDS,
+            "x_subscription_id" => x_subscription_id,
+            "upstream" => Arc::clone(&self.name),
+            "method" => method,
+        )
+        .record(elapsed);
 
         result
     }
