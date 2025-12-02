@@ -1,7 +1,10 @@
 use {
     crate::{
         config::{ConfigRpcCallJson, ConfigRpcUpstream},
-        metrics::{RPC_UPSTREAM_DURATION_SECONDS, RPC_UPSTREAM_REQUESTS_TOTAL},
+        metrics::{
+            RPC_UPSTREAM_DURATION_SECONDS, RPC_UPSTREAM_GENERATED_BYTES_TOTAL,
+            RPC_UPSTREAM_REQUESTS_TOTAL,
+        },
         rpc::{
             api::{X_ERROR, X_SLOT},
             api_jsonrpc::RpcRequestBlocksUntil,
@@ -113,9 +116,9 @@ impl RpcClientHttpget {
         deadline: Instant,
     ) -> anyhow::Result<HttpResult<RpcResponse>> {
         let ts = Instant::now();
-        let result = match timeout_at(deadline.into(), self.call(url, &x_subscription_id)).await {
-            Ok(result) => result,
-            Err(_timeout) => anyhow::bail!("upstream timeout"),
+        let Ok(result) = timeout_at(deadline.into(), self.call(url, &x_subscription_id)).await
+        else {
+            anyhow::bail!("upstream timeout");
         };
         let elapsed = duration_to_seconds(ts.elapsed());
 
@@ -128,20 +131,29 @@ impl RpcClientHttpget {
         .increment(1);
         histogram!(
             RPC_UPSTREAM_DURATION_SECONDS,
-            "x_subscription_id" => x_subscription_id,
+            "x_subscription_id" => Arc::clone(&x_subscription_id),
             "upstream" => Arc::clone(&self.name),
             "method" => method,
         )
         .record(elapsed);
+        if let Ok((size, _value)) = &result {
+            counter!(
+                RPC_UPSTREAM_GENERATED_BYTES_TOTAL,
+                "x_subscription_id" => x_subscription_id,
+                "upstream" => Arc::clone(&self.name),
+                "method" => method,
+            )
+            .increment(*size as u64);
+        }
 
-        result
+        result.map(|(_size, value)| value)
     }
 
     async fn call(
         &self,
         url: &str,
         x_subscription_id: &str,
-    ) -> anyhow::Result<HttpResult<RpcResponse>> {
+    ) -> anyhow::Result<(usize, HttpResult<RpcResponse>)> {
         let request = self
             .client
             .get(url)
@@ -177,7 +189,7 @@ impl RpcClientHttpget {
         if let Some(x_error) = x_error {
             response = response.header(X_ERROR, x_error);
         }
-        Ok(response.body(BodyFull::from(bytes).boxed()))
+        Ok((bytes.len(), response.body(BodyFull::from(bytes).boxed())))
     }
 }
 
@@ -252,11 +264,20 @@ impl RpcClientJsonrpcInner {
         .increment(1);
         histogram!(
             RPC_UPSTREAM_DURATION_SECONDS,
-            "x_subscription_id" => x_subscription_id,
+            "x_subscription_id" => Arc::clone(&x_subscription_id),
             "upstream" => Arc::clone(&self.name),
             "method" => method,
         )
         .record(elapsed);
+        if let Ok(value) = &result {
+            counter!(
+                RPC_UPSTREAM_GENERATED_BYTES_TOTAL,
+                "x_subscription_id" => x_subscription_id,
+                "upstream" => Arc::clone(&self.name),
+                "method" => method,
+            )
+            .increment(value.len() as u64);
+        }
 
         result
     }
