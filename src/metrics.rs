@@ -77,7 +77,7 @@ pub fn setup() -> anyhow::Result<PrometheusHandle> {
 
     describe_counter!(
         RPC_UPSTREAM_REQUESTS_TOTAL,
-        "Number of RPC requests to upstream by x-subscription-id, upstream name and method"
+        "Number of RPC requests to upstream by x-subscription-id, upstream name, method and timeout"
     );
     describe_histogram!(
         RPC_UPSTREAM_DURATION_SECONDS,

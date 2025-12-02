@@ -2,7 +2,7 @@ use {
     crate::{
         config::{ConfigRpcCallJson, ConfigRpcUpstream},
         metrics::{
-            RPC_UPSTREAM_DURATION_SECONDS, RPC_UPSTREAM_BANDWIDTH_TOTAL,
+            RPC_UPSTREAM_BANDWIDTH_TOTAL, RPC_UPSTREAM_DURATION_SECONDS,
             RPC_UPSTREAM_REQUESTS_TOTAL,
         },
         rpc::{
@@ -116,26 +116,26 @@ impl RpcClientHttpget {
         deadline: Instant,
     ) -> anyhow::Result<HttpResult<RpcResponse>> {
         let ts = Instant::now();
-        let Ok(result) = timeout_at(deadline.into(), self.call(url, &x_subscription_id)).await
-        else {
-            anyhow::bail!("upstream timeout");
-        };
-        let elapsed = duration_to_seconds(ts.elapsed());
-
+        let result = timeout_at(deadline.into(), self.call(url, &x_subscription_id)).await;
         counter!(
             RPC_UPSTREAM_REQUESTS_TOTAL,
             "x_subscription_id" => Arc::clone(&x_subscription_id),
             "upstream" => Arc::clone(&self.name),
             "method" => method,
+            "timeout" => if result.is_err() { "true" } else { "false" },
         )
         .increment(1);
+        let Ok(result) = result else {
+            anyhow::bail!("upstream timeout");
+        };
+
         histogram!(
             RPC_UPSTREAM_DURATION_SECONDS,
             "x_subscription_id" => Arc::clone(&x_subscription_id),
             "upstream" => Arc::clone(&self.name),
             "method" => method,
         )
-        .record(elapsed);
+        .record(duration_to_seconds(ts.elapsed()));
         if let Ok((size, _value)) = &result {
             counter!(
                 RPC_UPSTREAM_BANDWIDTH_TOTAL,
@@ -205,24 +205,12 @@ pub struct RpcClientJsonrpcInner {
 }
 
 impl RpcClientJsonrpcInner {
-    async fn call_with_timeout(
-        &self,
-        x_subscription_id: Arc<str>,
-        method: &'static str,
-        body: String,
-        deadline: Instant,
-    ) -> RpcClientJsonrpcResultRaw {
-        match timeout_at(deadline.into(), self.call(x_subscription_id, method, body)).await {
-            Ok(result) => result,
-            Err(_timeout) => Err(Cow::Borrowed("upstream timeout")),
-        }
-    }
-
     async fn call_get_success<T: Clone + DeserializeOwned>(
         &self,
         x_subscription_id: Arc<str>,
         method: &'static str,
         params: serde_json::Value,
+        deadline: Instant,
     ) -> Result<T, Cow<'static, str>> {
         let body = json!({
             "jsonrpc": "2.0",
@@ -232,7 +220,9 @@ impl RpcClientJsonrpcInner {
         })
         .to_string();
 
-        let bytes = self.call(x_subscription_id, method, body).await?;
+        let bytes = self
+            .call_with_timeout(x_subscription_id, method, body, deadline)
+            .await?;
 
         let result: Response<T> = serde_json::from_slice(&bytes)
             .map_err(|_error| Cow::Borrowed("failed to parse json from upstream"))?;
@@ -245,30 +235,34 @@ impl RpcClientJsonrpcInner {
         }
     }
 
-    async fn call(
+    async fn call_with_timeout(
         &self,
         x_subscription_id: Arc<str>,
         method: &'static str,
         body: String,
+        deadline: Instant,
     ) -> RpcClientJsonrpcResultRaw {
         let ts = Instant::now();
-        let result = self.call2(&x_subscription_id, body).await;
-        let elapsed = duration_to_seconds(ts.elapsed());
-
+        let result = timeout_at(deadline.into(), self.call2(&x_subscription_id, body)).await;
         counter!(
             RPC_UPSTREAM_REQUESTS_TOTAL,
             "x_subscription_id" => Arc::clone(&x_subscription_id),
             "upstream" => Arc::clone(&self.name),
             "method" => method,
+            "timeout" => if result.is_err() { "true" } else { "false" },
         )
         .increment(1);
+        let Ok(result) = result else {
+            return Err(Cow::Borrowed("upstream timeout"));
+        };
+
         histogram!(
             RPC_UPSTREAM_DURATION_SECONDS,
             "x_subscription_id" => Arc::clone(&x_subscription_id),
             "upstream" => Arc::clone(&self.name),
             "method" => method,
         )
-        .record(elapsed);
+        .record(duration_to_seconds(ts.elapsed()));
         if let Ok(value) = &result {
             counter!(
                 RPC_UPSTREAM_BANDWIDTH_TOTAL,
@@ -517,13 +511,14 @@ impl RpcClientJsonrpc {
         let inner = Arc::clone(&self.inner);
         let payload = self
             .cache_cluster_nodes
-            .get(deadline, move || {
+            .get(move || {
                 async move {
                     inner
                         .call_get_success::<Vec<RpcContactInfo>>(
                             x_subscription_id,
                             "getClusterNodes",
                             json!([]),
+                            deadline,
                         )
                         .await
                 }
@@ -617,6 +612,7 @@ impl RpcClientJsonrpc {
                                     commitment: Some(CommitmentConfig::confirmed())
                                 }
                             ]),
+                            deadline,
                         )
                         .await
                         .map(Arc::new)
@@ -628,11 +624,7 @@ impl RpcClientJsonrpc {
             });
         drop(locked);
 
-        let payload = match timeout_at(deadline.into(), request).await {
-            Ok(result) => result,
-            Err(_timeout) => Err(Cow::Borrowed("upstream timeout")),
-        }
-        .map_err(|error| anyhow::anyhow!(error))?;
+        let payload = request.await.map_err(|error| anyhow::anyhow!(error))?;
 
         if let Some(identity) = identity {
             let Some(map) = payload.as_ref() else {
@@ -764,7 +756,6 @@ impl<T: Clone> CachedRequests<T> {
 
     async fn get(
         &self,
-        deadline: Instant,
         fetch: impl FnOnce() -> BoxFuture<'static, Result<T, Cow<'static, str>>>,
     ) -> Result<T, Cow<'static, str>> {
         let mut locked = self.inner.lock().await;
@@ -780,11 +771,7 @@ impl<T: Clone> CachedRequests<T> {
         };
         let request = locked.request.clone();
         drop(locked);
-
-        match timeout_at(deadline.into(), request).await {
-            Ok(result) => result,
-            Err(_timeout) => Err(Cow::Borrowed("upstream timeout")),
-        }
+        request.await
     }
 }
 
