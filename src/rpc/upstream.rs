@@ -2,7 +2,7 @@ use {
     crate::{
         config::{ConfigRpcCallJson, ConfigRpcUpstream},
         metrics::{
-            RPC_UPSTREAM_DURATION_SECONDS, RPC_UPSTREAM_GENERATED_BYTES_TOTAL,
+            RPC_UPSTREAM_DURATION_SECONDS, RPC_UPSTREAM_BANDWIDTH_TOTAL,
             RPC_UPSTREAM_REQUESTS_TOTAL,
         },
         rpc::{
@@ -138,7 +138,7 @@ impl RpcClientHttpget {
         .record(elapsed);
         if let Ok((size, _value)) = &result {
             counter!(
-                RPC_UPSTREAM_GENERATED_BYTES_TOTAL,
+                RPC_UPSTREAM_BANDWIDTH_TOTAL,
                 "x_subscription_id" => x_subscription_id,
                 "upstream" => Arc::clone(&self.name),
                 "method" => method,
@@ -271,7 +271,7 @@ impl RpcClientJsonrpcInner {
         .record(elapsed);
         if let Ok(value) = &result {
             counter!(
-                RPC_UPSTREAM_GENERATED_BYTES_TOTAL,
+                RPC_UPSTREAM_BANDWIDTH_TOTAL,
                 "x_subscription_id" => x_subscription_id,
                 "upstream" => Arc::clone(&self.name),
                 "method" => method,
