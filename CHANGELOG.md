@@ -16,6 +16,12 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Breaking
 
+## [0.17.0] - 2025-12-02
+
+### Features
+
+- alpamayo: add metric `rpc_upstream_duration_seconds` ([#86](https://github.com/lamports-dev/alpamayo/pull/86))
+
 ## [0.16.0] - 2025-10-24
 
 ### Breaking

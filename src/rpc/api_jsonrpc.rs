@@ -126,7 +126,7 @@ impl State {
                     && upstreams
                         .iter()
                         .any(|upstream| upstream.is_supported(ConfigRpcCallJson::GetLeaderSchedule)),
-                "at least one upstream should support `getClusterNodes` and `GetLeaderSchedule`"
+                "at least one upstream should support `getClusterNodes` and `getLeaderSchedule`"
             );
         }
 
@@ -1452,7 +1452,13 @@ impl RpcRequestInflationReward {
                 .flatten()
         {
             return upstream
-                .get_blocks_parsed(deadline, &self.id, start_slot, limit)
+                .get_blocks_parsed(
+                    Arc::clone(&self.x_subscription_id),
+                    deadline,
+                    &self.id,
+                    start_slot,
+                    limit,
+                )
                 .await
                 .map_err(|error| anyhow::anyhow!(error));
         }
@@ -1557,7 +1563,15 @@ impl RpcRequestInflationReward {
             .then(|| self.state.get_upstream(ConfigRpcCallJson::GetBlock))
             .flatten()
         {
-            match upstream.get_block_rewards(deadline, &self.id, slot).await {
+            match upstream
+                .get_block_rewards(
+                    Arc::clone(&self.x_subscription_id),
+                    deadline,
+                    &self.id,
+                    slot,
+                )
+                .await
+            {
                 Ok(Ok(Some(block))) => Ok(Ok(block)),
                 Ok(Ok(None)) => Ok(Err(RpcRequestBlock::error_not_available(
                     self.id.clone(),
