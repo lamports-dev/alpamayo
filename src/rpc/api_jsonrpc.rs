@@ -526,10 +526,11 @@ impl RpcRequestHandler for RpcRequestBlock {
 
 impl RpcRequestBlock {
     async fn fetch_upstream(self, deadline: Instant) -> RpcRequestResult {
-        if let Some(upstream) = (!self.upstream_disabled)
-            .then(|| self.state.get_upstream(ConfigRpcCallJson::GetBlock))
-            .flatten()
-        {
+        if self.upstream_disabled {
+            return Ok(jsonrpc_response_success(self.id, None::<()>));
+        }
+
+        if let Some(upstream) = self.state.get_upstream(ConfigRpcCallJson::GetBlock) {
             upstream
                 .get_block(
                     self.x_subscription_id,
@@ -1036,10 +1037,11 @@ impl RpcRequestHandler for RpcRequestBlockTime {
 
 impl RpcRequestBlockTime {
     async fn fetch_upstream(self, deadline: Instant) -> RpcRequestResult {
-        if let Some(upstream) = (!self.upstream_disabled)
-            .then(|| self.state.get_upstream(ConfigRpcCallJson::GetBlockTime))
-            .flatten()
-        {
+        if self.upstream_disabled {
+            return Ok(jsonrpc_response_success(self.id, None::<()>));
+        }
+
+        if let Some(upstream) = self.state.get_upstream(ConfigRpcCallJson::GetBlockTime) {
             upstream
                 .get_block_time(self.x_subscription_id, deadline, &self.id, self.slot)
                 .await
@@ -2446,10 +2448,11 @@ impl RpcRequestHandler for RpcRequestTransaction {
 
 impl RpcRequestTransaction {
     async fn fetch_upstream(self, deadline: Instant) -> RpcRequestResult {
-        if let Some(upstream) = (!self.upstream_disabled)
-            .then(|| self.state.get_upstream(ConfigRpcCallJson::GetTransaction))
-            .flatten()
-        {
+        if self.upstream_disabled {
+            return Ok(jsonrpc_response_success(self.id, None::<()>));
+        }
+
+        if let Some(upstream) = self.state.get_upstream(ConfigRpcCallJson::GetTransaction) {
             upstream
                 .get_transaction(
                     self.x_subscription_id,
