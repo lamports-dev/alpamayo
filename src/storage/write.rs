@@ -48,7 +48,7 @@ use {
         time::sleep,
     },
     tokio_util::sync::CancellationToken,
-    tracing::{info, warn},
+    tracing::{debug, info, warn},
 };
 
 #[allow(clippy::too_many_arguments)]
@@ -323,7 +323,13 @@ async fn start2(
                 db_write
                     .push_block_front(next_database_slot, block, storage_files, &mut blocks)
                     .await?;
-                metric_storage_block_sync.record(duration_to_seconds(ts.elapsed()));
+                let elapsed = ts.elapsed();
+                metric_storage_block_sync.record(duration_to_seconds(elapsed));
+                debug!(
+                    slot = next_database_slot,
+                    ?elapsed,
+                    "push new block from backfilling"
+                );
 
                 next_database_slot += 1;
             }
@@ -424,7 +430,9 @@ async fn start2(
             db_write
                 .push_block_front(next_confirmed_slot, block, storage_files, &mut blocks)
                 .await?;
-            metric_storage_block_sync.record(duration_to_seconds(ts.elapsed()));
+            let elapsed = ts.elapsed();
+            metric_storage_block_sync.record(duration_to_seconds(elapsed));
+            debug!(slot = next_confirmed_slot, ?elapsed, "push new block");
 
             next_confirmed_slot += 1;
         }
@@ -465,7 +473,9 @@ async fn start2(
                             let block_added = db_write
                                 .push_block_back(slot, block, storage_files, &mut blocks)
                                 .await?;
-                            metric_storage_block_sync.record(duration_to_seconds(ts.elapsed()));
+                            let elapsed = ts.elapsed();
+                            metric_storage_block_sync.record(duration_to_seconds(elapsed));
+                            debug!(slot, ?elapsed, "push history block");
                             block_added
                         } else {
                             false
