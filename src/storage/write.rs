@@ -20,7 +20,7 @@ use {
     },
     anyhow::Context as _,
     futures::{
-        future::try_join_all,
+        future::{FutureExt, try_join_all},
         stream::{FuturesUnordered, Stream, StreamExt},
     },
     metrics::histogram,
@@ -36,6 +36,7 @@ use {
     solana_storage_proto::convert::generated,
     solana_transaction_status::ConfirmedBlock,
     std::{
+        future::{pending, ready},
         pin::Pin,
         sync::{Arc, Mutex},
         task::{Context, Poll},
@@ -343,6 +344,15 @@ async fn start2(
     let mut backfill_ts = None;
 
     loop {
+        let back_slot_ready_future = if next_back_slot
+            .map(|slot| queued_slots_back.contains_key(&slot))
+            .unwrap_or(false)
+        {
+            ready(()).boxed()
+        } else {
+            pending().boxed()
+        };
+
         tokio::select! {
             biased;
             // insert block requested via http/rpc
@@ -416,6 +426,7 @@ async fn start2(
                 }
                 None => return Ok(()),
             },
+            () = back_slot_ready_future => {},
             () = shutdown.cancelled() => return Ok(()),
         }
 
@@ -439,7 +450,7 @@ async fn start2(
 
         // backfill
         match (backfill_upto, next_back_slot) {
-            (Some(backfill_upto_value), Some(mut slot)) => {
+            (Some(backfill_upto_value), Some(slot)) => {
                 if next_back_request_slot == Slot::MAX {
                     next_back_request_slot = slot;
                 }
@@ -465,8 +476,9 @@ async fn start2(
                     next_back_request_slot -= 1;
                 }
 
-                let tsloop = Instant::now();
-                while let Some(block) = queued_slots_back.remove(&slot) {
+                if let Some(block) = queued_slots_back.remove(&slot) {
+                    next_back_slot = Some(slot - 1);
+
                     let block_added =
                         if blocks.get_back_slot().and_then(|x| x.checked_sub(1)) == Some(slot) {
                             let ts = Instant::now();
@@ -485,17 +497,8 @@ async fn start2(
                         info!("backfilling is finished");
                         backfill_upto = None;
                         queued_slots_back.clear();
-                        break;
-                    }
-
-                    slot -= 1;
-
-                    // do not block new blocks
-                    if tsloop.elapsed() > Duration::from_millis(100) {
-                        break;
                     }
                 }
-                next_back_slot = Some(slot);
             }
             (Some(backfill_upto_value), None) => {
                 if let Some(slot) = blocks.get_back_slot().and_then(|x| x.checked_sub(1)) {

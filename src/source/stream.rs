@@ -24,7 +24,7 @@ use {
         task::{Context, Poll},
     },
     thiserror::Error,
-    tracing::{info, warn, debug},
+    tracing::{debug, info, warn},
 };
 
 #[derive(Debug, Error)]
