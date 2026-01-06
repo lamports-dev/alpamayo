@@ -16,6 +16,12 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Breaking
 
+## [0.17.2] - 2026-01-06
+
+### Fixes
+
+- alpamayo: add debug logs for block ([#90](https://github.com/lamports-dev/alpamayo/pull/90))
+
 ## [0.17.1] - 2025-12-30
 
 ### Fixes
