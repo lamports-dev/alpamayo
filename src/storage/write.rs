@@ -449,7 +449,7 @@ async fn start2(
             next_confirmed_slot += 1;
             push_block_front = true;
         }
-        if push_block_front {
+        if push_block_front && next_back_request_slot != Slot::MAX {
             continue;
         }
 
