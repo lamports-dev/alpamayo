@@ -431,6 +431,7 @@ async fn start2(
         }
 
         // save new blocks
+        let mut push_block_front = false;
         while let Some(block) = queued_slots_front.remove(&next_confirmed_slot) {
             let _ = sync_tx.send(ReadWriteSyncMessage::BlockConfirmed {
                 slot: next_confirmed_slot,
@@ -446,6 +447,10 @@ async fn start2(
             debug!(slot = next_confirmed_slot, ?elapsed, "push new block");
 
             next_confirmed_slot += 1;
+            push_block_front = true;
+        }
+        if push_block_front {
+            continue;
         }
 
         // backfill
