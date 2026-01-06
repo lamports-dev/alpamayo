@@ -20,7 +20,7 @@ use {
     },
     anyhow::Context as _,
     futures::{
-        future::try_join_all,
+        future::{FutureExt, try_join_all},
         stream::{FuturesUnordered, Stream, StreamExt},
     },
     metrics::histogram,
@@ -36,6 +36,7 @@ use {
     solana_storage_proto::convert::generated,
     solana_transaction_status::ConfirmedBlock,
     std::{
+        future::{pending, ready},
         pin::Pin,
         sync::{Arc, Mutex},
         task::{Context, Poll},
@@ -48,7 +49,7 @@ use {
         time::sleep,
     },
     tokio_util::sync::CancellationToken,
-    tracing::{info, warn},
+    tracing::{debug, info, warn},
 };
 
 #[allow(clippy::too_many_arguments)]
@@ -323,7 +324,13 @@ async fn start2(
                 db_write
                     .push_block_front(next_database_slot, block, storage_files, &mut blocks)
                     .await?;
-                metric_storage_block_sync.record(duration_to_seconds(ts.elapsed()));
+                let elapsed = ts.elapsed();
+                metric_storage_block_sync.record(duration_to_seconds(elapsed));
+                debug!(
+                    slot = next_database_slot,
+                    ?elapsed,
+                    "push new block from backfilling"
+                );
 
                 next_database_slot += 1;
             }
@@ -337,6 +344,15 @@ async fn start2(
     let mut backfill_ts = None;
 
     loop {
+        let back_slot_ready_future = if next_back_slot
+            .map(|slot| queued_slots_back.contains_key(&slot))
+            .unwrap_or(false)
+        {
+            ready(()).boxed()
+        } else {
+            pending().boxed()
+        };
+
         tokio::select! {
             biased;
             // insert block requested via http/rpc
@@ -410,10 +426,12 @@ async fn start2(
                 }
                 None => return Ok(()),
             },
+            () = back_slot_ready_future => {},
             () = shutdown.cancelled() => return Ok(()),
         }
 
         // save new blocks
+        let mut push_block_front = false;
         while let Some(block) = queued_slots_front.remove(&next_confirmed_slot) {
             let _ = sync_tx.send(ReadWriteSyncMessage::BlockConfirmed {
                 slot: next_confirmed_slot,
@@ -424,14 +442,20 @@ async fn start2(
             db_write
                 .push_block_front(next_confirmed_slot, block, storage_files, &mut blocks)
                 .await?;
-            metric_storage_block_sync.record(duration_to_seconds(ts.elapsed()));
+            let elapsed = ts.elapsed();
+            metric_storage_block_sync.record(duration_to_seconds(elapsed));
+            debug!(slot = next_confirmed_slot, ?elapsed, "push new block");
 
             next_confirmed_slot += 1;
+            push_block_front = true;
+        }
+        if push_block_front && next_back_request_slot != Slot::MAX {
+            continue;
         }
 
         // backfill
         match (backfill_upto, next_back_slot) {
-            (Some(backfill_upto_value), Some(mut slot)) => {
+            (Some(backfill_upto_value), Some(slot)) => {
                 if next_back_request_slot == Slot::MAX {
                     next_back_request_slot = slot;
                 }
@@ -457,15 +481,18 @@ async fn start2(
                     next_back_request_slot -= 1;
                 }
 
-                let tsloop = Instant::now();
-                while let Some(block) = queued_slots_back.remove(&slot) {
+                if let Some(block) = queued_slots_back.remove(&slot) {
+                    next_back_slot = Some(slot - 1);
+
                     let block_added =
                         if blocks.get_back_slot().and_then(|x| x.checked_sub(1)) == Some(slot) {
                             let ts = Instant::now();
                             let block_added = db_write
                                 .push_block_back(slot, block, storage_files, &mut blocks)
                                 .await?;
-                            metric_storage_block_sync.record(duration_to_seconds(ts.elapsed()));
+                            let elapsed = ts.elapsed();
+                            metric_storage_block_sync.record(duration_to_seconds(elapsed));
+                            debug!(slot, ?elapsed, "push history block");
                             block_added
                         } else {
                             false
@@ -475,17 +502,8 @@ async fn start2(
                         info!("backfilling is finished");
                         backfill_upto = None;
                         queued_slots_back.clear();
-                        break;
-                    }
-
-                    slot -= 1;
-
-                    // do not block new blocks
-                    if tsloop.elapsed() > Duration::from_millis(100) {
-                        break;
                     }
                 }
-                next_back_slot = Some(slot);
             }
             (Some(backfill_upto_value), None) => {
                 if let Some(slot) = blocks.get_back_slot().and_then(|x| x.checked_sub(1)) {

@@ -24,7 +24,7 @@ use {
         task::{Context, Poll},
     },
     thiserror::Error,
-    tracing::{info, warn},
+    tracing::{debug, info, warn},
 };
 
 #[derive(Debug, Error)]
@@ -149,6 +149,8 @@ impl SlotInfo {
         let mut transactions = std::mem::take(&mut self.transactions);
         transactions.sort_unstable_by_key(|(index, _tx)| *index);
 
+        debug!(slot = block_meta.slot, "build block");
+
         Some(Ok(BlockWithBinary::new(
             block_meta.parent_blockhash,
             block_meta.blockhash,
@@ -257,11 +259,14 @@ impl Stream for StreamSource {
                             }
                         };
 
-                        // store first processed slot
-                        if status == SlotStatusProto::SlotCreatedBank
-                            && this.first_processed.is_none()
-                        {
-                            this.first_processed = Some(slot);
+                        if status == SlotStatusProto::SlotCreatedBank {
+                            // log about new block
+                            debug!(slot, "bank created");
+
+                            // store first processed slot
+                            if this.first_processed.is_none() {
+                                this.first_processed = Some(slot);
+                            }
                         }
 
                         // drop message if less or eq to first processed
