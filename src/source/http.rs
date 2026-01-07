@@ -38,7 +38,7 @@ use {
     std::{fmt, time::Instant},
     thiserror::Error,
     tokio::sync::Semaphore,
-    tracing::{info, warn, debug},
+    tracing::{debug, info, warn},
     url::{ParseError, Url},
 };
 
