@@ -16,6 +16,12 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Breaking
 
+## [0.17.3] - 2026-01-07
+
+### Fixes
+
+- alpamayo: add debug log for rpc getBlock ([#91](https://github.com/lamports-dev/alpamayo/pull/91))
+
 ## [0.17.2] - 2026-01-06
 
 ### Fixes

@@ -35,10 +35,10 @@ use {
         UiTransactionReturnData, UiTransactionStatusMeta, UiTransactionTokenBalance,
         VersionedTransactionWithStatusMeta, option_serializer::OptionSerializer,
     },
-    std::fmt,
+    std::{fmt, time::Instant},
     thiserror::Error,
     tokio::sync::Semaphore,
-    tracing::{info, warn},
+    tracing::{info, warn, debug},
     url::{ParseError, Url},
 };
 
@@ -145,14 +145,17 @@ impl HttpSource {
         slot: Slot,
         httpget: bool,
     ) -> Result<BlockWithBinary, GetBlockError> {
-        if httpget
+        let ts = Instant::now();
+        let result = if httpget
             && self.httpurl.is_some()
             && let Some(block) = self.get_block_http(slot).await
         {
-            return Ok(block);
-        }
-
-        self.get_block_rpc(slot).await
+            Ok(block)
+        } else {
+            self.get_block_rpc(slot).await
+        };
+        debug!(slot, elapsed = ?ts.elapsed(), "block fetched");
+        result
     }
 
     async fn get_block_http(&self, slot: Slot) -> Option<BlockWithBinary> {
