@@ -5,4 +5,7 @@ all-features = true
 ignore = [
     # Advisory: https://rustsec.org/advisories/RUSTSEC-2025-0134
     "RUSTSEC-2025-0134",
+
+    # Advisory: https://rustsec.org/advisories/RUSTSEC-2025-0141
+    "RUSTSEC-2025-0141",
 ]
