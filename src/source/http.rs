@@ -154,7 +154,7 @@ impl HttpSource {
         } else {
             self.get_block_rpc(slot).await
         };
-        debug!(slot, elapsed = ?ts.elapsed(), "block fetched");
+        debug!(slot, elapsed = ?ts.elapsed(), "block fetch completed");
         result
     }
 
