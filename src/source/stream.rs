@@ -4,9 +4,9 @@ use {
         metrics::SOURCE_GRPC_VERSION,
         source::{block::BlockWithBinary, transaction::TransactionWithBinary},
     },
-    ::metrics::gauge,
     futures::{StreamExt, ready, stream::Stream},
     maplit::hashmap,
+    metrics::gauge,
     richat_client::{grpc::GrpcClientBuilderError, stream::SubscribeStream},
     richat_proto::{
         convert_from::{create_reward, create_tx_with_meta},

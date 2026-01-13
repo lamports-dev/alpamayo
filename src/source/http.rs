@@ -1,8 +1,10 @@
 use {
-    crate::{config::ConfigSourceHttp, source::block::BlockWithBinary},
+    crate::{config::ConfigSourceHttp, metrics::SOURCE_HTTP_BLOCK, source::block::BlockWithBinary},
     base64::{Engine, prelude::BASE64_STANDARD},
+    metrics::histogram,
     prost::Message as _,
     reqwest::{Client, StatusCode},
+    richat_metrics::duration_to_seconds,
     solana_client::{
         client_error::{ClientError, ClientErrorKind},
         nonblocking::rpc_client::RpcClient,
@@ -154,7 +156,9 @@ impl HttpSource {
         } else {
             self.get_block_rpc(slot).await
         };
-        debug!(slot, elapsed = ?ts.elapsed(), "block fetch completed");
+        let elapsed = ts.elapsed();
+        histogram!(SOURCE_HTTP_BLOCK).record(duration_to_seconds(elapsed));
+        debug!(slot, ?elapsed, "block fetch completed");
         result
     }
 
