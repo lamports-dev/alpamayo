@@ -4,8 +4,10 @@ use {
         storage::rocksdb::TransactionIndex,
     },
     prost::Message as _,
-    solana_sdk::{clock::Slot, signature::Signature, transaction::TransactionError},
+    solana_clock::Slot,
+    solana_signature::Signature,
     solana_storage_proto::convert::generated,
+    solana_transaction::TransactionError,
     solana_transaction_status::{TransactionWithStatusMeta, extract_and_fmt_memos},
 };
 

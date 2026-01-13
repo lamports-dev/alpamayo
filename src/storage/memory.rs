@@ -1,6 +1,6 @@
 use {
     crate::source::block::BlockWithBinary,
-    solana_sdk::clock::Slot,
+    solana_clock::Slot,
     std::{collections::VecDeque, sync::Arc},
 };
 

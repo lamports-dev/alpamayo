@@ -8,8 +8,8 @@ use {
         },
     },
     futures::stream::StreamExt,
-    solana_client::client_error::ClientError,
-    solana_sdk::clock::Slot,
+    solana_clock::Slot,
+    solana_rpc_client_api::client_error::Error as ClientError,
     std::sync::Arc,
     thiserror::Error,
     tokio::{

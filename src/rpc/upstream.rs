@@ -22,7 +22,9 @@ use {
     richat_shared::jsonrpc::helpers::{RpcResponse, X_SUBSCRIPTION_ID, jsonrpc_response_success},
     serde::de::DeserializeOwned,
     serde_json::json,
+    solana_clock::{Epoch, Slot},
     solana_commitment_config::CommitmentConfig,
+    solana_pubkey::Pubkey,
     solana_rpc_client_api::{
         config::{
             RpcBlockConfig, RpcLeaderScheduleConfig, RpcLeaderScheduleConfigWrapper,
@@ -30,7 +32,7 @@ use {
         },
         response::{RpcContactInfo, RpcLeaderSchedule},
     },
-    solana_sdk::{clock::Slot, epoch_schedule::Epoch, pubkey::Pubkey, signature::Signature},
+    solana_signature::Signature,
     solana_transaction_status::{BlockEncodingOptions, UiConfirmedBlock, UiTransactionEncoding},
     std::{
         borrow::Cow,

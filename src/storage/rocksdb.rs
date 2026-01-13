@@ -24,17 +24,15 @@ use {
         ColumnFamily, ColumnFamilyDescriptor, DB, DBCompressionType, Direction, IteratorMode,
         Options, WriteBatch,
     },
+    solana_clock::{Epoch, Slot, UnixTimestamp},
+    solana_epoch_rewards_hasher::EpochRewardsHasher,
+    solana_hash::{HASH_BYTES, Hash},
+    solana_pubkey::Pubkey,
     solana_rpc_client_api::response::{
         RpcConfirmedTransactionStatusWithSignature, RpcInflationReward,
     },
-    solana_sdk::{
-        clock::{Epoch, Slot, UnixTimestamp},
-        epoch_rewards_hasher::EpochRewardsHasher,
-        hash::{HASH_BYTES, Hash},
-        pubkey::Pubkey,
-        signature::Signature,
-        transaction::TransactionError,
-    },
+    solana_signature::Signature,
+    solana_transaction::TransactionError,
     std::{
         borrow::Cow,
         hash::BuildHasher,

@@ -19,7 +19,7 @@ use {
         richat::{GrpcSubscribeRequest, RichatFilter},
     },
     richat_shared::version::GrpcVersionInfo,
-    solana_sdk::clock::Slot,
+    solana_clock::Slot,
     solana_transaction_status::TransactionWithStatusMeta,
     std::{
         collections::BTreeMap,

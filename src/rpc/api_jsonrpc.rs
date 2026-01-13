@@ -36,7 +36,12 @@ use {
     },
     serde::{Deserialize, Serialize, de},
     serde_json::json,
+    solana_clock::{Epoch, Slot, UnixTimestamp},
     solana_commitment_config::{CommitmentConfig, CommitmentLevel},
+    solana_epoch_rewards_hasher::EpochRewardsHasher,
+    solana_epoch_schedule::EpochSchedule,
+    solana_hash::Hash,
+    solana_pubkey::Pubkey,
     solana_rpc_client_api::{
         config::{
             RpcBlockConfig, RpcBlocksConfigWrapper, RpcContextConfig, RpcEncodingConfigWrapper,
@@ -50,16 +55,9 @@ use {
             RpcInflationReward, RpcResponseContext, RpcVersionInfo,
         },
     },
-    solana_sdk::{
-        clock::{Epoch, Slot, UnixTimestamp},
-        epoch_rewards_hasher::EpochRewardsHasher,
-        epoch_schedule::EpochSchedule,
-        hash::Hash,
-        pubkey::Pubkey,
-        signature::Signature,
-        transaction::MAX_TX_ACCOUNT_LOCKS,
-    },
+    solana_signature::Signature,
     solana_storage_proto::convert::generated,
+    solana_transaction::sanitized::MAX_TX_ACCOUNT_LOCKS,
     solana_transaction_status::{
         BlockEncodingOptions, ConfirmedBlock, ConfirmedTransactionWithStatusMeta, Reward,
         RewardType, TransactionDetails, TransactionStatus, TransactionWithStatusMeta,

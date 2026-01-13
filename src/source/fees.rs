@@ -3,7 +3,7 @@ use {
         source::transaction::TransactionWithBinary,
         util::{HashMap, HashSet},
     },
-    solana_sdk::pubkey::Pubkey,
+    solana_pubkey::Pubkey,
     solana_transaction_status::{
         TransactionWithStatusMeta, VersionedTransactionWithStatusMeta, parse_vote::parse_vote,
     },
@@ -158,16 +158,16 @@ impl TransactionsFees {
 // https://docs.rs/solana-compute-budget/2.0.25/src/solana_compute_budget/compute_budget_processor.rs.html#69-148
 mod compute_budget_processor {
     use {
+        solana_borsh::v1::try_from_slice_unchecked,
         solana_compute_budget::compute_budget_limits::{
             DEFAULT_INSTRUCTION_COMPUTE_UNIT_LIMIT, MAX_COMPUTE_UNIT_LIMIT, MAX_HEAP_FRAME_BYTES,
             MIN_HEAP_FRAME_BYTES,
         },
         solana_compute_budget_interface::ComputeBudgetInstruction,
-        solana_sdk::{
-            borsh1::try_from_slice_unchecked, instruction::InstructionError,
-            message::compiled_instruction::CompiledInstruction, pubkey::Pubkey,
-            transaction::TransactionError,
-        },
+        solana_instruction_error::InstructionError,
+        solana_message::compiled_instruction::CompiledInstruction,
+        solana_pubkey::Pubkey,
+        solana_transaction::TransactionError,
     };
 
     #[derive(Debug)]
