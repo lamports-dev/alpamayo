@@ -10,6 +10,8 @@ use {
     tokio::{task::JoinError, time::sleep},
 };
 
+pub const SOURCE_GRPC_VERSION: &str = "source_grpc_version"; // hostname
+
 pub const STORAGE_STORED_SLOTS: &str = "storage_stored_slots"; // type
 pub const STORAGE_FILES_SPACE: &str = "storage_files_space_bytes"; // id, type
 
@@ -59,6 +61,8 @@ pub fn setup() -> anyhow::Result<PrometheusHandle> {
         "version" => VERSION_INFO.version,
     )
     .absolute(1);
+
+    describe_gauge!(SOURCE_GRPC_VERSION, "Current Geyser gRPC as source");
 
     describe_gauge!(STORAGE_STORED_SLOTS, "Stored slots in db");
     describe_gauge!(STORAGE_FILES_SPACE, "Storage space in files for blocks");
