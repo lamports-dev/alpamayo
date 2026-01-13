@@ -10,6 +10,9 @@ use {
     tokio::{task::JoinError, time::sleep},
 };
 
+pub const SOURCE_GRPC_VERSION: &str = "source_grpc_version"; // hostname
+pub const SOURCE_HTTP_BLOCK: &str = "source_http_block";
+
 pub const STORAGE_STORED_SLOTS: &str = "storage_stored_slots"; // type
 pub const STORAGE_FILES_SPACE: &str = "storage_files_space_bytes"; // id, type
 
@@ -25,6 +28,12 @@ pub const RPC_UPSTREAM_BANDWIDTH_TOTAL: &str = "rpc_upstream_bandwidth_total"; /
 
 pub fn setup() -> anyhow::Result<PrometheusHandle> {
     let handle = PrometheusBuilder::new()
+        .set_buckets_for_metric(
+            Matcher::Full(SOURCE_HTTP_BLOCK.to_owned()),
+            &[
+                0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0,
+            ],
+        )?
         .set_buckets_for_metric(
             Matcher::Full(WRITE_BLOCK_SYNC_SECONDS.to_owned()),
             &[0.005, 0.01, 0.02, 0.03, 0.04, 0.05, 0.075, 0.1, 0.2, 0.4],
@@ -59,6 +68,12 @@ pub fn setup() -> anyhow::Result<PrometheusHandle> {
         "version" => VERSION_INFO.version,
     )
     .absolute(1);
+
+    describe_gauge!(SOURCE_GRPC_VERSION, "Current Geyser gRPC as source");
+    describe_histogram!(
+        SOURCE_HTTP_BLOCK,
+        "RPC requests to fetch full block to fill db"
+    );
 
     describe_gauge!(STORAGE_STORED_SLOTS, "Stored slots in db");
     describe_gauge!(STORAGE_FILES_SPACE, "Storage space in files for blocks");

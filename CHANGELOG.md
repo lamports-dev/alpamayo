@@ -16,6 +16,12 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Breaking
 
+## [0.17.4] - 2026-01-13
+
+### Fixes
+
+- alpamayo: add source metrics ([#93](https://github.com/lamports-dev/alpamayo/pull/93))
+
 ## [0.17.3] - 2026-01-07
 
 ### Fixes

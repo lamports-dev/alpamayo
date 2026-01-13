@@ -1,10 +1,12 @@
 use {
     crate::{
         config::{ConfigSourceStream, ConfigSourceStreamKind},
+        metrics::SOURCE_GRPC_VERSION,
         source::{block::BlockWithBinary, transaction::TransactionWithBinary},
     },
     futures::{StreamExt, ready, stream::Stream},
     maplit::hashmap,
+    metrics::gauge,
     richat_client::{grpc::GrpcClientBuilderError, stream::SubscribeStream},
     richat_proto::{
         convert_from::{create_reward, create_tx_with_meta},
@@ -16,6 +18,7 @@ use {
         },
         richat::{GrpcSubscribeRequest, RichatFilter},
     },
+    richat_shared::version::GrpcVersionInfo,
     solana_sdk::clock::Slot,
     solana_transaction_status::TransactionWithStatusMeta,
     std::{
@@ -169,6 +172,13 @@ pub struct StreamSource {
     stream: SubscribeStream,
     slots: BTreeMap<Slot, SlotInfo>,
     first_processed: Option<Slot>,
+    hostname: String,
+}
+
+impl Drop for StreamSource {
+    fn drop(&mut self) {
+        gauge!(SOURCE_GRPC_VERSION, "hostname" => self.hostname.clone()).set(0);
+    }
 }
 
 impl StreamSource {
@@ -177,6 +187,12 @@ impl StreamSource {
 
         let version = connection.get_version().await?;
         info!(version = version.version, "connected to stream");
+
+        let hostname = serde_json::from_str::<GrpcVersionInfo>(&version.version)
+            .ok()
+            .and_then(|value| value.extra.hostname)
+            .unwrap_or_else(|| "unknown".to_owned());
+        gauge!(SOURCE_GRPC_VERSION, "hostname" => hostname.clone()).set(1);
 
         let stream = match config.source {
             ConfigSourceStreamKind::DragonsMouth => connection
@@ -196,6 +212,7 @@ impl StreamSource {
             stream,
             slots: BTreeMap::new(),
             first_processed: None,
+            hostname,
         })
     }
 
