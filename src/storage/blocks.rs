@@ -4,7 +4,7 @@ use {
         storage::{files::StorageId, slots::StoredSlots, sync::ReadWriteSyncMessage},
         util::{HashMap, VecSide},
     },
-    solana_sdk::clock::{MAX_RECENT_BLOCKHASHES, Slot, UnixTimestamp},
+    solana_clock::{MAX_RECENT_BLOCKHASHES, Slot, UnixTimestamp},
     tokio::sync::broadcast,
     tracing::info,
 };

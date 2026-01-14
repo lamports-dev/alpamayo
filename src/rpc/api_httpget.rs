@@ -26,7 +26,8 @@ use {
         },
         metrics::RPC_REQUESTS_TOTAL,
     },
-    solana_sdk::{clock::Slot, signature::Signature},
+    solana_clock::Slot,
+    solana_signature::Signature,
     std::{
         collections::HashSet,
         str::FromStr,

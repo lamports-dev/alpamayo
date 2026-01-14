@@ -5,29 +5,26 @@ use {
     prost::Message as _,
     reqwest::{Client, StatusCode},
     richat_metrics::duration_to_seconds,
-    solana_client::{
-        client_error::{ClientError, ClientErrorKind},
-        nonblocking::rpc_client::RpcClient,
-        rpc_client::RpcClientConfig,
-        rpc_config::RpcBlockConfig,
-        rpc_custom_error::{
+    solana_clock::Slot,
+    solana_commitment_config::CommitmentConfig,
+    solana_message::{
+        Message, VersionedMessage, compiled_instruction::CompiledInstruction, v0::LoadedAddresses,
+    },
+    solana_rpc_client::{
+        http_sender::HttpSender, nonblocking::rpc_client::RpcClient, rpc_client::RpcClientConfig,
+    },
+    solana_rpc_client_api::{
+        client_error::{Error as ClientError, ErrorKind as ClientErrorKind},
+        config::RpcBlockConfig,
+        custom_error::{
             JSON_RPC_SERVER_ERROR_BLOCK_NOT_AVAILABLE,
             JSON_RPC_SERVER_ERROR_LONG_TERM_STORAGE_SLOT_SKIPPED,
             JSON_RPC_SERVER_ERROR_SLOT_SKIPPED,
         },
-        rpc_request::RpcError,
-    },
-    solana_commitment_config::CommitmentConfig,
-    solana_rpc_client::http_sender::HttpSender,
-    solana_sdk::{
-        clock::Slot,
-        message::{
-            Message, VersionedMessage, compiled_instruction::CompiledInstruction,
-            v0::LoadedAddresses,
-        },
-        transaction::Transaction,
+        request::RpcError,
     },
     solana_storage_proto::convert::generated,
+    solana_transaction::Transaction,
     solana_transaction_context::TransactionReturnData,
     solana_transaction_status::{
         ConfirmedBlock, EncodedTransactionWithStatusMeta, InnerInstruction, InnerInstructions,

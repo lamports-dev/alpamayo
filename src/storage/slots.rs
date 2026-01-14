@@ -2,7 +2,7 @@ use {
     crate::{metrics::STORAGE_STORED_SLOTS, util::HashSet},
     metrics::{Gauge, gauge},
     richat_shared::mutex_lock,
-    solana_sdk::clock::Slot,
+    solana_clock::Slot,
     std::{
         collections::BTreeMap,
         ops::Deref,

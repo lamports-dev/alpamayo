@@ -32,7 +32,7 @@ use {
     },
     richat_metrics::duration_to_seconds,
     richat_shared::mutex_lock,
-    solana_sdk::clock::Slot,
+    solana_clock::Slot,
     solana_storage_proto::convert::generated,
     solana_transaction_status::ConfirmedBlock,
     std::{

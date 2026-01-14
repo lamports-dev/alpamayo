@@ -19,16 +19,14 @@ use {
     },
     metrics::gauge,
     richat_metrics::duration_to_seconds,
+    solana_clock::{Epoch, MAX_PROCESSING_AGE, MAX_RECENT_BLOCKHASHES, Slot, UnixTimestamp},
     solana_commitment_config::{CommitmentConfig, CommitmentLevel},
+    solana_pubkey::Pubkey,
     solana_rpc_client_api::response::{
         RpcConfirmedTransactionStatusWithSignature, RpcPrioritizationFee,
     },
-    solana_sdk::{
-        clock::{Epoch, MAX_PROCESSING_AGE, MAX_RECENT_BLOCKHASHES, Slot, UnixTimestamp},
-        pubkey::Pubkey,
-        signature::Signature,
-        transaction::TransactionError,
-    },
+    solana_signature::Signature,
+    solana_transaction::TransactionError,
     solana_transaction_status::{TransactionConfirmationStatus, TransactionStatus},
     std::{
         collections::{BTreeMap, btree_map::Entry as BTreeMapEntry},

@@ -12,13 +12,11 @@ use {
             self, DecodeContext, WireType, encode_key, encode_varint, encoded_len_varint, key_len,
         },
     },
-    solana_sdk::{
-        clock::{Slot, UnixTimestamp},
-        pubkey::Pubkey,
-        signature::Signature,
-        transaction::TransactionError,
-    },
+    solana_clock::{Slot, UnixTimestamp},
+    solana_pubkey::Pubkey,
+    solana_signature::Signature,
     solana_storage_proto::convert::generated,
+    solana_transaction::TransactionError,
     solana_transaction_status::{ConfirmedBlock, Reward, RewardType, Rewards},
     std::{collections::hash_map::Entry as HashMapEntry, ops::Deref, sync::Arc},
 };

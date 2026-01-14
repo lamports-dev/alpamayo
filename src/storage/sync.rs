@@ -7,7 +7,7 @@ use {
             rocksdb::RocksdbRead,
         },
     },
-    solana_sdk::clock::Slot,
+    solana_clock::Slot,
     std::sync::Arc,
 };
 

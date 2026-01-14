@@ -1,8 +1,6 @@
 use {
-    crate::storage::rocksdb::SfaIndex,
-    solana_sdk::{
-        clock::Slot, pubkey::Pubkey, signature::Signature, transaction::TransactionError,
-    },
+    crate::storage::rocksdb::SfaIndex, solana_clock::Slot, solana_pubkey::Pubkey,
+    solana_signature::Signature, solana_transaction::TransactionError,
 };
 
 #[derive(Debug)]
