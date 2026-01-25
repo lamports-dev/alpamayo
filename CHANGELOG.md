@@ -14,9 +14,17 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Features
 
+### Breaking
+
+## [0.18.0] - 2026-01-26
+
+### Features
+
 - deps: remove solana-sdk ([#94](https://github.com/lamports-dev/alpamayo/pull/94))
 
 ### Breaking
+
+- deps: upgrade to 3.1 ([#97](https://github.com/lamports-dev/alpamayo/pull/97))
 
 ## [0.17.4] - 2026-01-13
 
