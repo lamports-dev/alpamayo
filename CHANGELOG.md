@@ -24,7 +24,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Breaking
 
-- deps: upgrade to 3.1 ([#96](https://github.com/lamports-dev/alpamayo/pull/96))
+- deps: upgrade to 3.1 ([#97](https://github.com/lamports-dev/alpamayo/pull/97))
 
 ## [0.17.4] - 2026-01-13
 
