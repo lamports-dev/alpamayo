@@ -601,15 +601,20 @@ impl Rocksdb {
     fn get_db_options() -> Options {
         let mut options = Options::default();
 
-        // Create if not exists
         options.create_if_missing(true);
         options.create_missing_column_families(true);
 
-        // Set_max_background_jobs(N), configures N/4 low priority threads and 3N/4 high priority threads
-        options.set_max_background_jobs(num_cpus::get() as i32);
+        // Parallelism - optimized for NVMe RAID0
+        let cpus = num_cpus::get() as i32;
+        options.set_max_background_jobs(cpus);
+        options.increase_parallelism(cpus);
 
-        // Set max total WAL size to 4GiB
+        // WAL size limit
         options.set_max_total_wal_size(4 * 1024 * 1024 * 1024);
+
+        // Direct I/O - bypass OS cache, better for large DB on NVMe
+        options.set_use_direct_reads(true);
+        options.set_use_direct_io_for_flush_and_compaction(true);
 
         options
     }
@@ -617,18 +622,35 @@ impl Rocksdb {
     fn get_cf_options(compression: DBCompressionType) -> Options {
         let mut options = Options::default();
 
-        const MAX_WRITE_BUFFER_SIZE: u64 = 256 * 1024 * 1024;
-        options.set_max_write_buffer_number(8);
+        // Write buffers (memtables)
+        const MAX_WRITE_BUFFER_SIZE: u64 = 256 * 1024 * 1024; // 256 MiB
+        options.set_max_write_buffer_number(4);
         options.set_write_buffer_size(MAX_WRITE_BUFFER_SIZE as usize);
 
-        let file_num_compaction_trigger = 4;
-        let total_size_base = MAX_WRITE_BUFFER_SIZE * file_num_compaction_trigger;
-        let file_size_base = total_size_base / 10;
-        options.set_level_zero_file_num_compaction_trigger(file_num_compaction_trigger as i32);
-        options.set_max_bytes_for_level_base(total_size_base);
-        options.set_target_file_size_base(file_size_base);
+        // L0 compaction trigger
+        options.set_level_zero_file_num_compaction_trigger(4);
 
-        options.set_compression_type(compression);
+        // Parallel compaction within a single job
+        options.set_max_subcompactions(4);
+
+        // Level sizing: L1=1GiB → L2=10GiB → L3=100GiB → L4=1TB → L5=10TB
+        options.set_max_bytes_for_level_base(1024 * 1024 * 1024); // 1 GiB
+        options.set_max_bytes_for_level_multiplier(10.0);
+
+        // File sizing - larger files to reduce file count at 3-4TB scale
+        options.set_target_file_size_base(128 * 1024 * 1024); // 128 MiB
+        options.set_target_file_size_multiplier(2);
+
+        // Per-level compression: none for L0, `compression` for L1+
+        options.set_compression_per_level(&[
+            DBCompressionType::None,
+            compression,
+            compression,
+            compression,
+            compression,
+            compression,
+            compression,
+        ]);
 
         options
     }
