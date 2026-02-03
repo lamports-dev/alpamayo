@@ -16,6 +16,12 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Breaking
 
+## [0.18.1] - 2026-02-03
+
+### Fixes
+
+- alpamayo: fix get_blocks to respect end_slot boundary ([#99](https://github.com/lamports-dev/alpamayo/pull/99))
+
 ## [0.18.0] - 2026-01-26
 
 ### Features
