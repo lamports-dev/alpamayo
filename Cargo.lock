@@ -166,6 +166,7 @@ dependencies = [
  "richat-proto",
  "richat-shared",
  "rocksdb",
+ "rustls",
  "serde",
  "serde_json",
  "serde_yaml",
