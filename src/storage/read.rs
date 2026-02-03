@@ -824,10 +824,13 @@ impl ReadRequest {
                     return None;
                 }
 
-                let result = if let Some((confirmed_slot, Some(block))) = confirmed_in_process
+                let result = if let Some((confirmed_slot, block)) = confirmed_in_process
                     && slot == *confirmed_slot
                 {
-                    ReadResultBlockTime::BlockTime(block.block_time)
+                    match block {
+                        Some(block) => ReadResultBlockTime::BlockTime(block.block_time),
+                        None => ReadResultBlockTime::Dead,
+                    }
                 } else if slot <= storage_processed.confirmed_slot {
                     match blocks.get_block_location(slot) {
                         StorageBlockLocationResult::Removed => ReadResultBlockTime::Removed,
