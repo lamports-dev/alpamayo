@@ -795,8 +795,9 @@ impl ReadRequest {
                     until,
                 ) {
                     Ok(mut blocks) => {
+                        // block is Some(_) if not dead
                         if commitment.is_confirmed()
-                            && let Some((slot, _)) = confirmed_in_process
+                            && let Some((slot, Some(_))) = confirmed_in_process
                         {
                             let slot = *slot;
                             if slot >= start_slot {
