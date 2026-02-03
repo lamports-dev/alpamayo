@@ -16,6 +16,12 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Breaking
 
+## [0.18.2] - 2026-02-03
+
+### Fixes
+
+- alpamayo: fix getBlocks and getBlockTime race condition with confirmed slot ([#101](https://github.com/lamports-dev/alpamayo/pull/101))
+
 ## [0.18.1] - 2026-02-03
 
 ### Fixes

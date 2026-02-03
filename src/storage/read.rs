@@ -784,13 +784,34 @@ impl ReadRequest {
                 let result = match blocks.get_blocks(
                     start_slot,
                     if commitment.is_confirmed() {
-                        storage_processed.confirmed_slot
+                        if confirmed_in_process.is_some() {
+                            storage_processed.confirmed_slot - 1
+                        } else {
+                            storage_processed.confirmed_slot
+                        }
                     } else {
                         storage_processed.finalized_slot
                     },
                     until,
                 ) {
-                    Ok(blocks) => ReadResultBlocks::Blocks(blocks),
+                    Ok(mut blocks) => {
+                        // block is Some(_) if not dead
+                        if commitment.is_confirmed()
+                            && let Some((slot, Some(_))) = confirmed_in_process
+                        {
+                            let slot = *slot;
+                            if slot >= start_slot {
+                                let should_push = match until {
+                                    RpcRequestBlocksUntil::EndSlot(end_slot) => slot <= end_slot,
+                                    RpcRequestBlocksUntil::Limit(limit) => blocks.len() < limit,
+                                };
+                                if should_push {
+                                    blocks.push(slot);
+                                }
+                            }
+                        }
+                        ReadResultBlocks::Blocks(blocks)
+                    }
                     Err(error) => ReadResultBlocks::ReadError(error),
                 };
 
@@ -803,7 +824,14 @@ impl ReadRequest {
                     return None;
                 }
 
-                let result = if slot <= storage_processed.confirmed_slot {
+                let result = if let Some((confirmed_slot, block)) = confirmed_in_process
+                    && slot == *confirmed_slot
+                {
+                    match block {
+                        Some(block) => ReadResultBlockTime::BlockTime(block.block_time),
+                        None => ReadResultBlockTime::Dead,
+                    }
+                } else if slot <= storage_processed.confirmed_slot {
                     match blocks.get_block_location(slot) {
                         StorageBlockLocationResult::Removed => ReadResultBlockTime::Removed,
                         StorageBlockLocationResult::Dead => ReadResultBlockTime::Dead,
