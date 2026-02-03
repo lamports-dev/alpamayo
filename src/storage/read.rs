@@ -14,7 +14,7 @@ use {
     },
     anyhow::Context,
     futures::{
-        future::{FutureExt, LocalBoxFuture, pending, ready},
+        future::{FutureExt, LocalBoxFuture, ready},
         stream::{FuturesUnordered, StreamExt},
     },
     metrics::gauge,
@@ -183,11 +183,7 @@ async fn start2(
                 Err(broadcast::error::RecvError::Lagged(_)) => anyhow::bail!("read runtime lagged"),
             },
             // existed request
-            message = if read_requests.is_empty() {
-                pending().boxed_local()
-            } else {
-                read_requests.next().boxed_local()
-            } => match message {
+            message = read_requests.next(), if !read_requests.is_empty() => match message {
                 Some(Some(request)) => {
                     if let Some(future) = request.process(
                         blocks,
@@ -204,11 +200,7 @@ async fn start2(
                 None => unreachable!(),
             },
             // get new request
-            message = if read_requests_len >= max_async_requests {
-                pending().boxed_local()
-            } else {
-                read_requests_rx.lock().then(|mut rx| async move { rx.recv().await }).boxed()
-            } => {
+            message = read_requests_rx.lock().then(|mut rx| async move { rx.recv().await }), if read_requests_len < max_async_requests => {
                 let Some(request) = message else {
                     return Ok(());
                 };

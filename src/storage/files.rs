@@ -9,7 +9,7 @@ use {
         util::{HashMap, VecSide},
     },
     anyhow::Context,
-    futures::future::{FutureExt, LocalBoxFuture, TryFutureExt, join_all, try_join_all},
+    futures::future::{LocalBoxFuture, TryFutureExt, join_all, try_join_all},
     metrics::{Gauge, gauge},
     std::{io, path::PathBuf, rc::Rc},
     tokio_uring::fs::File,
@@ -51,7 +51,7 @@ impl StorageFilesRead {
             .and_then(|index| self.files.get(*index))
             .map(Rc::clone);
 
-        async move {
+        Box::pin(async move {
             let Some(file) = file else {
                 return Err(io::Error::other(format!(
                     "failed to get file for id#{storage_id}"
@@ -63,8 +63,7 @@ impl StorageFilesRead {
             res?;
 
             Ok(buffer)
-        }
-        .boxed_local()
+        })
     }
 }
 
