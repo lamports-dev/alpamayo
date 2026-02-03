@@ -128,7 +128,7 @@ dependencies = [
 
 [[package]]
 name = "alpamayo"
-version = "0.18.0"
+version = "0.18.1"
 dependencies = [
  "affinity-linux",
  "anyhow",
@@ -166,6 +166,7 @@ dependencies = [
  "richat-proto",
  "richat-shared",
  "rocksdb",
+ "rustls",
  "serde",
  "serde_json",
  "serde_yaml",
