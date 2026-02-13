@@ -33,6 +33,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 ### Features
 
 - deps: remove solana-sdk ([#94](https://github.com/lamports-dev/alpamayo/pull/94))
+- storage: change rocksdb options ([#95](https://github.com/lamports-dev/alpamayo/pull/95))
 
 ### Breaking
 
